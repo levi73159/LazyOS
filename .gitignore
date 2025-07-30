@@ -1,2 +1,6 @@
 .zig-cache/
 zig-out/
+.temp/
+.asm-lsp.toml
+# ignore all .ini files which are from windows that save positions
+*.ini

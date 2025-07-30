@@ -1,93 +1,65 @@
 const std = @import("std");
+const process = std.process;
 
-const iso_path = "zig-out/lazyos.iso";
+const os_name = "LAZYOS"; // all caps
+const fat = "12"; // FAT12, FAT16, FAT32
+const floppy_path = "zig-out/main_floppy.img";
 
 pub fn build(b: *std.Build) void {
-    checkRequiredTools(b);
-
-    const target = b.resolveTargetQuery(.{
-        .cpu_arch = .x86,
-        .os_tag = .freestanding,
-        .abi = .none,
-    });
-
-    const optimize = b.standardOptimizeOption(.{});
-
-    const kernel = b.addExecutable(.{
-        .name = "lazyos",
-        .root_source_file = b.path("src/kernel/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    // Add the assembly boot file
-    kernel.addAssemblyFile(b.path("src/kernel/boot.s"));
-
-    // Use our custom linker script
-    kernel.setLinkerScript(b.path("linker.ld"));
-
-    // Disable strip for debugging
-    kernel.root_module.strip = false;
-
-    // Disable red zone for kernel mode
-    kernel.root_module.red_zone = false;
-
-    b.installArtifact(kernel);
-
-    const iso_step = createIsoStep(b) catch return;
-    createRunStep(b, iso_step, iso_path);
-}
-
-fn createIsoStep(b: *std.Build) !*std.Build.Step {
-    // ISO creation step
-    const iso_step = b.step("iso", "Create bootable ISO image");
-
-    const iso_root_name = "iso_root";
-    b.cache_root.handle.makePath(iso_root_name ++ "/boot/grub") catch |err| errblk: {
-        if (err == error.PathAlreadyExists) break :errblk;
-
-        std.log.err("Failed to create ISO root directory: {}", .{err});
-        const fail = b.addFail("Failed to create ISO root directory");
-        iso_step.dependOn(&fail.step);
-        return error.Return;
+    make(b.allocator, "src/bootloader/") catch |err| {
+        std.debug.print("Error: Failed to make bootloader: {s}\n", .{
+            @errorName(err),
+        });
+        process.exit(1);
     };
 
-    const cache = b.cache_root;
-    const iso_root = cache.join(b.allocator, &.{iso_root_name}) catch @panic("OOM");
-    const kernel_path = b.pathJoin(&.{ iso_root, "boot/kernel" });
-    const grub_cfg_path = b.pathJoin(&.{ iso_root, "boot/grub/grub.cfg" });
+    make(b.allocator, "src/kernel/") catch |err| {
+        std.debug.print("Error: Failed to make kernel: {s}\n", .{
+            @errorName(err),
+        });
+        process.exit(1);
+    };
 
-    const copy_kernel = b.addSystemCommand(&[_][]const u8{
-        "cp",
-        b.getInstallPath(.bin, "lazyos"),
-        kernel_path,
-    });
-    copy_kernel.step.dependOn(b.getInstallStep());
+    const floppy_step = makeFloppyImage(b);
 
-    const copy_cfg = b.addSystemCommand(&[_][]const u8{
-        "cp",
-        "src/bootloader/grub.cfg",
-        grub_cfg_path,
-    });
-    copy_cfg.step.dependOn(&copy_kernel.step);
+    const run = b.step("run", "Run the os (requires qemu)");
+    const qemu_cmd = b.addSystemCommand(&.{ "qemu-system-i386", "-fda", floppy_path });
 
-    const make_iso = b.addSystemCommand(&[_][]const u8{ "grub-mkrescue", "-o", iso_path, iso_root });
-    make_iso.step.dependOn(&copy_cfg.step);
+    run.dependOn(&qemu_cmd.step);
 
-    iso_step.dependOn(&make_iso.step);
-
-    return iso_step;
+    qemu_cmd.step.dependOn(floppy_step);
+    b.default_step.dependOn(floppy_step);
 }
 
-fn createRunStep(b: *std.Build, iso_step: *std.Build.Step, iso_file: []const u8) void {
-    const run_step = b.step("run", "Run the os");
-    run_step.dependOn(iso_step);
+fn make(allocator: std.mem.Allocator, folder: []const u8) !void {
+    std.log.info("Building {s}...", .{folder});
+    var child = std.process.Child.init(&.{ "make", "-C", folder }, allocator);
+    child.stdin_behavior = .Inherit;
+    child.stdout_behavior = .Inherit;
+    child.stderr_behavior = .Inherit;
+    const term = try child.spawnAndWait();
 
-    const run = b.addSystemCommand(&[_][]const u8{ "qemu-system-x86_64", "-cdrom", iso_file, "-m", "512M" });
-    run_step.dependOn(&run.step);
+    if (term != .Exited) return error.MakeFailed;
+    if (term.Exited != 0) return error.MakeFailed;
 }
 
-fn checkRequiredTools(b: *std.Build) void {
-    const output = b.run(&.{"scripts/check_required.sh"});
-    std.debug.print("{s}", .{output});
+fn makeFloppyImage(b: *std.Build) *std.Build.Step {
+    const floppy_step = b.step("floppy", "Make floppy image");
+
+    const make_floppy = b.addSystemCommand(&.{ "dd", "if=/dev/zero", "of=" ++ floppy_path, "bs=512", "count=2880" });
+
+    const make_fat = b.addSystemCommand(&.{ "mkfs.fat", "-F", fat, "-n", os_name, floppy_path });
+    make_fat.step.dependOn(&make_floppy.step);
+
+    // make floppy start with bootloader
+    const copy_bootloader = b.addSystemCommand(&.{ "dd", "if=" ++ "zig-out/bin/bootloader.bin", "of=" ++ floppy_path, "conv=notrunc" });
+    copy_bootloader.step.dependOn(&make_fat.step);
+
+    // copy kernel to floppy
+    const copy_kernel = b.addSystemCommand(&.{ "mcopy", "-i", floppy_path, "zig-out/bin/kernel.bin", "::kernel.bin" });
+    copy_kernel.step.dependOn(&copy_bootloader.step);
+
+    floppy_step.dependOn(&copy_kernel.step);
+
+    return floppy_step;
 }
