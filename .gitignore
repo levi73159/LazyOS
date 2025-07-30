@@ -4,3 +4,8 @@ zig-out/
 .asm-lsp.toml
 # ignore all .ini files which are from windows that save positions
 *.ini
+
+# ignore all editor files/folders
+.vscode/
+.qodo/
+.idea/
