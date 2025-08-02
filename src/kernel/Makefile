@@ -1,7 +1,9 @@
 ASM=nasm
 
-BUILD_DIR=../../zig-out
 BIN_DIR=$(BUILD_DIR)/bin
+
+.PHONY: all kernel
+all: kernel
 
 #
 # Kernel

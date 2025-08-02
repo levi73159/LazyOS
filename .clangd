@@ -1,0 +1,9 @@
+CompileFlags:
+  Remove: [-xc++]
+  Add: [
+    "-xc",
+    "--target=i386-pc-openwatcom",
+    "-nostdlibinc",
+    #define the 'far' keyword as a macro
+    "-Dfar="
+  ]

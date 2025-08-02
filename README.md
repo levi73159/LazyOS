@@ -1,4 +1,5 @@
-# LazyOS - an operating system (kernel) wrtiten in zig
+# LazyOS - an operating system made in `zig` and `c`
 
-This is an operating system using `zig` for the kernel and `grub` as the bootloader
-(will be replaced with my own)
+This is an operating system that is made in `zig` and `c`. The bootloader is written in `c` and the kernel is written in `zig`.
+
+We are using `open watcom` as our cross compiler for the bootloader since zig can't compile 16 bit code.

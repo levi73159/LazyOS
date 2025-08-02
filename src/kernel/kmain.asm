@@ -1,24 +1,15 @@
-org 0x7C00
+org 0x0
 bits 16
 
-%define NL 0x0A
+%define NL 0x0D, 0x0A
 
 start:
     jmp main
 
 ; data
-message: db "Hello World!", NL, 0
+message: db "Hello Kernel!", NL, 0
 
 main:
-    ; set up data segments 
-    mov ax, 0
-    mov ds, ax
-    mov es, ax
-
-    ; set up stack
-    mov ss, ax
-    mov sp, 0x7C00
-
     ; print message
     mov si, message
     call puts
@@ -54,6 +45,3 @@ puts:
     pop ax
     pop si
     ret
-
-times 510-($-$$) db 0
-dw 0xAA55

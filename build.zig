@@ -11,7 +11,10 @@ pub fn handleError(msg: []const u8, err: anyerror) noreturn {
 }
 
 pub fn build(b: *std.Build) void {
-    make(b.allocator, "src/bootloader/") catch |err| handleError("Failed to make bootloader", err);
+    const optimize = b.standardOptimizeOption(.{});
+
+    make(b.allocator, "src/bootloader/stage1/") catch |err| handleError("Failed to make bootloader (stage1)", err);
+    make(b.allocator, "src/bootloader/stage2/") catch |err| handleError("Failed to make bootloader (stage2)", err);
     make(b.allocator, "src/kernel/") catch |err| handleError("Failed to make kernel", err);
 
     const floppy_step = makeFloppyImage(b);
@@ -24,12 +27,20 @@ pub fn build(b: *std.Build) void {
     qemu_cmd.step.dependOn(floppy_step);
     b.default_step.dependOn(floppy_step);
 
-    tools(b) catch |err| handleError("Failed to build tools", err);
+    tools(b, optimize) catch |err| handleError("Failed to build tools", err);
 }
 
 fn make(allocator: std.mem.Allocator, folder: []const u8) !void {
     std.log.info("Building {s}...", .{folder});
-    var child = std.process.Child.init(&.{ "make", "-C", folder }, allocator);
+
+    const build_var_name = "BUILD_DIR";
+    var buf: [500]u8 = undefined;
+    var fmt_buf: [buf.len + build_var_name.len + 5]u8 = undefined;
+    const build_dir_absolue = try std.fs.cwd().realpath("zig-out", &buf);
+
+    const build_var = try std.fmt.bufPrint(&fmt_buf, build_var_name ++ "={s}", .{build_dir_absolue});
+
+    var child = std.process.Child.init(&.{ "make", "-C", folder, build_var, "all" }, allocator);
     child.stdin_behavior = .Inherit;
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
@@ -48,12 +59,15 @@ fn makeFloppyImage(b: *std.Build) *std.Build.Step {
     make_fat.step.dependOn(&make_floppy.step);
 
     // make floppy start with bootloader
-    const copy_bootloader = b.addSystemCommand(&.{ "dd", "if=" ++ "zig-out/bin/bootloader.bin", "of=" ++ floppy_path, "conv=notrunc" });
+    const copy_bootloader = b.addSystemCommand(&.{ "dd", "if=" ++ "zig-out/bin/stage1.bin", "of=" ++ floppy_path, "conv=notrunc" });
     copy_bootloader.step.dependOn(&make_fat.step);
 
     // copy kernel to floppy
     const copy_kernel = b.addSystemCommand(&.{ "mcopy", "-i", floppy_path, "zig-out/bin/kernel.bin", "::kernel.bin" });
     copy_kernel.step.dependOn(&copy_bootloader.step);
+
+    const copy_stage2 = b.addSystemCommand(&.{ "mcopy", "-i", floppy_path, "zig-out/bin/stage2.bin", "::stage2.bin" });
+    copy_stage2.step.dependOn(&copy_kernel.step);
 
     var root = std.fs.cwd().openDir("root", .{ .iterate = true }) catch |err| handleError("Failed to open root folder", err);
     defer root.close();
@@ -67,7 +81,7 @@ fn makeFloppyImage(b: *std.Build) *std.Build.Step {
         }
 
         const copy_file = b.addSystemCommand(&.{ "mcopy", "-i", floppy_path, b.pathJoin(&.{ "root", entry.name }), b.fmt("::{s}", .{entry.name}) });
-        copy_file.step.dependOn(&copy_kernel.step);
+        copy_file.step.dependOn(&copy_stage2.step);
         floppy_step.dependOn(&copy_file.step);
     }
 
@@ -78,9 +92,8 @@ fn makeFloppyImage(b: *std.Build) *std.Build.Step {
 /// and install them if the `tools` step is run
 /// and add a run step for each that will be the name of the tool
 /// every tool must have a main.zig file in it
-fn tools(b: *std.Build) !void {
+fn tools(b: *std.Build, optimize: std.builtin.OptimizeMode) !void {
     // get all folders in tools folder
-    const optimize = b.standardOptimizeOption(.{});
     const target = b.standardTargetOptions(.{});
 
     var tools_folder = std.fs.cwd().openDir("tools", .{ .iterate = true }) catch |err| handleError("Failed to open tools folder", err);
