@@ -3,8 +3,6 @@ const std = @import("std");
 const iso_path = "zig-out/lazyos.iso";
 
 pub fn build(b: *std.Build) void {
-    checkRequiredTools(b);
-
     const target = b.resolveTargetQuery(.{
         .cpu_arch = .x86,
         .os_tag = .freestanding,
@@ -42,8 +40,8 @@ fn createIsoStep(b: *std.Build) !*std.Build.Step {
     // ISO creation step
     const iso_step = b.step("iso", "Create bootable ISO image");
 
-    const iso_root_name = "iso_root";
-    b.cache_root.handle.makePath(iso_root_name ++ "/boot/grub") catch |err| errblk: {
+    const iso_root = "iso_root";
+    b.cache_root.handle.makePath(iso_root ++ "/boot/grub") catch |err| errblk: {
         if (err == error.PathAlreadyExists) break :errblk;
 
         std.log.err("Failed to create ISO root directory: {}", .{err});
@@ -52,8 +50,6 @@ fn createIsoStep(b: *std.Build) !*std.Build.Step {
         return error.Return;
     };
 
-    const cache = b.cache_root;
-    const iso_root = cache.join(b.allocator, &.{iso_root_name}) catch @panic("OOM");
     const kernel_path = b.pathJoin(&.{ iso_root, "boot/kernel" });
     const grub_cfg_path = b.pathJoin(&.{ iso_root, "boot/grub/grub.cfg" });
 
@@ -81,9 +77,9 @@ fn createIsoStep(b: *std.Build) !*std.Build.Step {
 
 fn createRunStep(b: *std.Build, iso_step: *std.Build.Step, iso_file: []const u8) void {
     const run_step = b.step("run", "Run the os");
-    run_step.dependOn(iso_step);
 
     const run = b.addSystemCommand(&[_][]const u8{ "qemu-system-x86_64", "-cdrom", iso_file, "-m", "512M" });
+    run.step.dependOn(iso_step);
     run_step.dependOn(&run.step);
 }
 

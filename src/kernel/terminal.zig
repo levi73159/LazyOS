@@ -18,6 +18,7 @@ pub fn init() void {
 
     terminal_row = 0;
     terminal_column = 0;
+    updateCursor();
 }
 
 pub fn putEntryAt(c: u8, color: u8, x: u8, y: u8) void {
@@ -28,6 +29,7 @@ pub fn putEntryAt(c: u8, color: u8, x: u8, y: u8) void {
 }
 
 pub fn putchar(c: u8) void {
+    defer updateCursor(); // Update cursor position
     if (c == '\n') {
         terminal_column = 0;
         if (terminal_row < vga.VGA_HEIGHT - 1) {
@@ -52,11 +54,6 @@ pub fn write(data: []const u8) void {
     }
 }
 
-pub fn writeln(data: []const u8) void {
-    write(data);
-    putchar('\n');
-}
-
 pub fn setColor(color: vga.Color) void {
     terminal_color = vga.entryColor(color, vga.Color.black);
 }
@@ -71,4 +68,31 @@ pub fn inb(port: u16) u8 {
         : [result] "={al}" (-> u8),
         : [port] "N{dx}" (port),
     );
+}
+
+fn outb(port: u16, value: u8) void {
+    asm volatile ("outb %[value], %[port]"
+        :
+        : [value] "{al}" (value),
+          [port] "N{dx}" (port),
+    );
+}
+
+fn updateCursor() void {
+    const pos = @as(u16, terminal_row) * vga.VGA_WIDTH + terminal_column;
+
+    // Cursor low byte
+    outb(0x3D4, 0x0F);
+    outb(0x3D5, @truncate(pos & 0xFF));
+
+    // Cursor high byte
+    outb(0x3D4, 0x0E);
+    outb(0x3D5, @truncate((pos >> 8) & 0xFF));
+}
+
+pub fn setCursor(x: u8, y: u8) void {
+    outb(0x3D4, 0x0F);
+    outb(0x3D5, y);
+    outb(0x3D4, 0x0E);
+    outb(0x3D5, x);
 }
