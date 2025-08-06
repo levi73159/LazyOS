@@ -1,0 +1,14 @@
+megs: 128
+romimage: file=/usr/share/bochs/BIOS-bochs-latest, address=0xfffff00
+vgaromimage: file=/usr/share/bochs/VGABIOS-lgpl-latest
+
+ata0-master: type=disk, mode=flat, path="zig-out/lazyos.iso"
+
+log: bochs.log
+clock: sync=realtime, time0=local
+mouse: enabled=0
+display_library: x, options="gui_debug"
+
+# Optional: enable debugging GUI
+# magic_break: enabled=1
+# debugger_log: debug.log

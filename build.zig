@@ -1,89 +1,60 @@
 const std = @import("std");
 
-const iso_path = "zig-out/lazyos.iso";
-
 pub fn build(b: *std.Build) void {
-    const target = b.resolveTargetQuery(.{
-        .cpu_arch = .x86,
+    const bootloader_target = b.resolveTargetQuery(.{
+        .cpu_arch = .x86_64,
+        .os_tag = .uefi,
+        .abi = .msvc,
+        .ofmt = .coff,
+    });
+
+    const kernel_target = b.resolveTargetQuery(.{
+        .cpu_arch = .x86_64,
         .os_tag = .freestanding,
         .abi = .none,
+        .ofmt = .elf,
     });
 
     const optimize = b.standardOptimizeOption(.{});
 
-    const kernel = b.addExecutable(.{
-        .name = "lazyos",
-        .root_source_file = b.path("src/kernel/main.zig"),
-        .target = target,
+    const bootloader = b.addExecutable(.{
+        .name = "bootx64",
+        .root_source_file = b.path("src/bootloader/main.zig"),
+        .target = bootloader_target,
         .optimize = optimize,
     });
 
-    // Add the assembly boot file
-    kernel.addAssemblyFile(b.path("src/kernel/boot.s"));
+    const kernel = b.addExecutable(.{
+        .name = "kernel.elf",
+        .root_source_file = b.path("src/kernel/main.zig"),
+        .target = kernel_target,
+        .optimize = optimize,
+    });
 
-    // Use our custom linker script
+    kernel.entry = .disabled;
     kernel.setLinkerScript(b.path("linker.ld"));
 
-    // Disable strip for debugging
-    kernel.root_module.strip = false;
-
-    // Disable red zone for kernel mode
-    kernel.root_module.red_zone = false;
-
+    b.installArtifact(bootloader);
     b.installArtifact(kernel);
 
-    const iso_step = createIsoStep(b) catch return;
-    createRunStep(b, iso_step, iso_path);
-}
+    const boot_dir = b.addWriteFiles();
+    _ = boot_dir.addCopyFile(bootloader.getEmittedBin(), b.pathJoin(&.{ "efi/boot", bootloader.out_filename }));
+    _ = boot_dir.addCopyFile(kernel.getEmittedBin(), b.pathJoin(&.{ "boot/", kernel.out_filename }));
 
-fn createIsoStep(b: *std.Build) !*std.Build.Step {
-    // ISO creation step
-    const iso_step = b.step("iso", "Create bootable ISO image");
+    const qemu_cmd = b.addSystemCommand(&.{"qemu-system-x86_64"});
 
-    const iso_root = "iso_root";
-    b.cache_root.handle.makePath(iso_root ++ "/boot/grub") catch |err| errblk: {
-        if (err == error.PathAlreadyExists) break :errblk;
+    qemu_cmd.addArg("-bios");
+    qemu_cmd.addFileArg(b.path("OVMF.fd"));
+    qemu_cmd.addArg("-hdd");
+    qemu_cmd.addPrefixedDirectoryArg("fat:rw:", boot_dir.getDirectory());
+    qemu_cmd.addArg("-debugcon");
+    qemu_cmd.addArg("stdio");
+    qemu_cmd.addArg("-serial");
+    qemu_cmd.addArg("null");
+    qemu_cmd.addArg("-display");
+    qemu_cmd.addArg("gtk");
+    qemu_cmd.addArg("-s");
 
-        std.log.err("Failed to create ISO root directory: {}", .{err});
-        const fail = b.addFail("Failed to create ISO root directory");
-        iso_step.dependOn(&fail.step);
-        return error.Return;
-    };
-
-    const kernel_path = b.pathJoin(&.{ iso_root, "boot/kernel" });
-    const grub_cfg_path = b.pathJoin(&.{ iso_root, "boot/grub/grub.cfg" });
-
-    const copy_kernel = b.addSystemCommand(&[_][]const u8{
-        "cp",
-        b.getInstallPath(.bin, "lazyos"),
-        kernel_path,
-    });
-    copy_kernel.step.dependOn(b.getInstallStep());
-
-    const copy_cfg = b.addSystemCommand(&[_][]const u8{
-        "cp",
-        "src/bootloader/grub.cfg",
-        grub_cfg_path,
-    });
-    copy_cfg.step.dependOn(&copy_kernel.step);
-
-    const make_iso = b.addSystemCommand(&[_][]const u8{ "grub-mkrescue", "-o", iso_path, iso_root });
-    make_iso.step.dependOn(&copy_cfg.step);
-
-    iso_step.dependOn(&make_iso.step);
-
-    return iso_step;
-}
-
-fn createRunStep(b: *std.Build, iso_step: *std.Build.Step, iso_file: []const u8) void {
-    const run_step = b.step("run", "Run the os");
-
-    const run = b.addSystemCommand(&[_][]const u8{ "qemu-system-x86_64", "-cdrom", iso_file, "-m", "512M" });
-    run.step.dependOn(iso_step);
-    run_step.dependOn(&run.step);
-}
-
-fn checkRequiredTools(b: *std.Build) void {
-    const output = b.run(&.{"scripts/check_required.sh"});
-    std.debug.print("{s}", .{output});
+    const run = b.step("run", "Run the operating system");
+    run.dependOn(&qemu_cmd.step);
 }
