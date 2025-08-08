@@ -1,143 +1,9 @@
-//! Interrupt Descriptor Table
+const gdt = @import("gdt.zig");
+const idt = @import("idt.zig");
+const log = @import("std").log.scoped(.isr);
+const registers = @import("registers.zig");
 
-// SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2024 Samuel Fiedler
-
-const gdt = @import("./gdt.zig");
-const registers = @import("./registers.zig");
-const root = @import("root");
-const std = @import("std");
-const log = std.log.scoped(.arch_idt);
-
-/// Entry in the Interrupt Descriptor Table
-pub const Entry = packed struct(u128) {
-    /// First part of a pointer to handler code
-    offset_low: u16 = 0,
-    /// Segment Selector (for example gdt.Selector.kernel_code)
-    selector: u16 = @intFromEnum(gdt.Selector.kernel_code),
-    /// A 3-bit value which is an offset into the Interrupt Stack Table, which is stored in the Task State Segment
-    ist: u3 = 0,
-    /// Reserved
-    res1: u5 = 0,
-    /// Gate Type
-    gate_type: enum(u4) {
-        interrupt_64bit = 14,
-        trap_64bit = 15,
-        _,
-    } = .interrupt_64bit,
-    /// Reserved
-    res2: u1 = 0,
-    /// CPU Privilege Levels allowed to access this interrupt
-    dpl: enum(u2) {
-        kernel = 0,
-        user = 3,
-        _,
-    } = .kernel,
-    /// Present bit
-    /// Must be set for the descriptor to be valid
-    p: bool = true,
-    /// Second part of a pointer to handler code
-    offset_high: u48 = 0,
-    /// Reserved
-    res3: u32 = 0,
-
-    /// Get the offset
-    pub fn getOffset(self: Entry) u64 {
-        return (@as(u64, self.offset_high) << 16) | self.offset_low;
-    }
-
-    /// Set the offset
-    pub fn setOffset(self: *Entry, offset: u64) void {
-        self.offset_low = @truncate(offset);
-        self.offset_high = @truncate(offset >> 16);
-    }
-};
-
-/// IDT Descriptor
-pub const Descriptor = packed struct(u80) {
-    /// Size
-    /// IDT Byte Length - 1
-    size: u16,
-    /// Offset
-    offset: u64,
-};
-
-/// Interrupt Function Type
-pub const InterruptFunction = *const fn () noreturn;
-
-/// Global IDT
-pub var global_idt: [256]Entry = .{Entry{}} ** 256;
-pub var descriptor: Descriptor = .{ .size = @sizeOf(@TypeOf(global_idt)) - 1, .offset = undefined };
-pub var got_interrupt: bool = false;
-
-/// Initialize the IDT
-pub fn init() void {
-    log.info("IDT initialization...", .{});
-    // make descriptor point to global idt
-    descriptor.offset = @intFromPtr(&global_idt);
-    // construct the gdt generically
-    inline for (0..255) |i| {
-        if (getVector(i)) |vector| {
-            // std.log.info("IDT: {d} -> {x}", .{ i, @intFromPtr(vector) });
-            switch (Exception.is(i)) {
-                true => {
-                    // trap
-                    global_idt[i] = .{ .gate_type = .trap_64bit };
-                    global_idt[i].setOffset(@intFromPtr(vector));
-                },
-                else => {
-                    // normal
-                    global_idt[i] = .{ .gate_type = .interrupt_64bit };
-                    global_idt[i].setOffset(@intFromPtr(vector));
-                },
-            }
-        } else {
-            std.log.info("IDT: {d} -> null", .{i});
-            global_idt[i].p = false;
-        }
-    }
-    // load the idt
-    asm volatile ("lidt (%[addr])"
-        :
-        : [addr] "{rax}" (&descriptor),
-    );
-    // enable interrupts
-    asm volatile ("sti");
-    log.info("IDT initialization successful! ", .{});
-}
-
-/// Generic Interrupt Caller
-pub fn getVector(comptime number: u8) ?InterruptFunction {
-    return switch (number) {
-        inline 15, 22...31 => null,
-        else => blk: {
-            // normal or trap
-            break :blk struct {
-                fn vector() noreturn {
-                    std.log.debug("Interrupt: {d}", .{number});
-                    const is_exception = Exception.is(number);
-                    if (is_exception and @as(Exception, @enumFromInt(number)).hasErrorCode()) {
-                        asm volatile (
-                            \\push %[num]
-                            \\jmp interruptCommon
-                            :
-                            : [num] "{rax}" (@as(u64, number)),
-                        );
-                    } else {
-                        asm volatile (
-                            \\push $0
-                            \\push %[num]
-                            \\jmp interruptCommon
-                            :
-                            : [num] "{rax}" (@as(u64, number)),
-                        );
-                    }
-                    unreachable;
-                }
-            }.vector;
-        },
-    };
-}
+pub const InterruptFn = *const fn () callconv(.naked) noreturn;
 
 /// Interrupt Frame
 /// Standard values provided here are used for task startup
@@ -193,8 +59,96 @@ pub const InterruptFrame = extern struct {
     // TODO: actually make startup values that make sense
 };
 
-/// Common interrupt calling code
-/// Should be called after pushing the error code and the interrupt number
+pub const Exception = enum(u8) {
+    division_by_zero = 0,
+    debug = 1,
+    non_maskable_interrupt = 2,
+    breakpoint = 3,
+    overflow = 4,
+    bound_range_exceeded = 5,
+    invalid_opcode = 6,
+    device_not_available = 7,
+    double_fault = 8,
+    coprocessor_segment_overrun = 9,
+    invalid_tss = 10,
+    segment_not_present = 11,
+    stack_segment_fault = 12,
+    general_protection_fault = 13,
+    page_fault = 14,
+    reserved = 15,
+    x87_floating_point = 16,
+    alignment_check = 17,
+    machine_check = 18,
+    simd_floating_point = 19,
+    virtualization = 20,
+    control_protection = 21,
+
+    pub inline fn is(number: u8) bool {
+        if (number <= 21) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    pub inline fn hasErrorCode(self: Exception) bool {
+        return switch (self) {
+            .double_fault,
+            .invalid_tss,
+            .segment_not_present,
+            .stack_segment_fault,
+            .general_protection_fault,
+            .page_fault,
+            .alignment_check,
+            .control_protection,
+            => true,
+            else => false,
+        };
+    }
+
+    pub inline fn hasErrorNumber(num: u8) bool {
+        if (!is(num)) return false;
+        return hasErrorCode(@enumFromInt(num));
+    }
+};
+
+pub fn init() void {
+    log.debug("Initializing ISRs", .{});
+
+    const int0 = getVector(0);
+    idt.setGate(0, @intFromPtr(int0), gdt.Selector.kernel_code, .{ .gate_type = .interrupt_64bit });
+    idt.enableGate(0);
+
+    asm volatile ("sti");
+    log.debug("ISRs initialized", .{});
+}
+
+pub fn getVector(comptime number: u8) ?InterruptFn {
+    return switch (number) {
+        15, 22...31 => null,
+        else => struct {
+            fn handler() callconv(.naked) noreturn {
+                if (Exception.hasErrorNumber(number)) {
+                    asm volatile (
+                        \\push %[num]
+                        \\jmp interruptCommon
+                        :
+                        : [num] "{rax}" (@as(u64, number)),
+                    );
+                } else {
+                    asm volatile (
+                        \\push $0
+                        \\push %[num]
+                        \\jmp interruptCommon
+                        :
+                        : [num] "{rax}" (@as(u64, number)),
+                    );
+                }
+            }
+        }.handler,
+    };
+}
+
 export fn interruptCommon() callconv(.naked) void {
     asm volatile (
     // push general-purpose registers
@@ -255,91 +209,6 @@ export fn interruptCommon() callconv(.naked) void {
     );
 }
 
-/// Exceptions
-pub const Exception = enum(u8) {
-    /// Divide Error
-    DE = 0,
-    /// Debug Exception
-    DB = 1,
-    /// Breakpoint
-    BP = 3,
-    /// Overflow
-    OF = 4,
-    /// BOUND Range Exceeded
-    BR = 5,
-    /// Invalid Opcode (Undefined Opcode)
-    UD = 6,
-    /// Device Not Available (No Math Coprocessor)
-    NM = 7,
-    /// Double Fault
-    DF = 8,
-    /// Coprocessor Segment Overrun
-    RES = 9,
-    /// Invalid TSS
-    TS = 10,
-    /// Segment Not Present
-    NP = 11,
-    /// Stack-Segment Fault
-    SS = 12,
-    /// General Protection
-    GP = 13,
-    /// Page Fault
-    PF = 14,
-    /// x87 FPU Floating-Point Error (Math Fault)
-    MF = 16,
-    /// Alignment Check
-    AC = 17,
-    /// Machine Check
-    MC = 18,
-    /// SIMD Floating-Point Exception
-    XM = 19,
-    /// Virtualization Exception
-    VE = 20,
-    /// Control Protection Exception
-    CP = 21,
-
-    /// Is the given interrupt number an exception?
-    pub inline fn is(interrupt: u8) bool {
-        return switch (interrupt) {
-            0, 1, 3...14, 15...21 => true,
-            else => false,
-        };
-    }
-
-    /// Has the exception an error code?
-    pub inline fn hasErrorCode(self: Exception) bool {
-        return switch (self) {
-            .DF, .TS, .NP, .SS, .GP, .PF, .AC, .CP => true,
-            else => false,
-        };
-    }
-};
-
-/// Interrupt Handler
 export fn interruptHandler(frame: *InterruptFrame) void {
-    log.info("Received interrupt {}", .{frame.vector_number});
-    // specific interrupt handling
-    switch (frame.vector_number) {
-        0, 1, 3...14, 16...21 => {
-            log.err("except = {s}", .{@tagName(@as(Exception, @enumFromInt(frame.vector_number)))});
-            log.err("num = 0x{x:0>2}   err = 0x{x:0>16}", .{ frame.vector_number, frame.error_code });
-            log.err("rax = 0x{x:0>16}   rbx = 0x{x:0>16}   rcx = 0x{x:0>16}   rdx = 0x{x:0>16}", .{
-                frame.rax,
-                frame.rbx,
-                frame.rcx,
-                frame.rdx,
-            });
-            log.err("rip = 0x{x:0>16}   rsp = 0x{x:0>16}   rbp = 0x{x:0>16}", .{ frame.rip, frame.sp, frame.rbp });
-            log.err("cr0 = 0x{x:0>16}   cr2 = 0x{x:0>16}   cr3 = 0x{x:0>16}   cr4 = 0x{x:0>16}", .{
-                @as(usize, @bitCast(registers.CR0.get())),
-                @as(usize, @bitCast(registers.CR2.get())),
-                @as(usize, @bitCast(registers.CR3.get())),
-                @as(usize, @bitCast(registers.CR4.get())),
-            });
-            @panic("reached unhandled error");
-        },
-        else => {
-            log.debug("Frame contents: {}", .{frame});
-        },
-    }
+    log.debug("Interrupt {d}", .{frame.vector_number});
 }
