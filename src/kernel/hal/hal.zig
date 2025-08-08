@@ -1,8 +1,16 @@
-const gdt = @import("../arch/x86/gdt.zig");
+const std = @import("std");
+const arch = @import("../arch/arch.zig");
+const gdt = arch.gdt;
+const idt = arch.idt;
+const isr = arch.isr;
+
 const console = @import("../console.zig");
+
+const log = std.log.scoped(.hal);
 
 pub fn init() void {
     invoke(gdt.init, "GDT");
+    invoke(isr.init, "ISRs");
 }
 
 // function invoker wrapper
@@ -30,5 +38,5 @@ inline fn invoke(comptime func: anytype, comptime name: []const u8) void {
     } else {
         func();
     }
-    console.writeColor(.light_green, name ++ " initialized\n");
+    log.info("HAL " ++ name ++ " initialized", .{});
 }

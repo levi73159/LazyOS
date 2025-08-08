@@ -6,6 +6,7 @@ const log = @import("std").log.scoped(.term_fbcon_sgr);
 /// Follows the VGA standard
 pub fn colorFromANSI(color_code: u32) Color {
     return switch (color_code) {
+        0 => .{ .red = 0xff, .green = 0xff, .blue = 0xff, .reserved = 0x00 },
         30, 40 => .{ .red = 0x00, .green = 0x00, .blue = 0x00, .reserved = 0x00 },
         31, 41 => .{ .red = 0xaa, .green = 0x00, .blue = 0x00, .reserved = 0x00 },
         32, 42 => .{ .red = 0x00, .green = 0xaa, .blue = 0x00, .reserved = 0x00 },

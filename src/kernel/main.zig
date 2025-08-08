@@ -1,8 +1,10 @@
-// const hal = @import("hal/hal.zig");
-const io = @import("arch/x86/io.zig");
+const hal = @import("hal/hal.zig");
+const io = @import("arch/x86_64/io.zig");
 const console = @import("console.zig");
 const std = @import("std");
 const KernelBootInfo = @import("boot_info.zig").KernelBootInfo;
+
+const log = std.log.scoped(.kernel);
 
 var paniced = false;
 
@@ -11,6 +13,8 @@ pub extern const __kernel_boot_info: *const KernelBootInfo;
 pub const std_options: std.Options = .{
     .log_level = .debug,
     .logFn = console.logFn,
+    .page_size_min = 1024,
+    .page_size_max = 1024,
 };
 
 pub fn panic(message: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
@@ -24,9 +28,8 @@ export fn __zig_entry() noreturn {
         \\mov %rsp, __stack_top
     );
     // Initialize required hardware
-
     console.init(__kernel_boot_info);
-    // hal.init();
+    hal.init();
 
     main(__kernel_boot_info); // call main function
 
@@ -35,10 +38,8 @@ export fn __zig_entry() noreturn {
 
 fn main(_: *const KernelBootInfo) void {
     // Print startup messages
-    console.write("LazyOS v0.1.0\n");
-
-    var n = [_]u8{0} ** 20;
-    console.dbg("Hello world!\n");
-    n[0] = 'H';
-    console.write(n[0..]);
+    log.info("LazyOS v0.1.4", .{});
+    while (true) {
+        asm volatile ("sti");
+    }
 }

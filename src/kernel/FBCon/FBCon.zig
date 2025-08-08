@@ -7,7 +7,7 @@ pub const selectGraphicRendition = @import("SGR.zig").selectGraphicRendition;
 pub const colorFromANSI = @import("SGR.zig").colorFromANSI;
 pub const eraseInDisplay = @import("DECSED.zig").eraseInDisplay;
 
-const log = std.log.scoped(.term_fbcon);
+const log = std.log.scoped(.host);
 
 const CursorPosition = struct {
     column: usize,
@@ -361,18 +361,6 @@ pub fn handleSpecialChar(self: *Self, char: u8) void {
         },
         else => {
             if (self.control_sequence.ready_for_exec) {
-                log.debug("Found control sequence!", .{});
-                log.debug("  Arguments: ", .{});
-                for (0..self.control_sequence.index) |i| {
-                    if (self.control_sequence.args[i]) |arg| {
-                        switch (arg) {
-                            .char => |val| log.debug("    Char: {s}", .{[_]u8{val}}),
-                            .number => |val| log.debug("    Number: {}", .{val}),
-                        }
-                    }
-                }
-                log.debug("  Command: {s}", .{[_]u8{self.control_sequence.command}});
-                log.debug("  Trying to handle it now", .{});
                 self.handleControlSequence(self.control_sequence);
             }
         },
