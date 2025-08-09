@@ -1,7 +1,7 @@
 [default_config]
 version = "0.10.0"
 assembler = "gas"
-instruction_set = "x86/x86-64"
+instruction_set = "x86"
 
 [default_config.opts]
 diagnostics = true

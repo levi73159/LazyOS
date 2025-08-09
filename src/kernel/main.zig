@@ -1,7 +1,8 @@
-// const hal = @import("hal/hal.zig");
+const std = @import("std");
+const arch = @import("arch.zig");
 const io = @import("arch.zig").io;
 const console = @import("console.zig");
-const std = @import("std");
+const hal = @import("hal/hal.zig");
 
 const ALIGN = 1 << 0;
 const MEMINFO = 1 << 1;
@@ -35,17 +36,17 @@ pub const std_options: std.Options = .{
     .page_size_max = 1024,
 };
 
-pub fn panic(message: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
+pub fn panic(message: []const u8, trace: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
     @branchHint(.cold);
-    console.panic(message);
+    console.panic(message, trace, ret_addr);
 }
 
 // Kernel entry point (_start but this function is called and it calls _main)
 export fn __kernel_start() callconv(.naked) noreturn {
     asm volatile (
     // make sure interrupts are disabled
+    // set up the stack
         \\ cli
-        // set up the stack
         \\ movl %[stack_top], %%esp
         \\ movl %%esp, %%ebp
         \\ call %[_start:P]
@@ -54,19 +55,23 @@ export fn __kernel_start() callconv(.naked) noreturn {
           // We let the compiler handle the reference to kmain by passing it as an input operand as well.
           [_start] "X" (&_start),
     );
+    while (true) {}
 }
 
 fn _start() void {
-    // startup functions
     console.clear();
 
+    hal.init();
+
     main();
-    @panic("YOU DIED");
-    // while (true) {
-    //     io.hlt();
-    // }
+    console.write("halting...\n");
+    while (true) {
+        io.hlt();
+    }
 }
 
 fn main() void {
     std.log.info("Hello world!", .{});
+    arch.idt.disableGate(50);
+    asm volatile ("int $50");
 }

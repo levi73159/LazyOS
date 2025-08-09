@@ -15,6 +15,7 @@ pub fn outb(port: u16, value: u8) void {
 
 pub fn hlt() noreturn {
     while (true) {
+        asm volatile ("cli");
         asm volatile ("hlt");
     }
 }

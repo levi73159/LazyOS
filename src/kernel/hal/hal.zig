@@ -1,5 +1,5 @@
 const std = @import("std");
-const arch = @import("../arch/arch.zig");
+const arch = @import("../arch.zig");
 const gdt = arch.gdt;
 const idt = arch.idt;
 const isr = arch.isr;
@@ -9,8 +9,13 @@ const console = @import("../console.zig");
 const log = std.log.scoped(.hal);
 
 pub fn init() void {
+    log.debug("Initializing HAL", .{});
     invoke(gdt.init, "GDT");
+    log.debug("GDT initialized", .{});
+    invoke(idt.init, "IDT");
+    log.debug("IDT initialized", .{});
     invoke(isr.init, "ISRs");
+    log.debug("ISRs initialized", .{});
 }
 
 // function invoker wrapper
@@ -34,7 +39,7 @@ inline fn invoke(comptime func: anytype, comptime name: []const u8) void {
 
     if (@typeInfo(Ret) == .error_union) {
         func() catch
-            console.panic("Failed to initialize " ++ name);
+            @panic("Failed to initialize " ++ name);
     } else {
         func();
     }

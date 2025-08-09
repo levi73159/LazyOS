@@ -1,6 +1,7 @@
 const std = @import("std");
 const vga = @import("vga.zig");
 const io = @import("arch.zig").io;
+const arch = @import("arch.zig");
 
 const host = @import("std").log.scoped(.host);
 
@@ -106,16 +107,31 @@ pub fn dbg(data: []const u8) void {
     }
 }
 
-pub fn panic(msg: []const u8) noreturn {
-    // white on red
-    write("\x1b[97;41m");
-    write("!!! KERNEL PANIC !!!\n");
-    write(msg);
+pub fn print(comptime fmt: []const u8, args: anytype) void {
+    writer().print(fmt, args) catch {};
+}
 
-    dbg("\x1b[97;41m");
-    dbg("!!! KERNEL PANIC !!!\n");
-    dbg(msg);
-    dbg("\x1b[0m\n");
+// print to both the terminal and the dbg port
+pub fn printB(comptime fmt: []const u8, args: anytype) void {
+    print(fmt, args);
+    dbgPrint(fmt, args);
+}
+
+pub fn dbgPrint(comptime fmt: []const u8, args: anytype) void {
+    dbgWriter().print(fmt, args) catch {};
+}
+
+pub fn panic(msg: []const u8, trace: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
+    // white on red
+    printB("\x1b[97;41m", .{});
+    printB("!!! KERNEL PANIC !!!\n{s}\n", .{msg});
+
+    if (trace) |t| {
+        printB("trace: {}\n", .{t});
+        printB("return address: {?x}\n", .{ret_addr});
+    } else {
+        printB("no trace\n", .{});
+    }
     io.hlt();
 }
 

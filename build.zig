@@ -36,12 +36,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     kernel.entry = .disabled;
+    kernel.root_module.strip = false;
+
     std.log.debug("install path: {s}, prefix: {s}", .{ b.install_path, b.install_prefix });
 
     kernel.setLinkerScript(b.path("linker.ld"));
     b.installArtifact(kernel);
-
-    kernel.root_module.red_zone = false;
 
     const image = makeImage(b, kernel);
     image.step.dependOn(&kernel.step);
