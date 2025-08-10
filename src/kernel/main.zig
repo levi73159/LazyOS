@@ -2,7 +2,7 @@ const std = @import("std");
 const arch = @import("arch.zig");
 const io = @import("arch.zig").io;
 const console = @import("console.zig");
-const hal = @import("hal/hal.zig");
+const hal = @import("hal.zig");
 
 const ALIGN = 1 << 0;
 const MEMINFO = 1 << 1;
@@ -51,7 +51,7 @@ export fn __kernel_start() callconv(.naked) noreturn {
         \\ movl %%esp, %%ebp
         \\ call %[_start:P]
         :
-        : [stack_top] "i" (@as([*]align(16) u8, @ptrCast(&stack_bytes)) + @sizeOf(@TypeOf(stack_bytes))),
+        : [stack_top] "r" (@as([*]align(16) u8, @ptrCast(&stack_bytes)) + @sizeOf(@TypeOf(stack_bytes))),
           // We let the compiler handle the reference to kmain by passing it as an input operand as well.
           [_start] "X" (&_start),
     );
@@ -72,6 +72,4 @@ fn _start() void {
 
 fn main() void {
     std.log.info("Hello world!", .{});
-    arch.idt.disableGate(50);
-    asm volatile ("int $50");
 }

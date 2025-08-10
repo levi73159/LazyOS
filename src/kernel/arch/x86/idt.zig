@@ -2,12 +2,11 @@ const gdt = @import("gdt.zig");
 
 const log = @import("std").log.scoped(.idt);
 
-pub const Gate = packed struct {
+pub const Gate = packed struct(u64) {
     base_low: u16 = 0,
     selector: u16 = @intFromEnum(gdt.Selector.kernel_code),
     __reserved: u8 = 0,
     flags: Flags = .{},
-    present: bool = false,
     base_high: u16 = 0,
 
     pub fn getOffset(self: Gate) u32 {
@@ -15,10 +14,11 @@ pub const Gate = packed struct {
     }
 };
 
-pub const Flags = packed struct(u7) {
+pub const Flags = packed struct(u8) {
     gate_type: GateType = .interrupt_32bit,
     __reserved2: u1 = 0,
     privilage: u2 = 0,
+    present: bool = false,
 };
 
 pub const GateType = enum(u4) {
@@ -47,18 +47,18 @@ pub var idt: [256]Gate = .{Gate{}} ** 256;
 pub var descriptor: Descriptor = .{ .limit = @sizeOf(@TypeOf(idt)) - 1, .base = undefined };
 
 pub fn init() void {
-    descriptor.base = @intFromPtr(&idt);
     log.debug("Initializing IDT", .{});
     descriptor.base = @intFromPtr(&idt);
+
     loadIDT(&descriptor);
 }
 
 pub fn enableGate(interrupt: u8) void {
-    idt[interrupt].present = true;
+    idt[interrupt].flags.present = true;
 }
 
 pub fn disableGate(interrupt: u8) void {
-    idt[interrupt].present = false;
+    idt[interrupt].flags.present = false;
 }
 
 pub fn setGate(interrupt: u16, base: usize, segment: gdt.Selector, flags: Flags) void {

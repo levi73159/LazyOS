@@ -1,21 +1,20 @@
 const std = @import("std");
-const arch = @import("../arch.zig");
+const arch = @import("arch.zig");
 const gdt = arch.gdt;
 const idt = arch.idt;
 const isr = arch.isr;
+const irq = arch.irq;
 
-const console = @import("../console.zig");
+const console = @import("console.zig");
 
 const log = std.log.scoped(.hal);
 
 pub fn init() void {
     log.debug("Initializing HAL", .{});
     invoke(gdt.init, "GDT");
-    log.debug("GDT initialized", .{});
     invoke(idt.init, "IDT");
-    log.debug("IDT initialized", .{});
-    invoke(isr.init, "ISRs");
-    log.debug("ISRs initialized", .{});
+    invoke(isr.init, "ISR");
+    // invoke(irq.init, "IRQ");
 }
 
 // function invoker wrapper

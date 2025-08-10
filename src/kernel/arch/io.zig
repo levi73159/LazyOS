@@ -1,3 +1,5 @@
+const unused_port = 0x80;
+
 pub fn inb(port: u16) u8 {
     return asm volatile ("inb %[port], %[result]"
         : [result] "={al}" (-> u8),
@@ -38,4 +40,8 @@ pub fn setCursor(x: u16, y: u16, width: u16) void {
     // Cursor high byte
     outb(0x3D4, 0x0E);
     outb(0x3D5, @truncate((pos >> 8) & 0xFF));
+}
+
+pub fn wait() void {
+    outb(unused_port, 0);
 }

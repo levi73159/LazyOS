@@ -9,24 +9,7 @@ const io = @import("../io.zig");
 const InterruptFn = *const fn () callconv(.naked) noreturn;
 pub const Handler = *const fn (frame: *InterruptFrame) void;
 
-const InterruptFrame = packed struct {
-    ds: u32,
-    eax: u32,
-    ecx: u32,
-    edx: u32,
-    ebx: u32,
-    kernelesp: u32,
-    ebp: u32,
-    esi: u32,
-    edi: u32,
-    interrupt_number: u32,
-    error_code: u32,
-    eip: u32,
-    cs: u32,
-    eflags: u32,
-    useresp: u32,
-    ss: u32,
-};
+const InterruptFrame = @import("registers.zig").InterruptFrame;
 
 pub const Exception = enum(u8) {
     division_by_zero = 0,
@@ -102,6 +85,8 @@ pub fn init() void {
             idt.disableGate(i);
         }
     }
+
+    idt.disableGate(0x80);
 }
 
 export fn interruptHandler(frame: *InterruptFrame) callconv(.c) void {
