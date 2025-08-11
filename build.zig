@@ -31,7 +31,7 @@ pub fn build(b: *std.Build) void {
 
     const kernel = b.addExecutable(.{
         .name = "kernel",
-        .root_source_file = b.path("src/kernel/main.zig"),
+        .root_source_file = b.path("src/kernel/boot.zig"),
         .target = kernel_target,
         .optimize = optimize,
     });
