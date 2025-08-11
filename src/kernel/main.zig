@@ -72,4 +72,5 @@ fn _start() void {
 
 fn main() void {
     std.log.info("Hello world!", .{});
+    io.sti();
 }

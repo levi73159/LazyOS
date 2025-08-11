@@ -32,19 +32,19 @@ pub const GateType = enum(u4) {
 
 pub const Descriptor = packed struct {
     limit: u16,
-    base: usize,
+    base: u32,
 };
 
 fn loadIDT(desc: *const Descriptor) void {
     asm volatile ("lidt (%[idt])"
         :
-        : [idt] "r" (desc),
+        : [idt] "{eax}" (desc),
         : "memory"
     );
 }
 
 pub var idt: [256]Gate = .{Gate{}} ** 256;
-pub var descriptor: Descriptor = .{ .limit = @sizeOf(@TypeOf(idt)) - 1, .base = undefined };
+pub var descriptor: Descriptor = .{ .limit = @sizeOf(Gate) * idt.len - 1, .base = undefined };
 
 pub fn init() void {
     log.debug("Initializing IDT", .{});
@@ -61,7 +61,7 @@ pub fn disableGate(interrupt: u8) void {
     idt[interrupt].flags.present = false;
 }
 
-pub fn setGate(interrupt: u16, base: usize, segment: gdt.Selector, flags: Flags) void {
+pub fn setGate(interrupt: u8, base: usize, segment: gdt.Selector, flags: Flags) void {
     idt[interrupt].base_low = @truncate(base & 0xFFFF);
     idt[interrupt].base_high = @truncate(base >> 16);
     idt[interrupt].selector = @intFromEnum(segment);

@@ -36,7 +36,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     kernel.entry = .disabled;
-    kernel.root_module.strip = false;
+    kernel.root_module.code_model = .kernel;
+    kernel.root_module.red_zone = false;
 
     std.log.debug("install path: {s}, prefix: {s}", .{ b.install_path, b.install_prefix });
 
@@ -46,7 +47,7 @@ pub fn build(b: *std.Build) void {
     const image = makeImage(b, kernel);
     image.step.dependOn(&kernel.step);
 
-    const qemu_cmd = b.addSystemCommand(&.{ "qemu-system-i386", "-cdrom", image.path, "-m", "512M", "-debugcon", "stdio" });
+    const qemu_cmd = b.addSystemCommand(&.{ "qemu-system-i386", "-cdrom", image.path, "-m", "512M", "-debugcon", "stdio", "-D", "qemu.log" });
     qemu_cmd.step.dependOn(image.step);
 
     const run = b.step("run", "Run the operating system");
@@ -69,6 +70,7 @@ pub fn makeImage(b: *std.Build, kernel: *std.Build.Step.Compile) Image {
     });
 
     make_iso.addFileArg(files.getDirectory());
+
     make_iso.step.dependOn(&files.step);
 
     const step = b.step("make-image", "Build the ISO image");

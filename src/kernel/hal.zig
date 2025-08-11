@@ -14,7 +14,7 @@ pub fn init() void {
     invoke(gdt.init, "GDT");
     invoke(idt.init, "IDT");
     invoke(isr.init, "ISR");
-    // invoke(irq.init, "IRQ");
+    invoke(irq.init, "IRQ");
 }
 
 // function invoker wrapper

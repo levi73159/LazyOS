@@ -1,7 +1,7 @@
 const io = @import("../io.zig");
 const log = @import("std").log.scoped(.pic);
 
-pub const REMAP_OFFSET = 0x20;
+pub const REMAP_OFFSET = 32;
 
 // pic1 == master
 // pic2 == slave
@@ -66,7 +66,6 @@ pub fn config(offset_pic1: u8, offset_pic2: u8) void {
     io.outb(pic1_data_port, 0);
     io.wait();
     io.outb(pic2_data_port, 0);
-    io.wait();
 }
 
 fn getPort(irq: *u8) u8 {
@@ -81,7 +80,7 @@ pub fn mask(irq: u8) void {
     const port = getPort(&new_irq);
 
     const m: u8 = io.inb(port);
-    io.outb(port, m | (1 << irq));
+    io.outb(port, m | (@as(u8, 1) << @intCast(irq)));
 }
 
 pub fn unmask(irq: u8) void {
@@ -89,7 +88,7 @@ pub fn unmask(irq: u8) void {
     const port = getPort(&new_irq);
 
     const m: u8 = io.inb(port);
-    io.outb(port, m & ~(1 << irq));
+    io.outb(port, m & ~(@as(u8, 1) << @intCast(irq)));
 }
 
 pub fn disable() void {
@@ -121,5 +120,5 @@ pub fn readIRQRequestRegister() u16 {
 pub fn readInServiceRegister() u16 {
     io.outb(pic1_command_port, cmd_read_isr);
     io.outb(pic2_command_port, cmd_read_isr);
-    return io.inb(pic2_data_port) | (io.inb(pic2_data_port) << 8);
+    return io.inb(pic1_data_port) | (io.inb(pic2_data_port) << 8);
 }

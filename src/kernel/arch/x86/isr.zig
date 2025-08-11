@@ -116,14 +116,16 @@ fn handleError(frame: *InterruptFrame) noreturn {
         frame.edi,
     });
 
-    console.printB("   esp={x}   ebp={x}   eip={x}   eflags={x}\n   cs={x}   ds={x}   ss={x}\n", .{
-        frame.kernelesp,
+    console.printB("   ebp={x}   esp={x}   eip={x}   eflags={x}\n", .{
         frame.ebp,
+        frame.esp,
         frame.eip,
         frame.eflags,
+    });
+
+    console.printB("   cs={x}   ds={x}\n", .{
         frame.cs,
         frame.ds,
-        frame.ss,
     });
 
     console.printB("   error={x}   interrupt={x}\n", .{ frame.error_code, frame.interrupt_number });
@@ -147,17 +149,18 @@ pub fn getVector(comptime number: u8) ?InterruptFn {
         15, 22...27, 31 => null,
         else => struct {
             fn handler() callconv(.naked) noreturn {
+                asm volatile ("cli");
                 if (Exception.hasErrorNumber(number)) {
                     asm volatile (
-                        \\push %[num]
+                        \\pushl %[num]
                         \\jmp interruptCommon
                         :
                         : [num] "r" (@as(u32, number)),
                     );
                 } else {
                     asm volatile (
-                        \\push $0
-                        \\push %[num]
+                        \\pushl $0
+                        \\pushl %[num]
                         \\jmp interruptCommon
                         :
                         : [num] "r" (@as(u32, number)),
@@ -171,28 +174,17 @@ pub fn getVector(comptime number: u8) ?InterruptFn {
 export fn interruptCommon() callconv(.naked) noreturn {
     asm volatile (
     // push general-purpose registers
-        \\ push %%edi
-        \\ push %%esi
-        \\ push %%ebp
-        \\ push %%esp
-        \\ push %%ebx
-        \\ push %%edx
-        \\ push %%ecx
-        \\ push %%eax
-        \\ 
-        // push data segment
-        \\ mov $0x0, %%eax
+        \\ pusha
+        \\ mov $0, %%eax
         \\ mov %%ds, %%ax
         \\ push %%eax
-        \\ 
-        // set segment to run in kernel data
+        \\
         \\ mov $0x10, %%ax
         \\ mov %%ax, %%ds
         \\ mov %%ax, %%es
         \\ mov %%ax, %%fs
         \\ mov %%ax, %%gs
-        \\ 
-        // push stack pointer and pass it to c
+        \\
         \\ push %%esp
         \\ call interruptHandler
         \\ add $4, %%esp
@@ -202,15 +194,8 @@ export fn interruptCommon() callconv(.naked) noreturn {
         \\ mov %%ax, %%es
         \\ mov %%ax, %%fs
         \\ mov %%ax, %%gs
-        \\ 
-        \\ pop %%eax
-        \\ pop %%ecx
-        \\ pop %%edx
-        \\ pop %%ebx
-        \\ pop %%esp
-        \\ pop %%ebp
-        \\ pop %%esi
-        \\ pop %%edi
+        \\
+        \\ popa
         \\ add $8, %%esp
         \\ 
         \\ iret

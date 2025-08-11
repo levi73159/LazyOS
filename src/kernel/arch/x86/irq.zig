@@ -21,7 +21,7 @@ pub fn init() void {
     }
 
     // enable interrupts
-    io.sti();
+    // io.sti();
 }
 
 fn irqHandler(frame: *InterruptFrame) void {
