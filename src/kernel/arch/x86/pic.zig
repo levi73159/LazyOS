@@ -23,9 +23,9 @@ const pic_cascade_line = 0x02;
 const icw1_expect_icw4 = 1 << 0;
 const icw1_single_mode = 1 << 1;
 const icw1_interval4 = 1 << 2;
-const icw1_edge_trigger = 1 << 3;
-const icw1_level_trigger = 1 << 4;
-const icw1_initialize = 1 << 5;
+const icw1_edge_trigger = 0;
+const icw1_level_trigger = 1 << 3;
+const icw1_initialize = 1 << 4;
 
 // Init control word 4
 const icw4_8086_mode = 1 << 0;

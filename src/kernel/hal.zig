@@ -11,6 +11,7 @@ const log = std.log.scoped(.hal);
 
 pub fn init() void {
     log.debug("Initializing HAL", .{});
+
     invoke(gdt.init, "GDT");
     invoke(idt.init, "IDT");
     invoke(isr.init, "ISR");
@@ -23,10 +24,10 @@ pub fn init() void {
 // into
 // if func can return error
 //      gdt.init() catch panic("Failed to initialize GDT");
-//      console.writeColor(.light_green, "GDT initialized\n");
+//      log.info("GDT initialized", .{});
 // else
 //      gdt.init();
-//      console.writeColor(.light_green, "GDT initialized\n");
+//      log.info("GDT initialized", .{});
 inline fn invoke(comptime func: anytype, comptime name: []const u8) void {
     // check if func return error
     if (@typeInfo(@TypeOf(func)) != .@"fn") {

@@ -38,6 +38,7 @@ pub fn build(b: *std.Build) void {
     kernel.entry = .disabled;
     kernel.root_module.code_model = .kernel;
     kernel.root_module.red_zone = false;
+    kernel.root_module.pic = true;
 
     std.log.debug("install path: {s}, prefix: {s}", .{ b.install_path, b.install_prefix });
 

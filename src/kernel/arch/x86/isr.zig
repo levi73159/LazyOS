@@ -95,10 +95,9 @@ export fn interruptHandler(frame: *InterruptFrame) callconv(.c) void {
         handler(frame);
     } else if (frame.interrupt_number >= 32) {
         host.warn("Unhandled interrupt {d}", .{frame.interrupt_number});
-        return;
+    } else {
+        handleError(frame);
     }
-
-    handleError(frame);
 }
 
 fn handleError(frame: *InterruptFrame) noreturn {

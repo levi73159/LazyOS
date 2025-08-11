@@ -20,8 +20,7 @@ pub fn init() void {
         isr.register(@intCast(pic.REMAP_OFFSET + i), &irqHandler);
     }
 
-    // enable interrupts
-    // io.sti();
+    io.sti();
 }
 
 fn irqHandler(frame: *InterruptFrame) void {
