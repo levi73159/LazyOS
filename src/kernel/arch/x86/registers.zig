@@ -1,3 +1,5 @@
+const std = @import("std");
+
 pub const InterruptFrame = packed struct {
     ds: u32,
     edi: u32,
@@ -18,4 +20,34 @@ pub const InterruptFrame = packed struct {
     eflags: u32,
     esp: u32,
     ss: u32,
+
+    pub fn format(
+        self: InterruptFrame,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        try writer.print("   eax={x}   ebx={x}   ecx={x}   edx={x}   esi={x}   edi={x}\n", .{
+            self.eax,
+            self.ebx,
+            self.ecx,
+            self.edx,
+            self.esi,
+            self.edi,
+        });
+
+        try writer.print("   ebp={x}   esp={x}   eip={x}   eflags={x}\n", .{
+            self.ebp,
+            self.esp,
+            self.eip,
+            self.eflags,
+        });
+
+        try writer.print("   cs={x}   ds={x}\n", .{
+            self.cs,
+            self.ds,
+        });
+
+        try writer.print("   error={x}   interrupt={x}", .{ self.error_code, self.interrupt_number });
+    }
 };

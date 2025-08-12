@@ -1,5 +1,5 @@
 ENTRY(__kernel_start)
- 
+
 SECTIONS {
     . = 1M;
 

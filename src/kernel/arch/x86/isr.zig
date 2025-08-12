@@ -90,7 +90,6 @@ pub fn init() void {
 }
 
 export fn interruptHandler(frame: *InterruptFrame) callconv(.c) void {
-    log.debug("Interrupt {d}", .{frame.interrupt_number});
     if (handlers[frame.interrupt_number]) |handler| {
         handler(frame);
     } else if (frame.interrupt_number >= 32) {
@@ -106,28 +105,7 @@ fn handleError(frame: *InterruptFrame) noreturn {
     console.printB("!!! UNHANDLED EXCEPTION !!!\n", .{});
     console.printB("Unhandled exception {d} {s}\n", .{ frame.interrupt_number, @tagName(exception) });
 
-    console.printB("   eax={x}   ebx={x}   ecx={x}   edx={x}   esi={x}   edi={x}\n", .{
-        frame.eax,
-        frame.ebx,
-        frame.ecx,
-        frame.edx,
-        frame.esi,
-        frame.edi,
-    });
-
-    console.printB("   ebp={x}   esp={x}   eip={x}   eflags={x}\n", .{
-        frame.ebp,
-        frame.esp,
-        frame.eip,
-        frame.eflags,
-    });
-
-    console.printB("   cs={x}   ds={x}\n", .{
-        frame.cs,
-        frame.ds,
-    });
-
-    console.printB("   error={x}   interrupt={x}\n", .{ frame.error_code, frame.interrupt_number });
+    console.printB("{}\n", .{frame});
 
     console.printB("!!! KERNEL PANIC !!!\n", .{});
     console.printB("\x1b[0m", .{});

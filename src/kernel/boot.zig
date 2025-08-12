@@ -2,9 +2,13 @@ const std = @import("std");
 const main = @import("main.zig");
 const console = @import("console.zig");
 
+const c = @cImport({
+    @cInclude("multiboot.h");
+});
+
 const ALIGN = 1 << 0;
 const MEMINFO = 1 << 1;
-const MAGIC = 0x1BADB002;
+const MAGIC = c.MULTIBOOT_HEADER_MAGIC;
 const FLAGS = ALIGN | MEMINFO;
 
 // multiboot header
@@ -31,9 +35,22 @@ export fn __kernel_start() callconv(.naked) noreturn {
         \\ cli
         \\ movl %[stack_top], %%esp
         \\ movl %%esp, %%ebp
-        \\ call %[_start:P]
+        // get ebx (multiboot info from grub) and pass it to _start with the
+        // also get eax (multiboot magic c_uint) and pass it to _start
+        // start must be _start(multiboot_info, multiboot_magic)
         :
         : [stack_top] "r" (@as([*]align(16) u8, @ptrCast(&stack_bytes)) + @sizeOf(@TypeOf(stack_bytes))),
+    );
+
+    const mb_info_addr = asm ("mov %%ebx, %[res]"
+        : [res] "=r" (-> usize),
+    );
+
+    asm volatile (
+        \\ push %[info]
+        \\ call %[_start:P]
+        :
+        : [info] "r" (mb_info_addr),
           [_start] "X" (&main._start),
     );
     while (true) {

@@ -19,12 +19,13 @@ pub fn init() void {
     for (0..16) |i| {
         isr.register(@intCast(pic.REMAP_OFFSET + i), &irqHandler);
     }
-
-    io.sti();
 }
 
 fn irqHandler(frame: *InterruptFrame) void {
     const irq: u8 = @intCast(frame.interrupt_number - pic.REMAP_OFFSET);
+    if (irq != 0) {
+        log.debug("IRQ {d} aka {d}", .{ irq, frame.interrupt_number });
+    }
     // just to be safe we make sure the irq is in range
     if (irq >= handlers.len) {
         std.debug.panic("IRQ {d} out of range, 0-{d}", .{ irq, handlers.len - 1 });

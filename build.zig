@@ -40,6 +40,8 @@ pub fn build(b: *std.Build) void {
     kernel.root_module.red_zone = false;
     kernel.root_module.pic = true;
 
+    kernel.addIncludePath(b.path("src/kernel/headers"));
+
     std.log.debug("install path: {s}, prefix: {s}", .{ b.install_path, b.install_prefix });
 
     kernel.setLinkerScript(b.path("linker.ld"));
