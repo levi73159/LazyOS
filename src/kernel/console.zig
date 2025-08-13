@@ -2,6 +2,7 @@ const std = @import("std");
 const vga = @import("vga.zig");
 const io = @import("arch.zig").io;
 const arch = @import("arch.zig");
+const kb = @import("keyboard.zig");
 
 const host = @import("std").log.scoped(.host);
 
@@ -36,24 +37,36 @@ pub fn putEntryAt(c: u8, color: u8, x: u8, y: u8) void {
 }
 
 pub fn putchar(c: u8) void {
+    defer io.setCursor(terminal_column, terminal_row, vga.VGA_WIDTH);
     if (c == '\n') {
         terminal_column = 0;
         if (terminal_row < vga.VGA_HEIGHT - 1) {
             terminal_row += 1;
         }
-        return;
-    }
-
-    putEntryAt(c, terminal_color, terminal_column, terminal_row);
-    terminal_column += 1;
-    if (terminal_column == vga.VGA_WIDTH) {
-        terminal_column = 0;
-        if (terminal_row < vga.VGA_HEIGHT - 1) {
-            terminal_row += 1;
+    } else {
+        putEntryAt(c, terminal_color, terminal_column, terminal_row);
+        terminal_column += 1;
+        if (terminal_column == vga.VGA_WIDTH) {
+            terminal_column = 0;
+            if (terminal_row < vga.VGA_HEIGHT - 1) {
+                terminal_row += 1;
+            }
         }
     }
 
+    if (terminal_row >= vga.VGA_HEIGHT - 1) {
+        scroll();
+        terminal_row -= 1;
+    }
+}
+
+pub fn backspace() void {
+    if (terminal_column == 0) {
+        return;
+    }
+    terminal_column -= 1;
     io.setCursor(terminal_column, terminal_row, vga.VGA_WIDTH);
+    putEntryAt(' ', terminal_color, terminal_column, terminal_row);
 }
 
 pub fn write(data: []const u8) void {
@@ -220,6 +233,55 @@ fn terminal_fg() vga.Color {
 }
 fn terminal_bg() vga.Color {
     return @enumFromInt((terminal_color >> 4) & 0x0F);
+}
+
+// will end with a \n character
+// echo will print what was typed
+// include will include the \n
+pub fn readline(buf: []u8, echo: bool) error{BufferOverflow}![]const u8 {
+    var i: usize = 0;
+    while (i < buf.len) {
+        const key = kb.getKey();
+        if (!key.pressed) continue;
+
+        if (key.getChar()) |c| {
+            if (c == '\n') break;
+            if (echo) putchar(c);
+            buf[i] = c;
+            i += 1;
+        }
+
+        if (key.scancode == .backspace) {
+            if (i > 0) {
+                i -= 1;
+                if (echo) {
+                    backspace();
+                }
+            }
+        }
+    } else {
+        return error.BufferOverflow;
+    }
+    return buf[0..i];
+}
+
+fn scroll() void {
+    // Move each row up
+    var row: usize = 1;
+    while (row < vga.VGA_HEIGHT) : (row += 1) {
+        var col: usize = 0;
+        while (col < vga.VGA_WIDTH) : (col += 1) {
+            const entry = vga.getEntry(row * vga.VGA_WIDTH + col);
+            vga.writeEntry((row - 1) * vga.VGA_WIDTH + col, entry);
+        }
+    }
+
+    // Clear last row
+    var col: usize = 0;
+    const entry = vga.entry(' ', terminal_color);
+    while (col < vga.VGA_WIDTH) : (col += 1) {
+        vga.writeEntry((vga.VGA_HEIGHT - 1) * vga.VGA_WIDTH + col, entry);
+    }
 }
 
 pub fn logFn(

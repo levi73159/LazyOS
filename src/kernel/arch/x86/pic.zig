@@ -35,6 +35,8 @@ const icw4_buffered_slave = 0;
 const icw4_buffered_mode = 1 << 3;
 const icw4_special_fully_nested = 1 << 4;
 
+var interrupt_mask: u16 = 0;
+
 pub fn config(offset_pic1: u8, offset_pic2: u8) void {
     log.debug("Configuring PIC", .{});
     log.debug("offset_pic1: {d}, offset_pic2: {d}", .{ offset_pic1, offset_pic2 });
@@ -78,20 +80,34 @@ fn getPort(irq: *u8) u8 {
 pub fn mask(irq: u8) void {
     var new_irq = irq;
     const port = getPort(&new_irq);
+    const m: u8 = getMask(irq);
 
-    const m: u8 = io.inb(port);
     io.outb(port, m | (@as(u8, 1) << @intCast(irq)));
 }
 
 pub fn unmask(irq: u8) void {
     var new_irq = irq;
     const port = getPort(&new_irq);
+    const m: u8 = getMask(irq);
 
-    const m: u8 = io.inb(port);
     io.outb(port, m & ~(@as(u8, 1) << @intCast(irq)));
 }
 
+pub fn setMask(m: u16) void {
+    interrupt_mask = m;
+
+    io.outb(pic1_data_port, @truncate(m & 0xFF));
+    io.wait();
+    io.outb(pic2_data_port, @truncate(m >> 8));
+    io.wait();
+}
+
+pub fn getMask(irq: u8) u8 {
+    return if (irq < 8) interrupt_mask & 0xFF else interrupt_mask >> 8;
+}
+
 pub fn disable() void {
+    interrupt_mask = 0xffff;
     io.outb(pic1_data_port, 0xff);
     io.wait();
     io.outb(pic2_data_port, 0xff);

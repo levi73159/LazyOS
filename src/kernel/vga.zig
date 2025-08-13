@@ -39,3 +39,7 @@ pub fn entry(uc: u8, color_entry: u8) u16 {
 pub fn writeEntry(index: usize, en: u16) void {
     VGA_MEMORY[index] = en;
 }
+
+pub fn getEntry(index: usize) u16 {
+    return VGA_MEMORY[index];
+}

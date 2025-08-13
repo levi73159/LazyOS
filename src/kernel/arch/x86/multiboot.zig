@@ -83,3 +83,5 @@ pub const MemoryMapEntry = extern struct {
     len: u64 align(1),
     type: MemoryType align(1),
 };
+
+pub const HEADER_MAGIC = 0x1BADB002;

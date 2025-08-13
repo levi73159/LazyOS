@@ -3,10 +3,7 @@ const arch = @import("arch.zig");
 const io = @import("arch.zig").io;
 const console = @import("console.zig");
 const hal = @import("hal.zig");
-
-const c = @cImport({
-    @cInclude("multiboot.h");
-});
+const kb = @import("keyboard.zig");
 
 const regs = arch.registers;
 
@@ -19,6 +16,7 @@ pub fn _start(mb: *arch.MultibootInfo) callconv(.c) void {
 
     hal.init();
     arch.irq.register(0, timer);
+    arch.irq.register(1, kb.handler);
 
     // check bit 6 to see if boot info is valid
     if (mb.flags >> 6 & 1 != 1) {
@@ -29,6 +27,7 @@ pub fn _start(mb: *arch.MultibootInfo) callconv(.c) void {
 
     const entries = mb.getMemoryMap();
 
+    log.info("Memory map:", .{});
     for (entries) |entry| {
         log.info("Start addr: {x} | len: {x} | size: {x} | type: {s}", .{
             entry.addr,
@@ -41,14 +40,22 @@ pub fn _start(mb: *arch.MultibootInfo) callconv(.c) void {
     io.sti();
 
     main();
+
     console.write("You reached the end of the kernel, halting...\n");
-    while (true) {
-        io.hlt();
-    }
+    io.hlt();
 }
 
 fn main() void {
     std.log.info("Hello world!", .{});
+    console.clear();
 
-    while (true) {}
+    var buf: [32]u8 = undefined;
+    while (true) {
+        const line = console.readline(&buf, true) catch |err| switch (err) {
+            error.BufferOverflow => @panic("Buffer overflow"),
+        };
+        console.write("\n");
+        console.write(line);
+        console.write("\n");
+    }
 }

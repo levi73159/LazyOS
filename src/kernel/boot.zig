@@ -2,13 +2,11 @@ const std = @import("std");
 const main = @import("main.zig");
 const console = @import("console.zig");
 
-const c = @cImport({
-    @cInclude("multiboot.h");
-});
+const arch = @import("arch.zig");
 
 const ALIGN = 1 << 0;
 const MEMINFO = 1 << 1;
-const MAGIC = c.MULTIBOOT_HEADER_MAGIC;
+const MAGIC = arch.Multiboot.HEADER_MAGIC;
 const FLAGS = ALIGN | MEMINFO;
 
 // multiboot header
@@ -42,6 +40,7 @@ export fn __kernel_start() callconv(.naked) noreturn {
         : [stack_top] "r" (@as([*]align(16) u8, @ptrCast(&stack_bytes)) + @sizeOf(@TypeOf(stack_bytes))),
     );
 
+    // get info addr from ebx
     const mb_info_addr = asm ("mov %%ebx, %[res]"
         : [res] "=r" (-> usize),
     );
