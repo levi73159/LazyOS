@@ -64,10 +64,7 @@ pub fn config(offset_pic1: u8, offset_pic2: u8) void {
     io.outb(pic2_data_port, icw4_8086_mode);
     io.wait();
 
-    // clear data registers
-    io.outb(pic1_data_port, 0);
-    io.wait();
-    io.outb(pic2_data_port, 0);
+    setMask(0);
 }
 
 fn getPort(irq: *u8) u8 {
@@ -103,7 +100,7 @@ pub fn setMask(m: u16) void {
 }
 
 pub fn getMask(irq: u8) u8 {
-    return if (irq < 8) interrupt_mask & 0xFF else interrupt_mask >> 8;
+    return if (irq < 8) @truncate(interrupt_mask & 0xFF) else @truncate(interrupt_mask >> 8);
 }
 
 pub fn disable() void {

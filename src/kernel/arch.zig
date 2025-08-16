@@ -9,6 +9,7 @@ pub usingnamespace switch (builtin.cpu.arch) {
         pub const registers = @import("arch/x86/registers.zig");
         pub const pic = @import("arch/x86/pic.zig");
         pub const irq = @import("arch/x86/irq.zig");
+        pub const pit = @import("arch/x86/pit.zig");
         pub const Multiboot = @import("arch/x86/multiboot.zig");
         pub const MultibootInfo = Multiboot.MultibootInfo;
     },

@@ -1,3 +1,5 @@
+pub const HEADER_MAGIC = 0x1BADB002;
+
 pub const MultibootInfo = extern struct {
     flags: u32,
     mem_lower: u32,
@@ -34,7 +36,7 @@ pub const MultibootInfo = extern struct {
     framebuffer_width: u32,
     framebuffer_height: u32,
     framebuffer_bpp: u8,
-    framebuffer_type: u8,
+    framebuffer_type: FramebufferType,
 
     framebuffer: extern union {
         palette: extern struct { palette_addr: u32, num_colors: u16 },
@@ -52,6 +54,13 @@ pub const MultibootInfo = extern struct {
         const ptr: [*]MemoryMapEntry = @ptrFromInt(self.mmap_addr);
         const slice = ptr[0 .. self.mmap_length / @sizeOf(MemoryMapEntry)];
         return slice;
+    }
+
+    pub fn getFramebuffer(self: MultibootInfo, comptime T: type) []T {
+        const addr: usize = @intCast(self.framebuffer_addr);
+        const ptr: [*]u8 = @ptrFromInt(addr);
+        const slice = ptr[0 .. self.framebuffer_pitch * self.framebuffer_height];
+        return @ptrCast(@alignCast(slice));
     }
 };
 
@@ -84,4 +93,8 @@ pub const MemoryMapEntry = extern struct {
     type: MemoryType align(1),
 };
 
-pub const HEADER_MAGIC = 0x1BADB002;
+pub const FramebufferType = enum(u8) {
+    indexed = 0,
+    rgb = 1,
+    direct = 2,
+};

@@ -6,20 +6,60 @@ const arch = @import("arch.zig");
 
 const ALIGN = 1 << 0;
 const MEMINFO = 1 << 1;
+const VIDEOINFO = 1 << 2;
+const AOUT_KLUDGE = 0x00010000;
+
+// #define MULTIBOOT_AOUT_KLUDGE                   0x00010000
 const MAGIC = arch.Multiboot.HEADER_MAGIC;
-const FLAGS = ALIGN | MEMINFO;
+const FLAGS = ALIGN | MEMINFO | VIDEOINFO;
 
 // multiboot header
-const MultibootHeader = packed struct {
+const MultibootHeader = extern struct {
     magic: i32 = MAGIC,
-    flags: i32,
+    flags: u32 = FLAGS,
     checksum: i32,
-    padding: u32 = 0,
+
+    header_addr: u32 = 0,
+    load_addr: u32 = 0,
+    load_end_addr: u32 = 0,
+    bss_end_addr: u32 = 0,
+    entry_addr: u32 = 0,
+
+    mode_type: u32,
+    width: u32,
+    height: u32,
+    depth: u32,
+
+    // /* Must be MULTIBOOT_MAGIC - see above. */
+    // multiboot_uint32_t magic;
+    //
+    // /* Feature flags. */
+    // multiboot_uint32_t flags;
+    //
+    // /* The above fields plus this one must equal 0 mod 2^32. */
+    // multiboot_uint32_t checksum;
+    //
+    // /* These are only valid if MULTIBOOT_AOUT_KLUDGE is set. */
+    // multiboot_uint32_t header_addr;
+    // multiboot_uint32_t load_addr;
+    // multiboot_uint32_t load_end_addr;
+    // multiboot_uint32_t bss_end_addr;
+    // multiboot_uint32_t entry_addr;
+    //
+    // /* These are only valid if MULTIBOOT_VIDEO_MODE is set. */
+    // multiboot_uint32_t mode_type;
+    // multiboot_uint32_t width;
+    // multiboot_uint32_t height;
+    // multiboot_uint32_t depth;
 };
 
-export var multiboot: MultibootHeader align(4) linksection(".multiboot") = MultibootHeader{
+export var multiboot: MultibootHeader align(16) linksection(".multiboot") = MultibootHeader{
     .flags = FLAGS,
     .checksum = -(MAGIC + FLAGS),
+    .mode_type = 0,
+    .width = 1024,
+    .height = 768,
+    .depth = 32,
 };
 
 const STACK_SIZE = 16 * 1024;

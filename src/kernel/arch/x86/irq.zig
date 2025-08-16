@@ -45,3 +45,11 @@ pub fn register(irq: u8, handler: Handler) void {
 pub fn unregister(irq: u8) void {
     handlers[irq] = null;
 }
+
+pub fn enable(irq: u8) void {
+    pic.unmask(irq);
+}
+
+pub fn disable(irq: u8) void {
+    pic.mask(irq);
+}

@@ -249,6 +249,11 @@ fn bufferFull() bool {
     return ((end_index + 1) % buf.len) == start_index;
 }
 
+pub fn init() void {
+    arch.irq.register(1, handler);
+    arch.irq.enable(1);
+}
+
 pub fn handler(_: *InterruptFrame) void {
     io.cli();
 

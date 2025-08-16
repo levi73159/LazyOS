@@ -4,6 +4,7 @@ const gdt = arch.gdt;
 const idt = arch.idt;
 const isr = arch.isr;
 const irq = arch.irq;
+const pit = arch.pit;
 
 const console = @import("console.zig");
 
