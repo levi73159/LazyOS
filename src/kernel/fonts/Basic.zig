@@ -1,8 +1,4 @@
-//! Kernel VGA 8x16 Font
-
-const FontDesc = @import("../fonts.zig").FontDesc;
-
-const font_data: []const u8 = &[_]u8{
+pub const font_data: []const u8 = &[_]u8{
     // 0 0x00 '^@'
     0b00000000,
     0b00000000,
@@ -4357,10 +4353,6 @@ const font_data: []const u8 = &[_]u8{
     0b00000000,
 };
 
-pub const font_vga_8x16 = FontDesc{
-    .name = "VGA8x16",
-    .width = 8,
-    .height = 16,
-    .charcount = 256,
-    .data = font_data,
-};
+pub const width = 8;
+pub const height = 16;
+pub const charcount = 256;

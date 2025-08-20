@@ -5,22 +5,23 @@ pub const Descriptor = @import("../globals.zig").Descriptor;
 pub const Access = @import("../globals.zig").GDTAccess;
 pub const Flags = @import("../globals.zig").GDTFlags;
 
-pub const Entry = packed struct {
+pub const Entry = packed struct(u128) {
     limit_low: u16,
     base_low: u24,
     access: Access,
     limit_high: u4,
     flags: Flags,
-    base_high: u8,
+    base_high: u40,
+    __reserved: u32 = 0,
 
-    pub fn init(limit: u20, base: u32, access: Access, flags: Flags) Entry {
+    pub fn init(limit: u20, base: u64, access: Access, flags: Flags) Entry {
         return Entry{
             .limit_low = @truncate(limit & 0xFFFF),
             .base_low = @truncate(base & 0xFFFFFF),
             .access = access,
             .limit_high = @truncate((limit >> 16) & 0xF),
             .flags = flags,
-            .base_high = @truncate((base >> 24) & 0xFF),
+            .base_high = @truncate(base >> 24),
         };
     }
 
@@ -37,7 +38,7 @@ pub const Entry = packed struct {
 };
 
 pub const Selector = enum(u16) {
-    null_segment = 0,
+    null = 0,
     kernel_code = 0x08,
     kernel_data = 0x10,
 };
@@ -45,7 +46,7 @@ pub const Selector = enum(u16) {
 var gdt = [_]Entry{
     Entry.nullDescriptor(),
 
-    // kernel 32 bit code segment
+    // kernel 64 bit code segment
     Entry.init(0xFFFFF, 0, .{
         .accessed = false,
         .read_write = 1,
@@ -54,9 +55,9 @@ var gdt = [_]Entry{
         .descriptor_type = 1,
         .privilage_level = 0,
         .present = true,
-    }, .{ .bit32 = true, .granularity = 1 }),
+    }, .{ .bit64 = true, .granularity = 1 }),
 
-    // kernel 32 bit data segment
+    // kernel 64 bit data segment
     Entry.init(0xFFFFF, 0, .{
         .accessed = false,
         .read_write = 1,
@@ -65,7 +66,7 @@ var gdt = [_]Entry{
         .descriptor_type = 1,
         .privilage_level = 0,
         .present = true,
-    }, .{ .bit32 = true, .granularity = 1 }),
+    }, .{ .bit64 = true, .granularity = 1 }),
 };
 
 var descriptor = Descriptor{
@@ -74,16 +75,16 @@ var descriptor = Descriptor{
 };
 
 pub fn init() !void {
-    log.debug("Initializing GDT (32 bit)", .{});
+    log.debug("Initializing GDT (64 bit)", .{});
     descriptor.base = @intFromPtr(&gdt[0]);
-    try loadGDT(&descriptor);
+    try loadGDT();
 }
 
-fn loadGDT(desc: *const Descriptor) !void {
+fn loadGDT() !void {
     asm volatile (
         \\lgdt (%[desc])
         :
-        : [desc] "r" (desc),
+        : [desc] "r" (&descriptor),
         : "memory"
     );
 
@@ -91,27 +92,4 @@ fn loadGDT(desc: *const Descriptor) !void {
         \\ljmp $0x08, $1f
         \\1:
     );
-
-    // reload data segment
-    asm volatile (
-        \\mov $0x10, %%eax
-        \\mov %%ax, %%ds
-        \\mov %%ax, %%es
-        \\mov %%ax, %%fs
-        \\mov %%ax, %%gs
-        \\mov %%ax, %%ss
-    );
-
-    if (builtin.mode == .Debug) {
-        // quick sanity check on ds and es
-        var ds: u16 = undefined;
-        var es: u16 = undefined;
-        asm volatile ("mov %%ds, %[ds]\nmov %%es, %[es]"
-            : [ds] "=r" (ds),
-              [es] "=r" (es),
-        );
-        if (ds != 0x10 or es != 0x10) {
-            return error.LoadFailed;
-        }
-    }
 }

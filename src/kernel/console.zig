@@ -3,58 +3,89 @@ const vga = @import("vga.zig");
 const io = @import("arch.zig").io;
 const arch = @import("arch.zig");
 const kb = @import("keyboard.zig");
+const Screen = @import("Screen.zig");
+const Color = @import("Color.zig");
+const font = @import("fonts/Basic.zig");
+
+const charmap = @import("fonts/charmap.zig");
 
 const host = @import("std").log.scoped(.host);
 
-var terminal_row: u8 = 0;
-var terminal_column: u8 = 0;
+var terminal_row: u16 = 0;
+var terminal_column: u16 = 0;
 
-var terminal_color: u8 = vga.entryColor(.light_grey, .black);
+var terminal_foreground: Color = Color.white();
+var terminal_background: Color = Color.black();
 
-pub fn clear() void {
-    const entry = vga.entry(' ', terminal_color);
+var screen: *Screen = undefined;
 
-    var y: u8 = 0;
-    while (y < vga.VGA_HEIGHT) : (y += 1) {
-        var x: u8 = 0;
-        while (x < vga.VGA_WIDTH) : (x += 1) {
-            const index = @as(usize, y) * vga.VGA_WIDTH + x;
-            vga.writeEntry(index, entry);
-        }
-    }
+const pixels_per_scanline = 32;
 
-    terminal_row = 0;
-    terminal_column = 0;
-
-    io.setCursor(0, 0, vga.VGA_WIDTH);
+pub fn init(_screen: *Screen) void {
+    std.log.debug("Initializing console", .{});
+    screen = _screen;
 }
 
-pub fn putEntryAt(c: u8, color: u8, x: u8, y: u8) void {
-    const index = @as(usize, y) * vga.VGA_WIDTH + x;
-    const entry = vga.entry(c, color);
+pub fn clear() void {
+    screen.clear(terminal_background);
+    terminal_row = 0;
+    terminal_column = 0;
+    drawCursor();
+}
 
-    vga.writeEntry(index, entry);
+pub fn drawChar(char_index: u8, x: u16, y: u16) void {
+    const width = font.width;
+    const height = font.height;
+    if (width > 16) {
+        @panic("Fonts wider than 16 pixels are illegal as of now! ");
+    }
+    const char_start: usize = char_index * @as(usize, height);
+
+    const base_x: u16 = x * width;
+    const base_y: u16 = y * height;
+    var col: u4 = 0;
+    var row: u8 = 0;
+    while (row < height) : ({
+        row += 1;
+        col = 0;
+    }) {
+        while (col < width) : (col += 1) {
+            const x_pos: u16 = base_x + col;
+            const y_pos: u16 = base_y + row;
+            const value = font.font_data[char_start + row] & @as(u16, 1) << (width - col);
+            screen.setPixel(x_pos, y_pos, if (value == 0) terminal_background else terminal_foreground);
+        }
+    }
+}
+
+pub fn getTextWidth() u32 {
+    return @divFloor(screen.width, font.width);
+}
+
+pub fn getTextHeight() u32 {
+    return @divFloor(screen.height, font.height);
 }
 
 pub fn putchar(c: u8) void {
-    defer io.setCursor(terminal_column, terminal_row, vga.VGA_WIDTH);
+    defer drawCursor();
     if (c == '\n') {
+        drawChar(' ', terminal_column, terminal_row); // remove the cursor
         terminal_column = 0;
-        if (terminal_row < vga.VGA_HEIGHT - 1) {
+        if (terminal_row < getTextHeight() - 1) {
             terminal_row += 1;
         }
     } else {
-        putEntryAt(c, terminal_color, terminal_column, terminal_row);
+        drawChar(c, terminal_column, terminal_row);
         terminal_column += 1;
-        if (terminal_column == vga.VGA_WIDTH) {
+        if (terminal_column == getTextWidth()) {
             terminal_column = 0;
-            if (terminal_row < vga.VGA_HEIGHT - 1) {
+            if (terminal_row < getTextHeight() - 1) {
                 terminal_row += 1;
             }
         }
     }
 
-    if (terminal_row >= vga.VGA_HEIGHT - 1) {
+    if (terminal_row >= getTextHeight() - 1) {
         scroll();
         terminal_row -= 1;
     }
@@ -64,9 +95,15 @@ pub fn backspace() void {
     if (terminal_column == 0) {
         return;
     }
+    drawChar(' ', terminal_column, terminal_row);
     terminal_column -= 1;
-    io.setCursor(terminal_column, terminal_row, vga.VGA_WIDTH);
-    putEntryAt(' ', terminal_color, terminal_column, terminal_row);
+    drawChar(' ', terminal_column, terminal_row);
+    drawCursor();
+}
+
+// should be an underline
+pub fn drawCursor() void {
+    drawChar('_', terminal_column, terminal_row);
 }
 
 pub fn write(data: []const u8) void {
@@ -136,14 +173,14 @@ pub fn dbgPrint(comptime fmt: []const u8, args: anytype) void {
 
 pub fn panic(msg: []const u8, trace: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
     // white on red
-    printB("\x1b[97;41m", .{});
-    printB("!!! KERNEL PANIC !!!\n{s}\n", .{msg});
+    dbg("\x1b[97;41m");
+    dbgPrint("!!! KERNEL PANIC !!!\n{s}\n", .{msg});
 
     if (trace) |t| {
-        printB("trace: {}\n", .{t});
-        printB("return address: {?x}\n", .{ret_addr});
+        dbgPrint("trace: {}\n", .{t});
+        dbgPrint("return address: {?x}\n", .{ret_addr});
     } else {
-        printB("no trace\n", .{});
+        dbgPrint("no trace\n", .{});
     }
     io.hlt();
 }
@@ -170,12 +207,17 @@ fn dbgWriter() DbgWriter {
     return DbgWriter{ .context = {} };
 }
 
-pub fn setColor(color: vga.Color) void {
-    terminal_color = vga.entryColor(color, vga.Color.black);
+pub fn setFg(fg: vga.Color) void {
+    terminal_foreground = fg.to32bitColor();
+}
+
+pub fn setBg(bg: vga.Color) void {
+    terminal_background = bg.to32bitColor();
 }
 
 pub fn setFgBg(fg: vga.Color, bg: vga.Color) void {
-    terminal_color = vga.entryColor(fg, bg);
+    terminal_foreground = fg.to32bitColor();
+    terminal_background = bg.to32bitColor();
 }
 
 fn setAnsiColor(code: u8) void {
@@ -184,44 +226,44 @@ fn setAnsiColor(code: u8) void {
         0 => setFgBg(.light_grey, .black),
 
         // Foreground colors 30–37
-        30 => setFgBg(.black, terminal_bg()),
-        31 => setFgBg(.red, terminal_bg()),
-        32 => setFgBg(.green, terminal_bg()),
-        33 => setFgBg(.brown, terminal_bg()),
-        34 => setFgBg(.blue, terminal_bg()),
-        35 => setFgBg(.magenta, terminal_bg()),
-        36 => setFgBg(.cyan, terminal_bg()),
-        37 => setFgBg(.light_grey, terminal_bg()),
+        30 => setFg(.black),
+        31 => setFg(.red),
+        32 => setFg(.green),
+        33 => setFg(.brown),
+        34 => setFg(.blue),
+        35 => setFg(.magenta),
+        36 => setFg(.cyan),
+        37 => setFg(.light_grey),
 
         // Foreground bright colors 90–97
-        90 => setFgBg(.dark_grey, terminal_bg()),
-        91 => setFgBg(.light_red, terminal_bg()),
-        92 => setFgBg(.light_green, terminal_bg()),
-        93 => setFgBg(.yellow, terminal_bg()),
-        94 => setFgBg(.light_blue, terminal_bg()),
-        95 => setFgBg(.light_magenta, terminal_bg()),
-        96 => setFgBg(.light_cyan, terminal_bg()),
-        97 => setFgBg(.white, terminal_bg()),
+        90 => setFg(.dark_grey),
+        91 => setFg(.light_red),
+        92 => setFg(.light_green),
+        93 => setFg(.yellow),
+        94 => setFg(.light_blue),
+        95 => setFg(.light_magenta),
+        96 => setFg(.light_cyan),
+        97 => setFg(.white),
 
         // Background colors 40–47
-        40 => setFgBg(terminal_fg(), .black),
-        41 => setFgBg(terminal_fg(), .red),
-        42 => setFgBg(terminal_fg(), .green),
-        43 => setFgBg(terminal_fg(), .brown),
-        44 => setFgBg(terminal_fg(), .blue),
-        45 => setFgBg(terminal_fg(), .magenta),
-        46 => setFgBg(terminal_fg(), .cyan),
-        47 => setFgBg(terminal_fg(), .light_grey),
+        40 => setBg(.black),
+        41 => setBg(.red),
+        42 => setBg(.green),
+        43 => setBg(.brown),
+        44 => setBg(.blue),
+        45 => setBg(.magenta),
+        46 => setBg(.cyan),
+        47 => setBg(.light_grey),
 
         // Background bright colors 100–107
-        100 => setFgBg(terminal_fg(), .dark_grey),
-        101 => setFgBg(terminal_fg(), .light_red),
-        102 => setFgBg(terminal_fg(), .light_green),
-        103 => setFgBg(terminal_fg(), .yellow),
-        104 => setFgBg(terminal_fg(), .light_blue),
-        105 => setFgBg(terminal_fg(), .light_magenta),
-        106 => setFgBg(terminal_fg(), .light_cyan),
-        107 => setFgBg(terminal_fg(), .white),
+        100 => setBg(.dark_grey),
+        101 => setBg(.light_red),
+        102 => setBg(.light_green),
+        103 => setBg(.yellow),
+        104 => setBg(.light_blue),
+        105 => setBg(.light_magenta),
+        106 => setBg(.light_cyan),
+        107 => setBg(.white),
 
         else => {},
     }
@@ -229,10 +271,10 @@ fn setAnsiColor(code: u8) void {
 
 // Helper to get current fg/bg from terminal_color
 fn terminal_fg() vga.Color {
-    return @enumFromInt(terminal_color & 0x0F);
+    return .white;
 }
 fn terminal_bg() vga.Color {
-    return @enumFromInt((terminal_color >> 4) & 0x0F);
+    return .black;
 }
 
 // will end with a \n character
@@ -267,20 +309,33 @@ pub fn readline(buf: []u8, echo: bool) error{BufferOverflow}![]const u8 {
 
 fn scroll() void {
     // Move each row up
-    var row: usize = 1;
-    while (row < vga.VGA_HEIGHT) : (row += 1) {
-        var col: usize = 0;
-        while (col < vga.VGA_WIDTH) : (col += 1) {
-            const entry = vga.getEntry(row * vga.VGA_WIDTH + col);
-            vga.writeEntry((row - 1) * vga.VGA_WIDTH + col, entry);
+    // var row: usize = 1;
+    // while (row < vga.VGA_HEIGHT) : (row += 1) {
+    //     var col: usize = 0;
+    //     while (col < vga.VGA_WIDTH) : (col += 1) {
+    //         const entry = vga.getEntry(row * vga.VGA_WIDTH + col);
+    //         vga.writeEntry((row - 1) * vga.VGA_WIDTH + col, entry);
+    //     }
+    // }
+    var row: u16 = 1;
+    while (row < getTextHeight()) : (row += 1) {
+        var col: u16 = 0;
+        while (col < getTextWidth()) : (col += 1) {
+            var pixelY: u32 = 0;
+            while (pixelY < font.height) : (pixelY += 1) {
+                var pixelX: u32 = 0;
+                while (pixelX < font.width) : (pixelX += 1) {
+                    const pixel = screen.getPixel(col * font.width + pixelX, row * font.height + pixelY);
+                    screen.setPixel32(col * font.width + pixelX, (row - 1) * font.height + pixelY, pixel);
+                }
+            }
         }
     }
 
     // Clear last row
-    var col: usize = 0;
-    const entry = vga.entry(' ', terminal_color);
-    while (col < vga.VGA_WIDTH) : (col += 1) {
-        vga.writeEntry((vga.VGA_HEIGHT - 1) * vga.VGA_WIDTH + col, entry);
+    var col: u16 = 0;
+    while (col < getTextWidth()) : (col += 1) {
+        drawChar(' ', col, @truncate(getTextHeight() - 1));
     }
 }
 

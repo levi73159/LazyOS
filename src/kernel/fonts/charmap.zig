@@ -1,4 +1,3 @@
-/// Translate a unicode code point to a CP 437 code point
 pub inline fn unicodeToCP437(char: u16) u8 {
     return switch (char) {
         0x0000 => 0x00,

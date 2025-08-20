@@ -41,7 +41,7 @@ pub const Exception = enum(u8) {
     reserved2 = 31,
 
     pub inline fn is(number: u8) bool {
-        if (number <= 31) {
+        if (number < 32) {
             return true;
         } else {
             return false;
@@ -60,6 +60,7 @@ pub const Exception = enum(u8) {
             .control_protection,
             .vmm_comm,
             .security_exception,
+            .reserved2,
             => true,
             else => false,
         };

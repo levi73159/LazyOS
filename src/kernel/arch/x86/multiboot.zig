@@ -57,6 +57,8 @@ pub const MultibootInfo = extern struct {
     }
 
     pub fn getFramebuffer(self: MultibootInfo, comptime T: type) []T {
+        if (self.framebuffer_bpp != @typeInfo(T).int.bits) @panic("Framebuffer pixel size mismatch");
+
         const addr: usize = @intCast(self.framebuffer_addr);
         const ptr: [*]u8 = @ptrFromInt(addr);
         const slice = ptr[0 .. self.framebuffer_pitch * self.framebuffer_height];
@@ -87,9 +89,9 @@ pub const MemoryType = enum(u32) {
 };
 
 pub const MemoryMapEntry = extern struct {
-    size: u32 align(1),
+    next: u32 align(1), // how many bytes to skip to get to the next entry
     addr: u64 align(1),
-    len: u64 align(1),
+    size: u64 align(1),
     type: MemoryType align(1),
 };
 

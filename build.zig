@@ -50,11 +50,17 @@ pub fn build(b: *std.Build) void {
     const image = makeImage(b, kernel);
     image.step.dependOn(&kernel.step);
 
-    const qemu_cmd = b.addSystemCommand(&.{ "qemu-system-i386", "-cdrom", image.path, "-m", "512M", "-debugcon", "stdio", "-D", "qemu.log" });
-    qemu_cmd.step.dependOn(image.step);
+    const run_qemu_cmd = b.addSystemCommand(&.{ "qemu-system-i386", "-hda", image.path, "-m", "32", "-debugcon", "stdio" });
+    run_qemu_cmd.step.dependOn(image.step);
+
+    const debug_cmd = b.addSystemCommand(&.{ "scripts/debug.sh", image.path });
+    debug_cmd.step.dependOn(image.step);
 
     const run = b.step("run", "Run the operating system");
-    run.dependOn(&qemu_cmd.step);
+    run.dependOn(&run_qemu_cmd.step);
+
+    const debug = b.step("debug", "Debug the operating system");
+    debug.dependOn(&debug_cmd.step);
 }
 
 pub fn makeImage(b: *std.Build, kernel: *std.Build.Step.Compile) Image {

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="BuildScanner">
+    <option name="projects">
+      <list><![CDATA[{
+  "name": null,
+  "version": null,
+  "path": "/home/levi/Projects/LazyOS",
+  "steps": [
+    {
+      "name": "install",
+      "description": "Copy build artifacts to prefix path",
+      "kind": "install_artifact"
+    },
+    {
+      "name": "uninstall",
+      "description": "Remove build artifacts from prefix path",
+      "kind": "uninstall"
+    },
+    {
+      "name": "make-image",
+      "description": "Build the ISO image",
+      "kind": "run"
+    },
+    {
+      "name": "run",
+      "description": "Run the operating system",
+      "kind": "run"
+    },
+    {
+      "name": "debug",
+      "description": "Debug the operating system",
+      "kind": "run"
+    }
+  ],
+  "modules": [
+    {
+      "root": "src/kernel/boot.zig",
+      "public": false,
+      "imports": []
+    }
+  ],
+  "dependencies": []
+}]]></list>
+    </option>
+  </component>
+  <component name="ZigToolchain" toolchain="f802e464-aa5b-4ee4-a7fb-13361da341f7" />
+</project>

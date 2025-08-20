@@ -62,7 +62,7 @@ export var multiboot: MultibootHeader align(16) linksection(".multiboot") = Mult
     .depth = 32,
 };
 
-const STACK_SIZE = 16 * 1024;
+const STACK_SIZE = 16 * 1024 * 1024;
 var stack_bytes: [STACK_SIZE]u8 align(16) linksection(".bss") = undefined;
 
 // Kernel entry point (_start but this function is called and it calls _main)
