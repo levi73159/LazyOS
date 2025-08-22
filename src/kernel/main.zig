@@ -15,9 +15,6 @@ const log = std.log.scoped(.kernel);
 
 var ticks: u64 = 0;
 
-var x: u32 = 0;
-var y: u32 = 0;
-
 extern const KERNEL_START_ADDR: *u32;
 extern const KERNEL_END_ADDR: *u32;
 
@@ -230,12 +227,22 @@ fn drawLoop(screen: *Screen) void {
     screen.use_double_buffer = true;
     defer screen.use_double_buffer = false;
 
-    var i: u32 = 0;
+    defer kb.flush();
+
+    var x: u32 = 0;
+    var y: u32 = 0;
 
     while (true) {
-        screen.clear(Color.black());
-        screen.drawRect(i, 0, 100, 100, Color.red());
+        screen.clear(Color.white());
+        screen.drawRectWithBorder(x, y, 600, 500, Color.green(), 5, Color.blue());
+        screen.drawRect(x + 5, y + 5, 600 - 10, 30, Color.gray()); // draw window bar
+        screen.drawText(x + 16, y + 5, "Test window", 2, Color.white());
         screen.swapBuffers();
-        i += 1;
+        if (kb.getKeyDown(.w)) y -|= 1;
+        if (kb.getKeyDown(.s)) y += 1;
+        if (kb.getKeyDown(.a)) x -|= 1;
+        if (kb.getKeyDown(.d)) x += 1;
+        if (kb.getKeyDown(.q))
+            break;
     }
 }

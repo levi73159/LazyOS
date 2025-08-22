@@ -245,6 +245,10 @@ var prev: ?Key = null;
 var modifiers: Modifiers = .{};
 var state: State = .{};
 
+// polling
+const Keys = std.EnumArray(Scancode, bool);
+var keys: Keys = Keys.initFill(false);
+
 fn bufferFull() bool {
     return ((end_index + 1) % buf.len) == start_index;
 }
@@ -263,6 +267,7 @@ pub fn handler(_: *InterruptFrame) void {
     const key_code = scancode & 0x7f;
 
     const code: Scancode = @enumFromInt(key_code);
+    keys.set(code, key_presses);
 
     var is_special = false;
     switch (code) {
@@ -353,11 +358,20 @@ pub fn getKey() Key {
     return key;
 }
 
+pub fn flush() void {
+    start_index = 0;
+    end_index = 0;
+}
+
 pub fn waitForKey() void {
     wait_key = true;
     while (wait_key) {}
 }
 
-fn get(self: Key) ?u8 {
-    if (self.pressed) {}
+pub fn getKeyDown(scancode: Scancode) bool {
+    return keys.get(scancode);
+}
+
+pub fn getKeyUp(scancode: Scancode) bool {
+    return !keys.get(scancode);
 }
