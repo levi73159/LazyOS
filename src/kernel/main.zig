@@ -5,6 +5,7 @@ const console = @import("console.zig");
 const hal = @import("hal.zig");
 const kb = @import("keyboard.zig");
 const BumpAllocator = @import("memory/BumpAllocator.zig");
+const mouse = @import("mouse.zig");
 
 const Screen = @import("Screen.zig");
 const Color = @import("Color.zig");
@@ -15,8 +16,7 @@ const log = std.log.scoped(.kernel);
 
 var ticks: u64 = 0;
 
-extern const KERNEL_START_ADDR: *u32;
-extern const KERNEL_END_ADDR: *u32;
+extern const __kernel_end: u8;
 
 fn tick(_: *regs.InterruptFrame) void {
     // ticks +%= 1;
@@ -25,9 +25,9 @@ fn tick(_: *regs.InterruptFrame) void {
 
 pub fn _start(mb: *arch.MultibootInfo) callconv(.c) void {
     const framebuffer = mb.getFramebuffer(u32);
-    var screen = Screen.init(framebuffer, mb.framebuffer_width, mb.framebuffer_height);
+    const screen = Screen.init(framebuffer, mb.framebuffer_width, mb.framebuffer_height);
 
-    console.init(&screen);
+    console.init(screen);
     console.clear();
 
     hal.init();
@@ -36,6 +36,9 @@ pub fn _start(mb: *arch.MultibootInfo) callconv(.c) void {
     arch.irq.register(0, tick);
     arch.irq.enable(0);
     kb.init();
+    mouse.init() catch |err| {
+        log.err("Mouse init failed: {s}", .{@errorName(err)});
+    };
 
     // check bit 6 to see if boot info is valid
     if (mb.flags >> 6 & 1 != 1) {
@@ -56,10 +59,11 @@ pub fn _start(mb: *arch.MultibootInfo) callconv(.c) void {
         });
     }
 
-    var start: bool = false; // 1st free region is ocupied by the bios so we skip itj
+    var start: bool = false;
     const free_region: arch.Multiboot.MemoryMapEntry =
         get: for (entries) |entry| {
             if (!start) {
+                // skip first one because it usally small
                 start = true;
                 continue;
             }
@@ -78,19 +82,22 @@ pub fn _start(mb: *arch.MultibootInfo) callconv(.c) void {
             @panic("No free region");
         };
 
-    const vptr: [*]u8 = @ptrFromInt(@as(usize, @truncate(free_region.addr)));
-    const pptr = vptr + @intFromPtr(KERNEL_START_ADDR);
-    const region = pptr[0..@intCast(free_region.size)];
+    // get the region
+    const kernel_end_addr = @intFromPtr(&__kernel_end);
+    const addr: usize = @intCast(free_region.addr + kernel_end_addr);
+    const ptr: [*]u8 = @ptrFromInt(addr);
+    const region = ptr[0..@intCast(free_region.size)];
+
     std.log.debug("heap size: {x}", .{region.len});
     var bump_allocator = BumpAllocator.init(region);
     const allocator = bump_allocator.allocator();
 
-    var buffer: [1024 * 768]u32 = undefined;
-    @memset(&buffer, 0);
-    screen.double_buffer = &buffer;
+    screen.createDoubleBuffer(allocator) catch |err| {
+        log.err("Failed to create double buffer: {s}", .{@errorName(err)});
+    };
 
     io.sti();
-    main(&screen, allocator);
+    main(screen, allocator);
 
     console.write("You reached the end of the kernel, halting...\n");
     std.log.debug("HALTING", .{});
@@ -234,10 +241,14 @@ fn drawLoop(screen: *Screen) void {
 
     while (true) {
         screen.clear(Color.white());
-        screen.drawRectWithBorder(x, y, 600, 500, Color.green(), 5, Color.blue());
-        screen.drawRect(x + 5, y + 5, 600 - 10, 30, Color.gray()); // draw window bar
-        screen.drawText(x + 16, y + 5, "Test window", 2, Color.white());
+        // screen.drawRectWithBorder(x, y, 600, 500, Color.green(), 5, Color.blue());
+        // screen.drawRect(x + 5, y + 5, 600 - 10, 30, Color.gray()); // draw window bar
+        // screen.drawText(x + 16, y + 5, "Test window", 2, Color.white());
+
+        screen.drawRect(@intCast(mouse.x()), @intCast(mouse.y()), 10, 10, Color.red());
+
         screen.swapBuffers();
+
         if (kb.getKeyDown(.w)) y -|= 1;
         if (kb.getKeyDown(.s)) y += 1;
         if (kb.getKeyDown(.a)) x -|= 1;

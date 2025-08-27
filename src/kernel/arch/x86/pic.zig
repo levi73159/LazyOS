@@ -87,7 +87,7 @@ pub fn unmask(irq: u8) void {
     const port = getPort(&new_irq);
     const m: u8 = getMask(irq);
 
-    io.outb(port, m & ~(@as(u8, 1) << @intCast(irq)));
+    io.outb(port, m & ~(@as(u8, 1) << @intCast(new_irq)));
 }
 
 pub fn setMask(m: u16) void {

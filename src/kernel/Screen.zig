@@ -7,6 +7,8 @@ const Self = @This();
 const default_width = 1024;
 const default_height = 768;
 
+var global: Self = undefined;
+
 buffer: []u32,
 double_buffer: ?[]u32 = null,
 width: u32,
@@ -14,12 +16,17 @@ height: u32,
 
 use_double_buffer: bool = false,
 
-pub fn init(buffer: []u32, width: u32, height: u32) Self {
-    return Self{
+pub fn init(buffer: []u32, width: u32, height: u32) *Self {
+    global = Self{
         .buffer = buffer,
         .width = width,
         .height = height,
     };
+    return &global;
+}
+
+pub fn get() *Self {
+    return &global;
 }
 
 pub fn createDoubleBuffer(self: *Self, allocator: std.mem.Allocator) !void {
@@ -51,6 +58,9 @@ pub fn getPixelMut(self: *Self, x: u32, y: u32) *u32 {
 
 pub fn setPixel(self: *Self, x: u32, y: u32, color: Color) void {
     const index = y * self.width + x;
+    if (index >= self.buffer.len) {
+        return;
+    }
     self.getBuffer()[index] = color.get();
 }
 

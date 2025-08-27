@@ -2,7 +2,6 @@ ENTRY(__kernel_start)
 
 SECTIONS {
     . = 1M;
-    KERNEL_START_ADDR = .;
 
     .text : ALIGN(4K) {
         /* We need to specify KEEP to prevent the linker from garbage-collecting the multiboot section. */
@@ -23,5 +22,5 @@ SECTIONS {
         *(.bss)
     }
 
-    KERNEL_END_ADDR = .;
+    __kernel_end = .;
 }
