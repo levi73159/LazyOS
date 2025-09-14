@@ -65,6 +65,9 @@ pub fn setPixel(self: *Self, x: u32, y: u32, color: Color) void {
 }
 
 pub fn setPixel32(self: *Self, x: u32, y: u32, color: u32) void {
+    if (x >= self.width or y >= self.height) {
+        return;
+    }
     const index = y * self.width + x;
     self.getBuffer()[index] = color;
 }

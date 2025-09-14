@@ -18,12 +18,20 @@ var terminal_foreground: Color = Color.white();
 var terminal_background: Color = Color.black();
 
 var screen: *Screen = undefined;
+var initialized: bool = false;
+
+var echo_to_host: bool = false;
 
 const pixels_per_scanline = 32;
 
 pub fn init(_screen: *Screen) void {
     std.log.debug("Initializing console", .{});
     screen = _screen;
+    initialized = true;
+}
+
+pub fn echoToHost(enabled: bool) void {
+    echo_to_host = enabled;
 }
 
 pub fn clear() void {
@@ -66,7 +74,18 @@ pub fn getTextHeight() u32 {
     return @divFloor(screen.height, font.height);
 }
 
+fn dbgc(c: u8) void {
+    io.out(0xe9, c);
+}
+
 pub fn putchar(c: u8) void {
+    if (!initialized) {
+        dbgc(c);
+        return;
+    }
+    if (echo_to_host) {
+        dbgc(c);
+    }
     defer drawCursor();
     if (c == '\n') {
         drawChar(' ', terminal_column, terminal_row); // remove the cursor
@@ -92,6 +111,10 @@ pub fn putchar(c: u8) void {
 }
 
 pub fn backspace() void {
+    if (!initialized) {
+        dbgc('\x7f');
+        return;
+    }
     if (terminal_column == 0) {
         return;
     }
@@ -99,11 +122,17 @@ pub fn backspace() void {
     terminal_column -= 1;
     drawChar(' ', terminal_column, terminal_row);
     drawCursor();
+
+    complete();
 }
 
 // should be an underline
 pub fn drawCursor() void {
     drawChar('_', terminal_column, terminal_row);
+}
+
+pub fn complete() void {
+    if (initialized) screen.swapBuffers();
 }
 
 pub fn write(data: []const u8) void {
@@ -113,6 +142,11 @@ pub fn write(data: []const u8) void {
 
     while (i < data.len) {
         const c = data[i];
+        if (!initialized) {
+            dbgc(c);
+            i += 1;
+            continue;
+        }
 
         if (c == '\x1b' and i + 1 < data.len and data[i + 1] == '[') {
             // We have an escape sequence starting: \x1b[
@@ -139,6 +173,9 @@ pub fn write(data: []const u8) void {
             // Check for 'm' terminator (SGR sequence)
             if (i < data.len and data[i] == 'm') {
                 for (buf[0..ib]) |code| {
+                    if (echo_to_host) {
+                        dbgPrint("\x1b[{d}m", .{code});
+                    }
                     setAnsiColor(code);
                 }
             }
@@ -149,6 +186,8 @@ pub fn write(data: []const u8) void {
         putchar(c);
         i += 1;
     }
+
+    complete();
 }
 
 pub fn dbg(data: []const u8) void {
@@ -177,7 +216,7 @@ pub fn panic(msg: []const u8, trace: ?*std.builtin.StackTrace, ret_addr: ?usize)
     dbgPrint("!!! KERNEL PANIC !!!\n{s}\n", .{msg});
 
     if (trace) |t| {
-        dbgPrint("trace: {}\n", .{t});
+        dbgPrint("trace: {f}\n", .{t});
         dbgPrint("return address: {?x}\n", .{ret_addr});
     } else {
         dbgPrint("no trace\n", .{});
@@ -186,8 +225,8 @@ pub fn panic(msg: []const u8, trace: ?*std.builtin.StackTrace, ret_addr: ?usize)
 }
 
 const WriteError = error{};
-const ConWriter = std.io.Writer(void, WriteError, writefn);
-const DbgWriter = std.io.Writer(void, WriteError, dbgWriteFn);
+const ConWriter = std.Io.GenericWriter(void, WriteError, writefn);
+const DbgWriter = std.io.GenericWriter(void, WriteError, dbgWriteFn);
 
 fn writefn(_: void, bytes: []const u8) WriteError!usize {
     write(bytes);
@@ -288,7 +327,10 @@ pub fn readline(buf: []u8, echo: bool) error{BufferOverflow}![]const u8 {
 
         if (key.getChar()) |c| {
             if (c == '\n') break;
-            if (echo) putchar(c);
+            if (echo) {
+                putchar(c);
+                complete();
+            }
             buf[i] = c;
             i += 1;
         }
@@ -337,6 +379,8 @@ fn scroll() void {
     while (col < getTextWidth()) : (col += 1) {
         drawChar(' ', col, @truncate(getTextHeight() - 1));
     }
+
+    screen.swapBuffers();
 }
 
 pub fn logFn(

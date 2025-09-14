@@ -84,8 +84,7 @@ fn loadGDT(desc: *const Descriptor) !void {
         \\lgdt (%[desc])
         :
         : [desc] "r" (desc),
-        : "memory"
-    );
+        : .{ .memory = true });
 
     asm volatile (
         \\ljmp $0x08, $1f

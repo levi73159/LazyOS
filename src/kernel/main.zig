@@ -4,8 +4,10 @@ const io = @import("arch.zig").io;
 const console = @import("console.zig");
 const hal = @import("hal.zig");
 const kb = @import("keyboard.zig");
-const BumpAllocator = @import("memory/BumpAllocator.zig");
 const mouse = @import("mouse.zig");
+const pit = @import("pit.zig");
+
+const heap = @import("memory/heap.zig");
 
 const Screen = @import("Screen.zig");
 const Color = @import("Color.zig");
@@ -14,31 +16,40 @@ const regs = arch.registers;
 
 const log = std.log.scoped(.kernel);
 
-var ticks: u64 = 0;
-
-extern const __kernel_end: u8;
-
-fn tick(_: *regs.InterruptFrame) void {
-    // ticks +%= 1;
-    // screen.drawRect(x, y, 100, 100, Color.init(@truncate(ticks % 256 + 100), @truncate(ticks % 256), 50));
-}
+extern const KERNEL_VIRT_START: u8;
+extern const KERNEL_PHYS_START: u8;
+extern const KERNEL_PHYS_END: u8;
 
 pub fn _start(mb: *arch.MultibootInfo) callconv(.c) void {
+    // const kernel_start: usize = @intFromPtr(&__kernel_start);
+    // const kernel_end: usize = @intFromPtr(&__kernel_end);
+    // arch.paging.init(kernel_start, kernel_end);
+    log.debug("Initializing kernel components...\n", .{});
+    hal.init();
+
+    arch.paging.init(0, @intFromPtr(&KERNEL_PHYS_END), 0);
+
+    log.debug("Finished paging init", .{});
+
     const framebuffer = mb.getFramebuffer(u32);
+    const framebuffer_start: usize = @intFromPtr(framebuffer.ptr);
+    const framebuffer_end: usize = @intFromPtr(framebuffer.ptr + framebuffer.len);
+
+    std.log.debug("Framebuffer start: {x}", .{framebuffer_start});
+    std.log.debug("Framebuffer end: {x}", .{framebuffer_end});
+
+    arch.paging.mapSectionIdentiy(framebuffer_start, framebuffer_end);
+
     const screen = Screen.init(framebuffer, mb.framebuffer_width, mb.framebuffer_height);
 
     console.init(screen);
     console.clear();
-
-    hal.init();
+    console.echoToHost(true); // echo all prints to the host
 
     // init hardware
-    arch.irq.register(0, tick);
-    arch.irq.enable(0);
+    // pit timer 100Hz
+    pit.init(100);
     kb.init();
-    mouse.init() catch |err| {
-        log.err("Mouse init failed: {s}", .{@errorName(err)});
-    };
 
     // check bit 6 to see if boot info is valid
     if (mb.flags >> 6 & 1 != 1) {
@@ -81,23 +92,31 @@ pub fn _start(mb: *arch.MultibootInfo) callconv(.c) void {
         } else {
             @panic("No free region");
         };
+    _ = free_region;
 
     // get the region
-    const kernel_end_addr = @intFromPtr(&__kernel_end);
-    const addr: usize = @intCast(free_region.addr + kernel_end_addr);
-    const ptr: [*]u8 = @ptrFromInt(addr);
-    const region = ptr[0..@intCast(free_region.size)];
+    // const addr: usize = @intCast(free_region.addr + end_kernel_phys_addr);
+    // const ptr: [*]u8 = @ptrFromInt(addr);
+    // const region = ptr[0..@intCast(free_region.size)];
+    //
+    // std.log.debug("heap size: {x}", .{region.len});
+    // var bump_allocator = BumpAllocator.init(region);
+    // const allocator = bump_allocator.allocator();
 
-    std.log.debug("heap size: {x}", .{region.len});
-    var bump_allocator = BumpAllocator.init(region);
-    const allocator = bump_allocator.allocator();
+    // screen.createDoubleBuffer(allocator) catch |err| {
+    //     log.err("Failed to create double buffer: {s}", .{@errorName(err)});
+    // };
 
-    screen.createDoubleBuffer(allocator) catch |err| {
-        log.err("Failed to create double buffer: {s}", .{@errorName(err)});
+    const cpu = arch.CPU.init() catch |err| blk: {
+        log.err("Failed to get the CPU: {s}", .{@errorName(err)});
+        break :blk arch.CPU.unknown;
     };
 
+    console.echoToHost(false);
     io.sti();
-    main(screen, allocator);
+    main(cpu, screen) catch |err| {
+        log.err("Failed to run main: {s}", .{@errorName(err)});
+    };
 
     console.write("You reached the end of the kernel, halting...\n");
     std.log.debug("HALTING", .{});
@@ -118,28 +137,16 @@ fn getFreeRegion(map: []arch.Multiboot.MemoryMapEntry) ?arch.Multiboot.MemoryMap
     return null;
 }
 
-fn main(screen: *Screen, _: std.mem.Allocator) void {
-    std.log.debug("main", .{});
+fn main(_: arch.CPU, screen: *Screen) !void {
+    screen.createDoubleBuffer(heap.allocator()) catch |err| {
+        log.err("Failed to create double buffer: {s}", .{@errorName(err)});
+        log.err("Neaded {x} bytes", .{screen.buffer.len * @sizeOf(u32)});
+    };
+    screen.use_double_buffer = true;
 
-    // NEXT ADD ALOCATOR!!!
-    // while (true) {
-    //     screen.clear(Color.white());
-    //
-    //     const key = kb.getKey();
-    //     if (!key.pressed) continue;
-    //     if (key.scancode == .w) {
-    //         y -|= 1;
-    //     }
-    //     if (key.scancode == .s) {
-    //         y += 1;
-    //     }
-    //     if (key.scancode == .a) {
-    //         x -|= 1;
-    //     }
-    //     if (key.scancode == .d) {
-    //         x += 1;
-    //     }
-    // }
+    std.log.debug("main", .{});
+    log.info("Waiting 5 seconds...", .{});
+    log.debug("5 seconds wait", .{});
 
     var buf: [256]u8 = undefined;
     while (true) {
@@ -223,7 +230,7 @@ fn echo(line: []const u8) anyerror!void {
 }
 
 fn getTicks(_: []const u8) anyerror!void {
-    console.print("Ticks: {d}\n", .{ticks});
+    console.print("IDK\n", .{});
 }
 
 fn clear(_: []const u8) anyerror!void {

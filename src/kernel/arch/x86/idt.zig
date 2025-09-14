@@ -39,7 +39,7 @@ fn loadIDT(desc: *const Descriptor) void {
     asm volatile ("lidt (%[idt])"
         :
         : [idt] "{eax}" (desc),
-        : "memory"
+        : .{ .memory = true }
     );
 }
 

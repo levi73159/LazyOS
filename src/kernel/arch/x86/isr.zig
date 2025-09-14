@@ -101,12 +101,13 @@ export fn interruptHandler(frame: *InterruptFrame) callconv(.c) void {
 }
 
 fn handleError(frame: *InterruptFrame) noreturn {
+    log.debug("Unhandled interrupt", .{});
     const exception: Exception = @enumFromInt(frame.interrupt_number);
     console.printB("\x1b[97;41m", .{});
     console.printB("!!! UNHANDLED EXCEPTION !!!\n", .{});
     console.printB("Unhandled exception {d} {s}\n", .{ frame.interrupt_number, @tagName(exception) });
 
-    console.printB("{}\n", .{frame});
+    console.printB("{f}\n", .{frame});
 
     console.printB("!!! KERNEL PANIC !!!\n", .{});
     console.printB("\x1b[0m", .{});

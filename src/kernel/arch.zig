@@ -1,17 +1,19 @@
 const builtin = @import("builtin");
 
 pub const io = @import("arch/io.zig");
-pub usingnamespace switch (builtin.cpu.arch) {
-    .x86 => struct {
-        pub const gdt = @import("arch/x86/gdt.zig");
-        pub const idt = @import("arch/x86/idt.zig");
-        pub const isr = @import("arch/x86/isr.zig");
-        pub const registers = @import("arch/x86/registers.zig");
-        pub const pic = @import("arch/x86/pic.zig");
-        pub const irq = @import("arch/x86/irq.zig");
-        pub const pit = @import("arch/x86/pit.zig");
-        pub const Multiboot = @import("arch/x86/multiboot.zig");
-        pub const MultibootInfo = Multiboot.MultibootInfo;
-    },
+
+const root = switch (builtin.cpu.arch) {
+    .x86 => @import("arch/x86/root.zig"),
     else => @compileError("Unsupported architecture: " ++ @tagName(builtin.cpu.arch)),
 };
+
+pub const gdt = root.gdt;
+pub const idt = root.idt;
+pub const isr = root.isr;
+pub const registers = root.registers;
+pub const pic = root.pic;
+pub const irq = root.irq;
+pub const Multiboot = root.Multiboot;
+pub const MultibootInfo = Multiboot.MultibootInfo;
+pub const CPU = root.CPU;
+pub const paging = root.paging;

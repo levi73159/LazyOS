@@ -62,42 +62,44 @@ export var multiboot: MultibootHeader align(16) linksection(".multiboot") = Mult
     .depth = 32,
 };
 
-const STACK_SIZE = 16 * 1024 * 1024;
-var stack_bytes: [STACK_SIZE]u8 align(16) linksection(".bss") = undefined;
+const STACK_SIZE = 16 * 1024; // 16 KiB stack
+var stack_bytes: [STACK_SIZE]u8 align(16) linksection(".bss.stack") = undefined;
 
 // Kernel entry point (_start but this function is called and it calls _main)
-export fn __kernel_start() callconv(.naked) noreturn {
+export fn __kernel_entry() callconv(.naked) noreturn {
+    // compute stack top (physical address). Do not subtract the KERNEL_ADDR_OFFSET here:
+    const phys_stack: [*]u8 = @ptrCast(&stack_bytes);
+    const stack_top = phys_stack + @sizeOf(@TypeOf(stack_bytes));
+    const virt_stack_top = stack_top;
+    // set a simple low stack and call boot_init
     asm volatile (
-    // make sure interrupts are disabled
-    // set up the stack
         \\ cli
         \\ movl %[stack_top], %%esp
         \\ movl %%esp, %%ebp
-        // get ebx (multiboot info from grub) and pass it to _start with the
-        // also get eax (multiboot magic c_uint) and pass it to _start
-        // start must be _start(multiboot_info, multiboot_magic)
         :
-        : [stack_top] "r" (@as([*]align(16) u8, @ptrCast(&stack_bytes)) + @sizeOf(@TypeOf(stack_bytes))),
+        : [stack_top] "r" (virt_stack_top),
     );
-
-    // get info addr from ebx
-    const mb_info_addr = asm ("mov %%ebx, %[res]"
-        : [res] "=r" (-> usize),
-    );
-
+    // call the initializer that does PD/PT fill and paging enable
     asm volatile (
-        \\ push %[info]
-        \\ call %[_start:P]
-        :
-        : [info] "r" (mb_info_addr),
-          [_start] "X" (&main._start),
+        \\ call boot_init
     );
     while (true) {
-        asm volatile ("cli");
         asm volatile ("hlt");
     }
 }
 
+export fn boot_init() noreturn {
+    const mbi_addr = asm (
+        \\ movl %%ebx, %[addr]
+        : [addr] "=r" (-> usize),
+    );
+
+    main._start(@ptrFromInt(mbi_addr));
+
+    while (true) {
+        asm volatile ("hlt");
+    }
+}
 //
 // zig stuff
 //

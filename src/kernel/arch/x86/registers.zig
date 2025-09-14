@@ -23,10 +23,8 @@ pub const InterruptFrame = packed struct {
 
     pub fn format(
         self: InterruptFrame,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
+        writer: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
         try writer.print("   eax={x}   ebx={x}   ecx={x}   edx={x}   esi={x}   edi={x}\n", .{
             self.eax,
             self.ebx,

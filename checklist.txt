@@ -1,0 +1,48 @@
+[#] GDT (Global Descriptor Table) set up (32-bit protected mode / 64-bit long mode).
+[#] IDT (Interrupt Descriptor Table) set up.
+[#] PIC (Programmable Interrupt Controller) set up.
+[#] Exception handlers set up.
+[#] Basic IRQ handler set up.
+[ ] Cpu identification.
+
+IRQS:
+[#] Keyboard
+[|] Mouse (still got some work to do here)
+[-] Timer (PIT / HPET / APIC timer driver)
+   [#] PIT (Programmable Interval Timer) set up. 
+   [ ] HPET (High Precision Event Timer) set up.
+   [ ] APIC (Advanced Programmable Interrupt Controller) set up.
+
+Memory management:
+[ ] Physical memory manager.
+[ ] Virtual memory manager.
+
+
+Phase 5: Process + Scheduling
+[] Process control block structure.
+[] Process control block structure.
+[ ] Context switching (save/restore registers, switch page tables).
+[ ] Preemptive scheduling with timer IRQ.
+[ ] Basic syscall interface (software interrupt/syscall instruction).
+
+Phase 6: Filesystem + Disk I/O
+
+[ ] ATA/IDE or AHCI driver.
+[ ] Simple filesystem (FAT12/16/32 is easiest to start with).
+[ ] VFS (Virtual File System layer).
+[ ] Read/write files from disk.
+
+Phase 7: User Mode
+
+[ ] Switch to ring 3 (user mode).
+[ ] Separate page tables for processes.
+[ ] Syscall ABI (file I/O, memory management, IPC, etc.).
+[ ] Load and run ELF binaries.
+
+Phase 8: Advanced Features (long-term goals)
+
+[ ] SMP (multiprocessor support).
+[ ] Dynamic drivers (PCI bus scanning, loading drivers at runtime).
+[ ] Networking stack (Ethernet + TCP/IP).
+[ ] GUI / graphics driver.
+[ ] Userspace libraries.

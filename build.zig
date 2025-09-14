@@ -27,13 +27,20 @@ pub fn build(b: *std.Build) void {
         .cpu_features_sub = disabled_features,
     });
 
-    const optimize = b.standardOptimizeOption(.{});
+    const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .ReleaseFast });
 
-    const kernel = b.addExecutable(.{
-        .name = "kernel",
+    const kernel_mod = b.createModule(.{
         .root_source_file = b.path("src/kernel/boot.zig"),
         .target = kernel_target,
         .optimize = optimize,
+        .code_model = .kernel,
+        .red_zone = false,
+        .sanitize_thread = false,
+        .pic = true,
+    });
+    const kernel = b.addExecutable(.{
+        .name = "kernel",
+        .root_module = kernel_mod,
     });
     kernel.entry = .disabled;
     kernel.root_module.code_model = .kernel;
