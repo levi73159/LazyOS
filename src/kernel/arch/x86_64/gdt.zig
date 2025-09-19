@@ -1,9 +1,9 @@
 const builtin = @import("builtin");
 const log = @import("std").log.scoped(.gdt);
 
-pub const Descriptor = @import("../globals.zig").Descriptor;
-pub const Access = @import("../globals.zig").GDTAccess;
-pub const Flags = @import("../globals.zig").GDTFlags;
+pub const Descriptor = @import("../descriptors.zig").Descriptor;
+pub const Access = @import("../descriptors.zig").GDTAccess;
+pub const Flags = @import("../descriptors.zig").GDTFlags;
 
 pub const Entry = packed struct(u128) {
     limit_low: u16,
@@ -85,11 +85,35 @@ fn loadGDT() !void {
         \\lgdt (%[desc])
         :
         : [desc] "r" (&descriptor),
-        : "memory"
-    );
+        : .{ .memory = true });
 
     asm volatile (
-        \\ljmp $0x08, $1f
+        \\pushq $0x08
+        \\pushq $1f
+        \\lretq
         \\1:
     );
+
+    // reload data segment
+    asm volatile (
+        \\mov $0x10, %%ax
+        \\mov %%ax, %%ds
+        \\mov %%ax, %%es
+        \\mov %%ax, %%fs
+        \\mov %%ax, %%gs
+        \\mov %%ax, %%ss
+    );
+
+    if (builtin.mode == .Debug) {
+        // quick sanity check on ds and es
+        var ds: u16 = undefined;
+        var es: u16 = undefined;
+        asm volatile ("mov %%ds, %[ds]\nmov %%es, %[es]"
+            : [ds] "=r" (ds),
+              [es] "=r" (es),
+        );
+        if (ds != 0x10 or es != 0x10) {
+            return error.LoadFailed;
+        }
+    }
 }

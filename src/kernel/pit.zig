@@ -36,7 +36,7 @@ pub fn init(freq: u32) void {
     arch.irq.enable(0);
 }
 
-fn handler(_: *Frame) void {
+fn handler(_: Frame) void {
     tick_count += 1;
 }
 

@@ -239,9 +239,3 @@ pub const ListLink = struct {
     }
 };
 pub const List = DoublyLinkedList(ListLink, .prev, .next);
-
-test {
-    _ = @import("tests/list/singly_linked.zig");
-    _ = @import("tests/list/doubly_linked.zig");
-    _ = @import("tests/list/list.zig");
-}

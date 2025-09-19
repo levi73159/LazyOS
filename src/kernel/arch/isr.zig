@@ -1,15 +1,18 @@
 const std = @import("std");
-const idt = @import("idt.zig");
-const gdt = @import("gdt.zig");
+const builtin = @import("builtin");
+const desc = @import("descriptors.zig");
+const idt = desc.idt;
+const gdt = desc.gdt;
 const log = @import("std").log.scoped(.isr);
-const console = @import("../../console.zig");
+const console = @import("../console.zig");
 const host = @import("std").log.scoped(.host);
-const io = @import("../io.zig");
+const io = @import("io.zig");
 
 const InterruptFn = *const fn () callconv(.naked) noreturn;
-pub const Handler = *const fn (frame: *InterruptFrame) void;
+pub const Handler = *const fn (frame: GlobalFrame) void;
 
-const InterruptFrame = @import("registers.zig").InterruptFrame;
+const InterruptFrame = @import("registers.zig").ArchFrame;
+const GlobalFrame = @import("registers.zig").InterruptFrame;
 
 pub const Exception = enum(u8) {
     division_by_zero = 0,
@@ -92,7 +95,7 @@ pub fn init() void {
 
 export fn interruptHandler(frame: *InterruptFrame) callconv(.c) void {
     if (handlers[frame.interrupt_number]) |handler| {
-        handler(frame);
+        handler(GlobalFrame.fromArchFrame(frame));
     } else if (frame.interrupt_number >= 32) {
         host.warn("Unhandled interrupt {d}", .{frame.interrupt_number});
     } else {
@@ -151,32 +154,92 @@ pub fn getVector(comptime number: u8) ?InterruptFn {
 }
 
 export fn interruptCommon() callconv(.naked) noreturn {
-    asm volatile (
-    // push general-purpose registers
-        \\ pusha
-        \\ mov $0, %%eax
-        \\ mov %%ds, %%ax
-        \\ push %%eax
-        \\
-        \\ mov $0x10, %%ax
-        \\ mov %%ax, %%ds
-        \\ mov %%ax, %%es
-        \\ mov %%ax, %%fs
-        \\ mov %%ax, %%gs
-        \\
-        \\ push %%esp
-        \\ call interruptHandler
-        \\ add $4, %%esp
-        \\ 
-        \\ pop %%eax
-        \\ mov %%ax, %%ds
-        \\ mov %%ax, %%es
-        \\ mov %%ax, %%fs
-        \\ mov %%ax, %%gs
-        \\
-        \\ popa
-        \\ add $8, %%esp
-        \\ 
-        \\ iret
-    );
+    switch (builtin.cpu.arch) {
+        .x86 => asm volatile (
+        // push general-purpose registers
+            \\ pusha
+            \\ mov $0, %%eax
+            \\ mov %%ds, %%ax
+            \\ push %%eax
+            \\
+            \\ mov $0x10, %%ax
+            \\ mov %%ax, %%ds
+            \\ mov %%ax, %%es
+            \\ mov %%ax, %%fs
+            \\ mov %%ax, %%gs
+            \\
+            \\ push %%esp
+            \\ call interruptHandler
+            \\ add $4, %%esp
+            \\ 
+            \\ pop %%eax
+            \\ mov %%ax, %%ds
+            \\ mov %%ax, %%es
+            \\ mov %%ax, %%fs
+            \\ mov %%ax, %%gs
+            \\
+            \\ popa
+            \\ add $8, %%esp
+            \\ 
+            \\ iret
+        ),
+        .x86_64 => asm volatile (
+        // push general-purpose registers
+            \\ push %%rax
+            \\ push %%rbx
+            \\ push %%rcx
+            \\ push %%rdx
+            \\ push %%r8
+            \\ push %%r9
+            \\ push %%r10
+            \\ push %%r11
+            \\ push %%r12
+            \\ push %%r13
+            \\ push %%r14
+            \\ push %%r15
+            \\ push %%rdi
+            \\ push %%rsi
+            \\ push %%rbp
+            \\ 
+            \\ mov $0, %%rax
+            \\ mov %%ds, %%ax
+            \\ push %%rax
+            \\ 
+            \\ mov $0x10, %%ax
+            \\ mov %%ax, %%ds
+            \\ mov %%ax, %%es
+            \\ mov %%ax, %%fs
+            \\ mov %%ax, %%gs
+            \\ 
+            \\ push %%rsp
+            \\ call interruptHandler
+            \\ add $8, %%rsp 
+            \\ 
+            \\ pop %%rax
+            \\ mov %%ax, %%ds
+            \\ mov %%ax, %%es
+            \\ mov %%ax, %%fs
+            \\ mov %%ax, %%gs
+            \\ 
+            \\ pop %%rbp
+            \\ pop %%rsi
+            \\ pop %%rdi
+            \\ pop %%r15
+            \\ pop %%r14
+            \\ pop %%r13
+            \\ pop %%r12
+            \\ pop %%r11
+            \\ pop %%r10
+            \\ pop %%r9
+            \\ pop %%r8
+            \\ pop %%rdx
+            \\ pop %%rcx
+            \\ pop %%rbx
+            \\ pop %%rax
+            \\ add $40, %%rsp
+            \\ 
+            \\ iretq
+        ),
+        else => unreachable,
+    }
 }

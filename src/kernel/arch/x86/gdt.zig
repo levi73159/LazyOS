@@ -1,9 +1,9 @@
 const builtin = @import("builtin");
 const log = @import("std").log.scoped(.gdt);
 
-pub const Descriptor = @import("../globals.zig").Descriptor;
-pub const Access = @import("../globals.zig").GDTAccess;
-pub const Flags = @import("../globals.zig").GDTFlags;
+pub const Descriptor = @import("../descriptors.zig").Descriptor;
+pub const Access = @import("../descriptors.zig").GDTAccess;
+pub const Flags = @import("../descriptors.zig").GDTFlags;
 
 pub const Entry = packed struct {
     limit_low: u16,

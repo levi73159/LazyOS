@@ -258,7 +258,7 @@ pub fn init() void {
     arch.irq.enable(1);
 }
 
-pub fn handler(_: *InterruptFrame) void {
+pub fn handler(_: InterruptFrame) void {
     io.cli();
 
     const scancode = io.inb(PORT_DATA);

@@ -1,3 +1,17 @@
+const builtin = @import("builtin");
+
+pub const idt = switch (builtin.cpu.arch) {
+    .x86 => @import("x86/idt.zig"),
+    .x86_64 => @import("x86_64/idt.zig"),
+    else => @compileError("Unsupported architecture"),
+};
+
+pub const gdt = switch (builtin.cpu.arch) {
+    .x86 => @import("x86/gdt.zig"),
+    .x86_64 => @import("x86_64/gdt.zig"),
+    else => @compileError("Unsupported architecture"),
+};
+
 pub const Descriptor = packed struct {
     limit: u16,
     base: usize,

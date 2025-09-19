@@ -1,4 +1,4 @@
-const io = @import("../io.zig");
+const io = @import("io.zig");
 const log = @import("std").log.scoped(.pic);
 
 pub const REMAP_OFFSET = 32;

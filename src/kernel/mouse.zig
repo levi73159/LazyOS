@@ -38,7 +38,7 @@ pub fn y() u32 {
     return mouse_y;
 }
 
-pub fn handler(_: *InterruptFrame) void {
+pub fn handler(_: InterruptFrame) void {
     const byte = read();
     mouse_bytes[cycle] = byte;
     cycle = (cycle + 1) % 3;

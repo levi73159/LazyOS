@@ -41,15 +41,6 @@ pub const unknown = Self{
     .vendor_str = .{0} ** 12,
     .vendor = .unknown,
     .brand_str = .{0} ** 48,
-    .flags = .{
-        .sse = false,
-        .sse2 = false,
-        .sse3 = false,
-        .sse4_1 = false,
-        .sse4_2 = false,
-        .avx = false,
-        .avx2 = false,
-    },
 };
 
 vendor_str: [12:0]u8,

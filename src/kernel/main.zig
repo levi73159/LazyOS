@@ -6,6 +6,7 @@ const hal = @import("hal.zig");
 const kb = @import("keyboard.zig");
 const mouse = @import("mouse.zig");
 const pit = @import("pit.zig");
+const pmen = @import("memory/pmem.zig");
 
 const heap = @import("memory/heap.zig");
 
@@ -27,18 +28,9 @@ pub fn _start(mb: *arch.MultibootInfo) callconv(.c) void {
     log.debug("Initializing kernel components...\n", .{});
     hal.init();
 
-    arch.paging.init(0, @intFromPtr(&KERNEL_PHYS_END), 0);
-
     log.debug("Finished paging init", .{});
 
     const framebuffer = mb.getFramebuffer(u32);
-    const framebuffer_start: usize = @intFromPtr(framebuffer.ptr);
-    const framebuffer_end: usize = @intFromPtr(framebuffer.ptr + framebuffer.len);
-
-    std.log.debug("Framebuffer start: {x}", .{framebuffer_start});
-    std.log.debug("Framebuffer end: {x}", .{framebuffer_end});
-
-    arch.paging.mapSectionIdentiy(framebuffer_start, framebuffer_end);
 
     const screen = Screen.init(framebuffer, mb.framebuffer_width, mb.framebuffer_height);
 
@@ -70,47 +62,12 @@ pub fn _start(mb: *arch.MultibootInfo) callconv(.c) void {
         });
     }
 
-    var start: bool = false;
-    const free_region: arch.Multiboot.MemoryMapEntry =
-        get: for (entries) |entry| {
-            if (!start) {
-                // skip first one because it usally small
-                start = true;
-                continue;
-            }
-
-            if (entry.type == .available and entry.addr != 0) {
-                log.debug("Free region: {x} | next: {x} | size: {x} | type: {s}", .{
-                    entry.addr,
-                    entry.next,
-                    entry.size,
-                    @tagName(entry.type),
-                });
-
-                break :get entry;
-            }
-        } else {
-            @panic("No free region");
-        };
-    _ = free_region;
-
-    // get the region
-    // const addr: usize = @intCast(free_region.addr + end_kernel_phys_addr);
-    // const ptr: [*]u8 = @ptrFromInt(addr);
-    // const region = ptr[0..@intCast(free_region.size)];
-    //
-    // std.log.debug("heap size: {x}", .{region.len});
-    // var bump_allocator = BumpAllocator.init(region);
-    // const allocator = bump_allocator.allocator();
-
-    // screen.createDoubleBuffer(allocator) catch |err| {
-    //     log.err("Failed to create double buffer: {s}", .{@errorName(err)});
-    // };
-
     const cpu = arch.CPU.init() catch |err| blk: {
         log.err("Failed to get the CPU: {s}", .{@errorName(err)});
         break :blk arch.CPU.unknown;
     };
+
+    pmen.init(mb, heap.allocator());
 
     console.echoToHost(false);
     io.sti();

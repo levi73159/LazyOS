@@ -18,7 +18,7 @@ pub const Gate = packed struct(u128) {
 
 pub const Descriptor = packed struct {
     limit: u16,
-    base: usize,
+    base: u64,
 };
 
 pub const GateType = enum(u4) {
@@ -37,14 +37,16 @@ pub const Flags = packed struct(u8) {
 // default idt
 pub var idt: [256]Gate = .{Gate{}} ** 256;
 
-pub var descriptor = Descriptor{ .limit = @sizeOf(Gate) * idt.len - 1, .base = undefined };
+pub var descriptor = Descriptor{
+    .limit = @sizeOf(Gate) * idt.len - 1,
+    .base = undefined,
+};
 
 fn loadIDT(desc: *const Descriptor) void {
     asm volatile ("lidt (%[idt])"
         :
         : [idt] "r" (desc),
-        : "memory"
-    );
+        : .{ .memory = true });
 }
 
 pub fn init() void {

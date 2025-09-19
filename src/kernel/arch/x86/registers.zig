@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const InterruptFrame = packed struct {
+pub const InterruptFrame32 = packed struct {
     ds: u32,
     edi: u32,
     esi: u32,
@@ -22,7 +22,7 @@ pub const InterruptFrame = packed struct {
     ss: u32,
 
     pub fn format(
-        self: InterruptFrame,
+        self: InterruptFrame32,
         writer: *std.Io.Writer,
     ) std.Io.Writer.Error!void {
         try writer.print("   eax={x}   ebx={x}   ecx={x}   edx={x}   esi={x}   edi={x}\n", .{

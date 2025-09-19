@@ -1,13 +1,13 @@
 const std = @import("std");
 const isr = @import("isr.zig");
 const pic = @import("pic.zig");
-const io = @import("../io.zig");
+const io = @import("io.zig");
 
 const log = @import("std").log.scoped(.irq);
 
 const InterruptFrame = @import("registers.zig").InterruptFrame;
 
-const Handler = *const fn (frame: *InterruptFrame) void;
+const Handler = *const fn (frame: InterruptFrame) void;
 
 var handlers: [16]?Handler = [_]?Handler{null} ** 16;
 
@@ -21,7 +21,7 @@ pub fn init() void {
     }
 }
 
-fn irqHandler(frame: *InterruptFrame) void {
+fn irqHandler(frame: InterruptFrame) void {
     const irq: u8 = @intCast(frame.interrupt_number - pic.REMAP_OFFSET);
     // just to be safe we make sure the irq is in range
     if (irq >= handlers.len) {
