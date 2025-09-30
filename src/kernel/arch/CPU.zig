@@ -49,13 +49,13 @@ brand_str: [48:0]u8,
 // TODO: add info about TLB/caches and so on and features
 
 fn checkCompatibility() bool {
-    const ID_BIT: u32 = 1 << 21;
+    const ID_BIT: u64 = 1 << 21;
 
     // get current EFLAGS
     const eflags = asm volatile (
-        \\ pushfd
+        \\ pushf
         \\ pop %[out]
-        : [out] "=r" (-> u32),
+        : [out] "=r" (-> usize),
     );
 
     // Invert the ID bit
@@ -64,21 +64,21 @@ fn checkCompatibility() bool {
     // write modified EFLAGS
     asm volatile (
         \\ push %[in]
-        \\ popfd
+        \\ popf
         :
         : [in] "r" (modified),
     );
 
     const updated = asm volatile (
-        \\ pushfd
+        \\ pushf
         \\ pop %[out]
-        : [out] "=r" (-> u32),
+        : [out] "=r" (-> usize),
     );
 
     // Restore the original flags (to avoid messing up system state)
     asm volatile (
         \\ push %[in]
-        \\ popfd
+        \\ popf
         :
         : [in] "r" (eflags),
     );
@@ -126,8 +126,8 @@ pub fn init() Error!Self {
 
 fn fillRawInfo(info: *CpuidInfoHolder) void {
     for (0..info.basic.len) |i| {
-        info.basic[i] = cpuid(i, 0);
-        info.extended[i] = cpuid(0x8000_0000 + i, 0);
+        info.basic[i] = cpuid(@intCast(i), 0);
+        info.extended[i] = cpuid(@intCast(0x8000_0000 + i), 0);
     }
 }
 

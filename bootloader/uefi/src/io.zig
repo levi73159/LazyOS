@@ -39,6 +39,18 @@ pub fn out(port: u16, data: anytype) void {
     }
 }
 
+/// Returns the number of bytes that were written
+pub fn outStr(port: u16, bytes: []const u8) usize {
+    const unwritten_bytes = asm volatile (
+        \\ rep outsb
+        : [ret] "={rcx}" (-> usize),
+        : [port] "{dx}" (port),
+          [src] "{rsi}" (bytes.ptr),
+          [len] "{rcx}" (bytes.len),
+        : .{ .rcx = true, .rsi = true });
+    return bytes.len - unwritten_bytes;
+}
+
 pub fn outb(port: u16, data: u8) void {
     out(port, data);
 }
@@ -68,28 +80,4 @@ pub fn hlt() noreturn {
         asm volatile ("cli");
         asm volatile ("hlt");
     }
-}
-
-pub inline fn cli() void {
-    asm volatile ("cli");
-}
-
-pub inline fn sti() void {
-    asm volatile ("sti");
-}
-
-pub fn setCursor(x: u16, y: u16, width: u16) void {
-    const pos = @as(u16, y) * width + x;
-
-    // Cursor low byte
-    outb(0x3D4, 0x0F);
-    outb(0x3D5, @truncate(pos & 0xFF));
-
-    // Cursor high byte
-    outb(0x3D4, 0x0E);
-    outb(0x3D5, @truncate((pos >> 8) & 0xFF));
-}
-
-pub fn wait() void {
-    outb(unused_port, 0);
 }

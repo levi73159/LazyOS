@@ -134,18 +134,18 @@ pub fn getVector(comptime number: u8) ?InterruptFn {
                 asm volatile ("cli");
                 if (Exception.hasErrorNumber(number)) {
                     asm volatile (
-                        \\pushl %[num]
+                        \\push %[num]
                         \\jmp interruptCommon
                         :
-                        : [num] "r" (@as(u32, number)),
+                        : [num] "r" (@as(usize, number)),
                     );
                 } else {
                     asm volatile (
-                        \\pushl $0
-                        \\pushl %[num]
+                        \\push $0
+                        \\push %[num]
                         \\jmp interruptCommon
                         :
-                        : [num] "r" (@as(u32, number)),
+                        : [num] "r" (@as(usize, number)),
                     );
                 }
             }
@@ -156,7 +156,6 @@ pub fn getVector(comptime number: u8) ?InterruptFn {
 export fn interruptCommon() callconv(.naked) noreturn {
     switch (builtin.cpu.arch) {
         .x86 => asm volatile (
-        // push general-purpose registers
             \\ pusha
             \\ mov $0, %%eax
             \\ mov %%ds, %%ax
@@ -213,7 +212,7 @@ export fn interruptCommon() callconv(.naked) noreturn {
             \\ 
             \\ push %%rsp
             \\ call interruptHandler
-            \\ add $8, %%rsp 
+            \\ add $8, %%rsp
             \\ 
             \\ pop %%rax
             \\ mov %%ax, %%ds
@@ -236,7 +235,7 @@ export fn interruptCommon() callconv(.naked) noreturn {
             \\ pop %%rcx
             \\ pop %%rbx
             \\ pop %%rax
-            \\ add $40, %%rsp
+            \\ add $10, %%rsp
             \\ 
             \\ iretq
         ),

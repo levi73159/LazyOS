@@ -1,6 +1,7 @@
 const std = @import("std");
 const main = @import("main.zig");
 const console = @import("console.zig");
+const builtin = @import("builtin");
 
 const arch = @import("arch.zig");
 
@@ -72,13 +73,23 @@ export fn __kernel_entry() callconv(.naked) noreturn {
     const stack_top = phys_stack + @sizeOf(@TypeOf(stack_bytes));
     const virt_stack_top = stack_top;
     // set a simple low stack and call boot_init
-    asm volatile (
-        \\ cli
-        \\ movl %[stack_top], %%esp
-        \\ movl %%esp, %%ebp
-        :
-        : [stack_top] "r" (virt_stack_top),
-    );
+    if (builtin.cpu.arch == .x86) {
+        asm volatile (
+            \\ cli
+            \\ movl %[stack_top], %%esp
+            \\ movl %%esp, %%ebp
+            :
+            : [stack_top] "r" (virt_stack_top),
+        );
+    } else {
+        asm volatile (
+            \\ cli
+            \\ mov %[stack_top], %%rsp
+            \\ mov %%rsp, %%rbp
+            :
+            : [stack_top] "r" (virt_stack_top),
+        );
+    }
     // call the initializer that does PD/PT fill and paging enable
     asm volatile (
         \\ call boot_init
@@ -90,7 +101,7 @@ export fn __kernel_entry() callconv(.naked) noreturn {
 
 export fn boot_init() noreturn {
     const mbi_addr = asm (
-        \\ movl %%ebx, %[addr]
+        \\ movq %%rbx, %[addr]
         : [addr] "=r" (-> usize),
     );
 

@@ -4,12 +4,15 @@ pub fn build(b: *std.Build) void {
     const arch = b.option(std.Target.Cpu.Arch, "arch", "Target architecture") orelse .x86_64;
     if (arch != .x86_64) @panic("Only x86_64 is supported");
 
-    const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .ReleaseFast });
+    std.log.debug("arch: {}", .{arch});
+
+    const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .Debug });
 
     const target = b.resolveTargetQuery(.{
         .cpu_arch = arch,
         .os_tag = .uefi,
         .abi = .msvc,
+        .ofmt = .coff,
     });
 
     const bootloader_module = b.createModule(.{
@@ -19,7 +22,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const exe = b.addExecutable(.{
-        .name = "boot",
+        .name = "bootx64",
         .root_module = bootloader_module,
     });
     b.installArtifact(exe);
