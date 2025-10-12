@@ -1,37 +1,101 @@
 const std = @import("std");
 const uefi = std.os.uefi;
-const utf16 = std.unicode.utf8ToUtf16LeStringLiteral;
 const serial = @import("serial.zig");
+const video = @import("video.zig");
+const mem = @import("mem.zig");
+const fs = @import("fs.zig");
+const loader = @import("loader.zig");
+
+const UefiError = uefi.Error;
+const File = uefi.protocol.File;
+
+const W = std.unicode.utf8ToUtf16LeStringLiteral;
 
 pub const std_options: std.Options = .{
     .logFn = logFn,
 };
 
+const config_path = "/boot/config.cfg";
 var com1_serial: serial.SerialWriter = undefined;
 
-pub fn halt() void {}
+const Config = struct {
+    name: []const u8 = "Unknown OS",
+    kernel: []const u8 = "/boot/kernel",
+    preload_msg: ?[]const u8 = null,
+    video: video.Resolution = .{ .width = 800, .height = 600 },
+};
 
 pub fn main() uefi.Error!void {
     const sys_table = uefi.system_table;
     const conout = sys_table.con_out.?;
     try conout.clearScreen();
-    write("Hello, World!\r\n");
 
     com1_serial = serial.SerialWriter.init(.com1) catch {
-        write("Failed to initialize serial port!!");
-        while (true) {}
+        _ = try conout.outputString(W("Failed to initialize serial port!!"));
+        return UefiError.Aborted;
+    };
+
+    fs.init() catch |err| {
+        std.log.err("{}", .{err});
+        return UefiError.Aborted;
     };
 
     std.log.info("Serial port initialized", .{});
-    std.log.debug("Hello, World!", .{});
-    std.log.err("An error occurred", .{});
-    std.log.warn("A warning occurred", .{});
 
     const boot_services = sys_table.boot_services.?;
     const conin = sys_table.con_in.?;
 
-    const map = try getMemoryMap();
-    _ = map; // autofix
+    const config_data = fs.loadFileBuffer(config_path) catch |err| {
+        std.log.err("Failed to load config!!!", .{});
+        std.log.err("{}", .{err});
+        return UefiError.Aborted;
+    };
+    defer config_data.free();
+
+    const config = parseConfig(config_data.contents()) catch |err| {
+        std.log.err("Failed to parse config!!!", .{});
+        std.log.err("{}", .{err});
+        return UefiError.Aborted;
+    };
+
+    if (config.preload_msg) |msg| {
+        try printMsg(msg);
+    }
+
+    std.log.debug("Getting perfered resolution", .{});
+    const video_info: video.Info = video.getVideoInfo() catch |err| blk: {
+        std.log.warn("Failed to get resolution: {}; defaulting to config", .{err});
+        break :blk video.Info{
+            .resolution = config.video,
+            .device_handle = null,
+        };
+    };
+    std.log.info("Perfered resolution: {d}x{d}", .{ video_info.resolution.width, video_info.resolution.height });
+
+    video.setVideoMode(video_info) catch |err| {
+        std.log.err("Failed to set video mode: {}", .{err});
+        return UefiError.Aborted;
+    };
+
+    video.fillRect(0, 0, 150, 200, .{ .red = 255, .green = 0, .blue = 0, .reserved = 0 }) catch |err| {
+        std.log.err("Failed to fill rect: {}", .{err});
+        return UefiError.Aborted;
+    };
+
+    const kernel_data = fs.loadFileBuffer(config.kernel) catch |err| {
+        std.log.err("Failed to load kernel into memory!!!", .{});
+        std.log.err("{}", .{err});
+        return UefiError.Aborted;
+    };
+    defer kernel_data.free();
+
+    const kernel = loader.loadExe(kernel_data.contents()) catch |err| {
+        std.log.err("Failed to load kernel into memory!!!", .{});
+        std.log.err("{}", .{err});
+        @panic("Failed to load kernel into memory");
+    };
+    _ = kernel;
+    std.log.info("Kernel loaded", .{});
 
     const events = [_]uefi.Event{conin.wait_for_key};
     while (true) {
@@ -47,23 +111,62 @@ pub fn main() uefi.Error!void {
         }
     }
 
-    return error.Timeout;
+    return UefiError.Timeout;
 }
 
-fn getMemoryMap() !uefi.tables.MemoryMapSlice {
-    const log = std.log.scoped(.mmap);
-    const boot_services = uefi.system_table.boot_services.?;
-    const info = try boot_services.getMemoryMapInfo();
-    const raw_buffer = try boot_services.allocatePool(.loader_data, info.len * info.descriptor_size);
-    const buffer: []align(@alignOf(uefi.tables.MemoryDescriptor)) u8 = @alignCast(raw_buffer);
+fn parseConfig(data: []const u8) !Config {
+    std.log.info("Parsing config:\n{s}", .{data});
+    var lines = std.mem.tokenizeAny(u8, data, "\r\n");
+    var has_name: bool = false;
+    var config = Config{};
 
-    const map = try boot_services.getMemoryMap(buffer);
+    while (lines.next()) |line| {
+        const index_eq = std.mem.indexOfScalar(u8, line, '=') orelse continue; // simply ignore it
+        const name = line[0..index_eq];
+        const value = line[index_eq + 1 .. line.len];
 
-    log.debug("Memory map size: {d}", .{info.len});
-    log.debug("Descriptor size: {d}", .{info.descriptor_size});
-    log.debug("Total size: {d}", .{info.len * info.descriptor_size});
+        inline for (@typeInfo(Config).@"struct".fields) |field| {
+            if (std.mem.eql(u8, field.name, name)) {
+                if (std.mem.eql(u8, field.name, "name")) {
+                    has_name = true;
+                    config.name = value;
+                } else if (std.mem.eql(u8, field.name, "video")) {
+                    const idx = std.mem.indexOfScalar(u8, value, 'x') orelse {
+                        std.log.err("Invalid resolution: {s}", .{value});
+                        return error.InvalidResolution;
+                    };
 
-    return map;
+                    const width = value[0..idx];
+                    const height = value[idx + 1 .. value.len];
+
+                    const width_int = std.fmt.parseUnsigned(u16, width, 10) catch {
+                        std.log.err("Invalid width: {s}", .{width});
+                        return error.InvalidResolution;
+                    };
+
+                    const height_int = std.fmt.parseUnsigned(u16, height, 10) catch {
+                        std.log.err("Invalid height: {s}", .{height});
+                        return error.InvalidResolution;
+                    };
+
+                    config.video = .{ .width = width_int, .height = height_int };
+                } else {
+                    if (field.type == []const u8 or field.type == ?[]const u8) {
+                        @field(config, field.name) = value;
+                    } else {
+                        std.log.err("Unsupported type: {}", .{field.type});
+                        return error.UnsupportedType;
+                    }
+                }
+            }
+        }
+    }
+
+    if (!has_name) {
+        std.log.warn("No name found in config", .{});
+    }
+
+    return config;
 }
 
 pub fn logFn(comptime level: std.log.Level, comptime scope: @Type(.enum_literal), comptime format: []const u8, args: anytype) void {
@@ -90,6 +193,30 @@ pub fn logFn(comptime level: std.log.Level, comptime scope: @Type(.enum_literal)
     writer.writeAll("\x1b[0m\n") catch unreachable;
 }
 
-fn write(comptime str: []const u8) void {
-    _ = uefi.system_table.con_out.?.outputString(utf16(str)) catch unreachable;
+pub fn printMsg(msg: []const u8) !void {
+    const conout = uefi.system_table.con_out.?;
+    const boot_services = uefi.system_table.boot_services.?;
+
+    // WARN: do not remove the times 2. If it works don't touch it!
+    // TODO: Figure out why *2 works and allows it to free but removing it doesn't
+    const buf = try boot_services.allocatePool(.loader_data, msg.len * 2 + 1);
+    defer boot_services.freePool(buf.ptr) catch {
+        std.log.warn("Failed to free pool", .{});
+    };
+
+    const utf16_ptr: [*]u16 = @ptrCast(buf.ptr);
+    const utf16_buf: []u16 = utf16_ptr[0 .. msg.len + 1]; // +1 for null terminator
+    std.log.debug("Roading preload message", .{});
+    const len = std.unicode.utf8ToUtf16Le(utf16_buf, msg) catch {
+        std.log.warn("Failed to convert preload message to utf16", .{});
+        return; // ignore
+    };
+    std.log.debug("Preload message length: {d}", .{len});
+
+    utf16_buf[len] = 0;
+    const utf16_msg: [:0]const u16 = utf16_buf[0..len :0]; // convert it to a null terminated slice
+    std.log.debug("Preload message length: {d}", .{len});
+
+    _ = try conout.outputString(utf16_msg.ptr);
+    _ = try conout.outputString(W("\n"));
 }

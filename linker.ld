@@ -4,6 +4,9 @@ ENTRY(__kernel_entry)
 KERNEL_PHYS_START = 1M;
 KERNEL_VIRT_START = 1M; /* identical kernel virtual address */
 
+fb = 0xFFFFFFFFdeadbeef;
+bootinfo = 0xFFFFFFFFcafebabe;
+
 SECTIONS {
 	. = 1M;
 
