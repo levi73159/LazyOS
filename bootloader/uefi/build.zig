@@ -15,9 +15,17 @@ pub fn build(b: *std.Build) void {
         .ofmt = .coff,
     });
 
-    const bootloader_module = b.createModule(.{
+    const testing_target = b.standardTargetOptions(.{ .default_target = .{ .cpu_arch = arch } });
+
+    const bootloader_module = b.addModule("bootloader", .{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
+        .optimize = optimize,
+    });
+
+    const test_module = b.addModule("bootloader.test", .{
+        .root_source_file = b.path("src/main.zig"),
+        .target = testing_target,
         .optimize = optimize,
     });
 
@@ -25,5 +33,12 @@ pub fn build(b: *std.Build) void {
         .name = "bootx64",
         .root_module = bootloader_module,
     });
+    const exe_test = b.addTest(.{
+        .name = "bootloader.test",
+        .root_module = test_module,
+        .test_runner = .{ .path = b.path("../../src/test_runner.zig"), .mode = .simple },
+    });
+
     b.installArtifact(exe);
+    b.installArtifact(exe_test);
 }

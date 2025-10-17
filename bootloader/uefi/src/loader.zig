@@ -2,12 +2,14 @@ const std = @import("std");
 const uefi = std.os.uefi;
 const elf = std.elf;
 const mem = @import("mem.zig");
+const Address = @import("AddressSpace.zig").Address;
+const constants = @import("constants.zig");
 
 const log = std.log.scoped(.loader);
 
 const SegmentMapping = struct {
-    vaddr: u64 = 0,
-    paddr: u64 = 0,
+    vaddr: Address = .{ .phys = 0 },
+    paddr: Address = .{ .virt = .zero },
     len: u64 = 0,
 };
 
@@ -21,11 +23,6 @@ const KernelInfo = struct {
     entrypoint: u64,
     segment_mapping: SegmentMapping = .{},
     bindings: AdressBindings = .{},
-};
-
-const Address = union(enum) {
-    virt: u64,
-    phys: u64,
 };
 
 const LoadError = error{
@@ -117,13 +114,13 @@ fn loadElf(data: []const u8) LoadError!KernelInfo {
             @memset(load_buffer[file_size..mem_size], 0);
         }
 
-        kernel_info.segment_mapping.paddr = phdr.p_paddr;
-        kernel_info.segment_mapping.vaddr = phdr.p_vaddr;
+        kernel_info.segment_mapping.paddr = .{ .phys = phdr.p_paddr };
+        kernel_info.segment_mapping.vaddr = .{ .virt = .from(phdr.p_vaddr) };
         kernel_info.segment_mapping.len = mem_size;
 
         log.debug("Finish loading program segment: paddr: {x}, vaddr: {x}, len: {x}", .{
-            kernel_info.segment_mapping.paddr,
-            kernel_info.segment_mapping.vaddr,
+            kernel_info.segment_mapping.paddr.raw(),
+            kernel_info.segment_mapping.vaddr.raw(),
             kernel_info.segment_mapping.len,
         });
         break;
@@ -157,13 +154,13 @@ fn loadElf(data: []const u8) LoadError!KernelInfo {
                 const symbol_name = strtab[symbol.st_name..];
                 if (std.mem.eql(u8, symbol_name[0..2], "fb")) {
                     log.debug("Found framebuffer symbol with value: 0x{x}", .{symbol.st_value});
-                    kernel_info.bindings.framebuffer = .{ .virt = symbol.st_value };
+                    kernel_info.bindings.framebuffer = .{ .virt = .from(symbol.st_value) };
                 } else if (std.mem.eql(u8, symbol_name[0..8], "bootinfo")) {
                     log.debug("Found bootinfo with value: 0x{x}", .{symbol.st_value});
-                    kernel_info.bindings.bootinfo = .{ .virt = symbol.st_value };
+                    kernel_info.bindings.bootinfo = .{ .virt = .from(symbol.st_value) };
                 } else if (std.mem.eql(u8, symbol_name[0..3], "env")) {
                     log.debug("Found env with value: 0x{x}", .{symbol.st_value});
-                    kernel_info.bindings.env = .{ .virt = symbol.st_value };
+                    kernel_info.bindings.env = .{ .virt = .from(symbol.st_value) };
                 }
             }
         };

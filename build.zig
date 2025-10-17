@@ -67,6 +67,19 @@ pub fn build(b: *std.Build) void {
 
     std.log.debug("install path: {s}, prefix: {s}", .{ b.install_path, b.install_prefix });
 
+    // ADD TESTS FOR BOOTLOADER AND KERNEL
+
+    const test_step = b.step("test", "Run the tests (for bootloader and kernel)");
+    if (uefi_dep) |dep| {
+        const bootloader_test = dep.artifact("bootloader.test"); // bootloader tests
+        test_step.dependOn(&bootloader_test.step);
+
+        const run_test = b.addRunArtifact(bootloader_test);
+        test_step.dependOn(&run_test.step);
+
+        b.installArtifact(bootloader_test);
+    }
+
     kernel_exe.setLinkerScript(b.path("linker.ld"));
     b.installArtifact(kernel_exe);
 

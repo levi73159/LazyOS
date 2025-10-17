@@ -2,6 +2,7 @@ const std = @import("std");
 const uefi = std.os.uefi;
 const W = std.unicode.utf8ToUtf16LeStringLiteral;
 const serial = @import("serial.zig");
+const BootInfo = @import("BootInfo.zig");
 
 const GraphicsOutput = uefi.protocol.GraphicsOutput;
 
@@ -50,7 +51,7 @@ pub fn getVideoInfo() uefi.Error!Info {
     return uefi.Error.NotFound;
 }
 
-pub fn setVideoMode(info: Info) uefi.Error!void {
+pub fn setVideoMode(info: Info, bootinfo: *BootInfo) uefi.Error!void {
     const log = std.log.scoped(.video_mode);
 
     const sys_table = uefi.system_table;
@@ -94,7 +95,6 @@ pub fn setVideoMode(info: Info) uefi.Error!void {
 
         const total = dif_width + dif_height;
 
-        log.debug("Diff: {d} ({d}x{d})", .{ total, mode.horizontal_resolution, mode.vertical_resolution });
         switch (mode.pixel_format) {
             .red_green_blue_reserved_8_bit_per_color,
             .blue_green_red_reserved_8_bit_per_color,
@@ -142,6 +142,16 @@ pub fn setVideoMode(info: Info) uefi.Error!void {
     try gop.setMode(best.?.id);
 
     graphics_output = gop;
+
+    bootinfo.framebuffer = gop.mode.frame_buffer_base;
+    bootinfo.fb_width = gop.mode.info.horizontal_resolution;
+    bootinfo.fb_height = gop.mode.info.vertical_resolution;
+    bootinfo.fb_scanline_bytes = gop.mode.info.pixels_per_scan_line * 4;
+    bootinfo.fb_pixel_format = switch (gop.mode.info.pixel_format) {
+        .red_green_blue_reserved_8_bit_per_color => BootInfo.PixelFormat.rgba,
+        .blue_green_red_reserved_8_bit_per_color => BootInfo.PixelFormat.bgra,
+        else => unreachable, // NOTE: should never happen since we checked the pixel format above
+    };
 }
 
 pub fn fillRect(x: u32, y: u32, width: u32, height: u32, color: GraphicsOutput.BltPixel) !void {

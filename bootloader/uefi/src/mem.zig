@@ -1,7 +1,9 @@
 const std = @import("std");
+const BootInfo = @import("BootInfo.zig");
 const uefi = std.os.uefi;
 
-pub fn getMemoryMap() !uefi.tables.MemoryMapSlice {
+pub fn getMemoryMap(bootinfo: *BootInfo) !uefi.tables.MemoryMapSlice {
+    _ = bootinfo; // autofix
     const log = std.log.scoped(.mmap);
     const boot_services = uefi.system_table.boot_services.?;
     const info = try boot_services.getMemoryMapInfo();

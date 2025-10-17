@@ -1,16 +1,14 @@
-const unused_port = 0x80;
-
 pub fn in(comptime Type: type, port: u16) Type {
     return switch (Type) {
-        u8 => asm volatile ("inb %[port], %[result]"
+        u8 => asm volatile ("in %[port], %[result]"
             : [result] "={al}" (-> Type),
             : [port] "{dx}" (port),
         ),
-        u16 => asm volatile ("inw %[port], %[result]"
+        u16 => asm volatile ("in %[port], %[result]"
             : [result] "={ax}" (-> Type),
             : [port] "{dx}" (port),
         ),
-        u32 => asm volatile ("inl %[port], %[result]"
+        u32 => asm volatile ("in %[port], %[result]"
             : [result] "={eax}" (-> Type),
             : [port] "{dx}" (port),
         ),
@@ -20,17 +18,17 @@ pub fn in(comptime Type: type, port: u16) Type {
 
 pub fn out(port: u16, data: anytype) void {
     switch (@TypeOf(data)) {
-        u8 => asm volatile ("outb %[data], %[port]"
+        u8 => asm volatile ("out %[data], %[port]"
             :
             : [port] "{dx}" (port),
               [data] "{al}" (data),
         ),
-        u16 => asm volatile ("outw %[data], %[port]"
+        u16 => asm volatile ("out %[data], %[port]"
             :
             : [port] "{dx}" (port),
               [data] "{ax}" (data),
         ),
-        u32 => asm volatile ("outl %[data], %[port]"
+        u32 => asm volatile ("out %[data], %[port]"
             :
             : [port] "{dx}" (port),
               [data] "{eax}" (data),
@@ -80,4 +78,12 @@ pub fn hlt() noreturn {
         asm volatile ("cli");
         asm volatile ("hlt");
     }
+}
+
+pub inline fn cli() void {
+    asm volatile ("cli");
+}
+
+pub inline fn sti() void {
+    asm volatile ("sti");
 }

@@ -5,14 +5,22 @@ const video = @import("video.zig");
 const mem = @import("mem.zig");
 const fs = @import("fs.zig");
 const loader = @import("loader.zig");
+const BootInfo = @import("BootInfo.zig");
+const constants = @import("constants.zig");
+const AddressSpace = @import("AddressSpace.zig");
 
 const UefiError = uefi.Error;
 const File = uefi.protocol.File;
 
 const W = std.unicode.utf8ToUtf16LeStringLiteral;
 
+test {
+    std.testing.refAllDeclsRecursive(@This());
+}
+
 pub const std_options: std.Options = .{
     .logFn = logFn,
+    .log_level = .debug,
 };
 
 const config_path = "/boot/config.cfg";
@@ -32,12 +40,12 @@ pub fn main() uefi.Error!void {
 
     com1_serial = serial.SerialWriter.init(.com1) catch {
         _ = try conout.outputString(W("Failed to initialize serial port!!"));
-        return UefiError.Aborted;
+        return abortNoPrint();
     };
 
     fs.init() catch |err| {
         std.log.err("{}", .{err});
-        return UefiError.Aborted;
+        return abort();
     };
 
     std.log.info("Serial port initialized", .{});
@@ -48,19 +56,56 @@ pub fn main() uefi.Error!void {
     const config_data = fs.loadFileBuffer(config_path) catch |err| {
         std.log.err("Failed to load config!!!", .{});
         std.log.err("{}", .{err});
-        return UefiError.Aborted;
+        return abort();
     };
     defer config_data.free();
 
     const config = parseConfig(config_data.contents()) catch |err| {
         std.log.err("Failed to parse config!!!", .{});
         std.log.err("{}", .{err});
-        return UefiError.Aborted;
+        return abort();
     };
 
     if (config.preload_msg) |msg| {
         try printMsg(msg);
     }
+
+    const boot_info: *align(constants.ARCH_PAGE_SIZE) BootInfo = alloc_info: {
+        const ptr = boot_services.allocatePages(.any, .loader_data, 1) catch |err| {
+            std.log.err("Failed to allocate boot info: {}", .{err});
+            return abort();
+        };
+
+        break :alloc_info @ptrCast(ptr);
+    };
+    boot_info.* = .{}; // init the default values
+
+    const addr_space = AddressSpace.init() catch |err| {
+        std.log.err("Failed to create address space: {}", .{err});
+        return abort();
+    };
+
+    var err_count: u8 = 0;
+    const max_errs = 5;
+    for (0..10) |i| {
+        const paddr = 0xC012345000 + i * constants.ARCH_PAGE_SIZE;
+        const vaddr = 0xC054321000 + i * constants.ARCH_PAGE_SIZE;
+        addr_space.mmap(.from(vaddr), paddr, .{ .present = true, .read_write = .read_write }) catch |err| {
+            std.log.warn("Failed to map vaddr: 0x{x} to paddr: 0x{x}: {}", .{ vaddr, paddr, err });
+            err_count += 1;
+            if (err_count > max_errs) {
+                std.log.err("Too many errors, aborting...", .{});
+                return abort();
+            }
+            continue;
+        };
+    }
+    addr_space.print();
+
+    // const memmap = mem.getMemoryMap(boot_info) catch |err| {
+    //     std.log.err("Failed to get memory map: {}", .{err});
+    //     return abort();
+    // };
 
     std.log.debug("Getting perfered resolution", .{});
     const video_info: video.Info = video.getVideoInfo() catch |err| blk: {
@@ -72,20 +117,20 @@ pub fn main() uefi.Error!void {
     };
     std.log.info("Perfered resolution: {d}x{d}", .{ video_info.resolution.width, video_info.resolution.height });
 
-    video.setVideoMode(video_info) catch |err| {
+    video.setVideoMode(video_info, boot_info) catch |err| {
         std.log.err("Failed to set video mode: {}", .{err});
-        return UefiError.Aborted;
+        return abort();
     };
 
     video.fillRect(0, 0, 150, 200, .{ .red = 255, .green = 0, .blue = 0, .reserved = 0 }) catch |err| {
         std.log.err("Failed to fill rect: {}", .{err});
-        return UefiError.Aborted;
+        return abort();
     };
 
     const kernel_data = fs.loadFileBuffer(config.kernel) catch |err| {
         std.log.err("Failed to load kernel into memory!!!", .{});
         std.log.err("{}", .{err});
-        return UefiError.Aborted;
+        return abort();
     };
     defer kernel_data.free();
 
@@ -96,6 +141,8 @@ pub fn main() uefi.Error!void {
     };
     _ = kernel;
     std.log.info("Kernel loaded", .{});
+
+    std.log.debug("Bootinfo:\n{any}", .{boot_info.*});
 
     const events = [_]uefi.Event{conin.wait_for_key};
     while (true) {
@@ -215,8 +262,17 @@ pub fn printMsg(msg: []const u8) !void {
 
     utf16_buf[len] = 0;
     const utf16_msg: [:0]const u16 = utf16_buf[0..len :0]; // convert it to a null terminated slice
-    std.log.debug("Preload message length: {d}", .{len});
 
     _ = try conout.outputString(utf16_msg.ptr);
     _ = try conout.outputString(W("\n"));
+}
+
+inline fn abortNoPrint() UefiError {
+    try uefi.system_table.boot_services.?.stall(3 * std.time.us_per_s);
+    return UefiError.Aborted;
+}
+
+fn abort() UefiError {
+    std.log.err("Aborting...", .{});
+    return abortNoPrint();
 }
