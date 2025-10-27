@@ -2,26 +2,25 @@ const std = @import("std");
 const uefi = std.os.uefi;
 const elf = std.elf;
 const mem = @import("mem.zig");
-const Address = @import("AddressSpace.zig").Address;
-const constants = @import("constants.zig");
+const AddressSpace = @import("AddressSpace.zig");
 
 const log = std.log.scoped(.loader);
 
-const SegmentMapping = struct {
-    vaddr: Address = .{ .phys = 0 },
-    paddr: Address = .{ .virt = .zero },
+pub const SegmentMapping = struct {
+    vaddr: AddressSpace.VirtAddr = .zero,
+    paddr: AddressSpace.PhysAddr = 0,
     len: u64 = 0,
 };
 
-const AdressBindings = struct {
-    framebuffer: ?Address = null,
-    bootinfo: ?Address = null,
-    env: ?Address = null,
+pub const AdressBindings = struct {
+    framebuffer: ?AddressSpace.Address = null,
+    bootinfo: ?AddressSpace.Address = null,
+    env: ?AddressSpace.Address = null,
 };
 
-const KernelInfo = struct {
+pub const KernelInfo = struct {
     entrypoint: u64,
-    segment_mapping: SegmentMapping = .{},
+    segment_mappings: [8]SegmentMapping = undefined,
     bindings: AdressBindings = .{},
 };
 
@@ -35,10 +34,6 @@ const LoadError = error{
 
     Unexpected,
 };
-
-inline fn mb(size_in_bytes: comptime_int) comptime_int {
-    return size_in_bytes * 1024 * 1024;
-}
 
 pub fn loadExe(data: []const u8) LoadError!KernelInfo {
     const kernel_sig = data[0..4];
@@ -74,23 +69,30 @@ fn loadElf(data: []const u8) LoadError!KernelInfo {
         return error.InvalidArch;
     }
 
-    var kernel_info = KernelInfo{ .entrypoint = ehdr.e_entry, .segment_mapping = undefined };
+    var kernel_info = KernelInfo{ .entrypoint = ehdr.e_entry, .segment_mappings = undefined };
 
     const phdrs: []align(1) const elf.Elf64_Phdr = std.mem.bytesAsSlice(elf.Elf64_Phdr, data[ehdr.e_phoff..][0 .. ehdr.e_phnum * ehdr.e_phentsize]);
-    for (phdrs) |phdr| {
-        if (phdr.p_type == elf.PT_LOAD) {
+    var ph_idx: usize = 0;
+    var mapping_idx: usize = 0;
+    while (ph_idx < ehdr.e_phnum) : ({
+        ph_idx += 1;
+        mapping_idx += 1;
+    }) {
+        const phdr = phdrs[ph_idx];
+
+        if (phdr.p_type != elf.PT_LOAD) {
             continue;
         }
 
         const file_size = phdr.p_filesz;
         const mem_size = phdr.p_memsz;
 
-        if (mem_size > mb(64)) {
+        if (mem_size > mem.mb(64)) {
             log.err("Kernel to big, consider splitting it into modules, mem_size > 64MB", .{});
             return error.KernelToLarge;
         }
 
-        const pages_to_alloc = @divExact(std.mem.alignForward(u64, mem_size, 4096), 4096);
+        const pages_to_alloc = @divExact(std.mem.alignForward(u64, mem_size, mem.ARCH_PAGE_SIZE), mem.ARCH_PAGE_SIZE);
         const load_buffer_pages = boot_services.allocatePages(.any, .loader_data, pages_to_alloc) catch |err| switch (err) {
             error.OutOfResources => {
                 log.err("Allocation failed, failed to load kernel buffer: reason out of memory", .{});
@@ -114,16 +116,11 @@ fn loadElf(data: []const u8) LoadError!KernelInfo {
             @memset(load_buffer[file_size..mem_size], 0);
         }
 
-        kernel_info.segment_mapping.paddr = .{ .phys = phdr.p_paddr };
-        kernel_info.segment_mapping.vaddr = .{ .virt = .from(phdr.p_vaddr) };
-        kernel_info.segment_mapping.len = mem_size;
+        kernel_info.segment_mappings[mapping_idx].paddr = phdr.p_paddr;
+        kernel_info.segment_mappings[mapping_idx].vaddr = .from(phdr.p_vaddr);
+        kernel_info.segment_mappings[mapping_idx].len = mem_size;
 
-        log.debug("Finish loading program segment: paddr: {x}, vaddr: {x}, len: {x}", .{
-            kernel_info.segment_mapping.paddr.raw(),
-            kernel_info.segment_mapping.vaddr.raw(),
-            kernel_info.segment_mapping.len,
-        });
-        break;
+        log.debug("loaded program to 0x{X}", .{@intFromPtr(load_buffer.ptr)});
     }
 
     if (ehdr.e_shstrndx < ehdr.e_shnum) {

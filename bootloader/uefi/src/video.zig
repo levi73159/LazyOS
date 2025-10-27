@@ -165,3 +165,11 @@ pub fn fillRect(x: u32, y: u32, width: u32, height: u32, color: GraphicsOutput.B
     var color_copy = color;
     try gop.blt(@ptrCast(&color_copy), .blt_video_fill, 0, 0, x, y, width, height, 0);
 }
+
+pub fn getFrameBufferAddress() u64 {
+    if (graphics_output == null) {
+        std.log.warn("Video mode not set (no graphics output)! please call setVideoMode", .{});
+        return 0;
+    }
+    return graphics_output.?.mode.frame_buffer_base;
+}

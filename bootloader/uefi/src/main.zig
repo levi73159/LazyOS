@@ -6,8 +6,8 @@ const mem = @import("mem.zig");
 const fs = @import("fs.zig");
 const loader = @import("loader.zig");
 const BootInfo = @import("BootInfo.zig");
-const constants = @import("constants.zig");
 const AddressSpace = @import("AddressSpace.zig");
+const cpu = @import("cpu.zig");
 
 const UefiError = uefi.Error;
 const File = uefi.protocol.File;
@@ -70,7 +70,7 @@ pub fn main() uefi.Error!void {
         try printMsg(msg);
     }
 
-    const boot_info: *align(constants.ARCH_PAGE_SIZE) BootInfo = alloc_info: {
+    const boot_info: *align(mem.ARCH_PAGE_SIZE) BootInfo = alloc_info: {
         const ptr = boot_services.allocatePages(.any, .loader_data, 1) catch |err| {
             std.log.err("Failed to allocate boot info: {}", .{err});
             return abort();
@@ -79,28 +79,6 @@ pub fn main() uefi.Error!void {
         break :alloc_info @ptrCast(ptr);
     };
     boot_info.* = .{}; // init the default values
-
-    const addr_space = AddressSpace.init() catch |err| {
-        std.log.err("Failed to create address space: {}", .{err});
-        return abort();
-    };
-
-    var err_count: u8 = 0;
-    const max_errs = 5;
-    for (0..10) |i| {
-        const paddr = 0xC012345000 + i * constants.ARCH_PAGE_SIZE;
-        const vaddr = 0xC054321000 + i * constants.ARCH_PAGE_SIZE;
-        addr_space.mmap(.from(vaddr), paddr, .{ .present = true, .read_write = .read_write }) catch |err| {
-            std.log.warn("Failed to map vaddr: 0x{x} to paddr: 0x{x}: {}", .{ vaddr, paddr, err });
-            err_count += 1;
-            if (err_count > max_errs) {
-                std.log.err("Too many errors, aborting...", .{});
-                return abort();
-            }
-            continue;
-        };
-    }
-    addr_space.print();
 
     // const memmap = mem.getMemoryMap(boot_info) catch |err| {
     //     std.log.err("Failed to get memory map: {}", .{err});
@@ -127,6 +105,11 @@ pub fn main() uefi.Error!void {
         return abort();
     };
 
+    const addr_space = AddressSpace.init() catch |err| {
+        std.log.err("Failed to create address space: {}", .{err});
+        return abort();
+    };
+
     const kernel_data = fs.loadFileBuffer(config.kernel) catch |err| {
         std.log.err("Failed to load kernel into memory!!!", .{});
         std.log.err("{}", .{err});
@@ -137,10 +120,15 @@ pub fn main() uefi.Error!void {
     const kernel = loader.loadExe(kernel_data.contents()) catch |err| {
         std.log.err("Failed to load kernel into memory!!!", .{});
         std.log.err("{}", .{err});
-        @panic("Failed to load kernel into memory");
+        return abort();
     };
-    _ = kernel;
     std.log.info("Kernel loaded", .{});
+
+    mapKernelSpace(&addr_space, &kernel, boot_info, config_data.mem.ptr) catch |err| {
+        std.log.err("Failed to map kernel space: {}", .{err});
+        return abort();
+    };
+    addr_space.print();
 
     std.log.debug("Bootinfo:\n{any}", .{boot_info.*});
 
@@ -159,6 +147,53 @@ pub fn main() uefi.Error!void {
     }
 
     return UefiError.Timeout;
+}
+
+fn mapKernelSpace(addr_space: *const AddressSpace, kernel_info: *const loader.KernelInfo, boot_info: *const BootInfo, config: [*]const u8) !void {
+    const log = std.log.scoped(.kernel_mapper);
+    // Map:
+    // - core stack
+    var i: u64 = @bitCast(@as(i64, -mem.ARCH_PAGE_SIZE));
+    log.info("Mapping core stacks to 0x{X}", .{i});
+    while (i < cpu.MAX_CORES) : (i -= mem.ARCH_PAGE_SIZE) {
+        const core_stack = try mem.allocatePages(1);
+        try addr_space.mmap(.from(@intFromPtr(core_stack.ptr)), i, .default);
+    }
+    // - kernel
+    for (kernel_info.segment_mappings) |mapping| {
+        log.info("Mapping kernel segment 0x{X} -> 0x{X}", .{ mapping.vaddr.raw(), mapping.paddr });
+        try addr_space.mmap(mapping.vaddr, mapping.paddr, .default);
+    }
+    // - bootinfo
+    if (kernel_info.bindings.bootinfo) |bootinfo| {
+        log.info("Mapping bootinfo to 0x{X}", .{bootinfo.raw()});
+        try addr_space.mmap(bootinfo.virt, @intFromPtr(boot_info), .default);
+    }
+    // - env
+    if (kernel_info.bindings.env) |env| {
+        log.info("Mapping env to 0x{X}", .{env.raw()});
+        try addr_space.mmap(env.virt, @intFromPtr(config), .default);
+    }
+    // - framebuffer
+    // TODO: make sure size is page aligned
+    if (kernel_info.bindings.framebuffer) |framebuffer| {
+        log.info("Mapping framebuffer to 0x{x}", .{framebuffer.raw()});
+        const fb_addr = video.getFrameBufferAddress();
+        const fb_size = boot_info.fb_scanline_bytes * boot_info.fb_height;
+        var fb_paddr: u64 = fb_addr;
+        var fb_vaddr: u64 = framebuffer.raw();
+        while (fb_paddr < fb_addr + fb_size) : ({
+            fb_paddr += mem.ARCH_PAGE_SIZE;
+            fb_vaddr += mem.ARCH_PAGE_SIZE;
+        }) {
+            try addr_space.mmap(.from(fb_vaddr), fb_paddr, .default);
+        }
+    }
+    // - Identity Mapping
+    i = 0;
+    while (i < mem.mb(64)) : (i += mem.ARCH_PAGE_SIZE) {
+        try addr_space.mmap(.from(i), i, .default);
+    }
 }
 
 fn parseConfig(data: []const u8) !Config {

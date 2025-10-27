@@ -1,10 +1,22 @@
 const std = @import("std");
 const BootInfo = @import("BootInfo.zig");
 const uefi = std.os.uefi;
+const builtin = @import("builtin");
+
+pub const ARCH_PAGE_SIZE = 4096;
+
+const log = std.log.scoped(.memory);
+
+pub inline fn kb(size_in_bytes: comptime_int) comptime_int {
+    return size_in_bytes * 1024;
+}
+
+pub inline fn mb(size_in_bytes: comptime_int) comptime_int {
+    return kb(size_in_bytes) * 1024;
+}
 
 pub fn getMemoryMap(bootinfo: *BootInfo) !uefi.tables.MemoryMapSlice {
     _ = bootinfo; // autofix
-    const log = std.log.scoped(.mmap);
     const boot_services = uefi.system_table.boot_services.?;
     const info = try boot_services.getMemoryMapInfo();
     const raw_buffer = try boot_services.allocatePool(.loader_data, info.len * info.descriptor_size);
@@ -37,4 +49,37 @@ pub fn bytesToPages(buf: []u8) []align(4096) uefi.Page {
     std.debug.assert(buf.len % 4096 == 0);
     const ptr: [*]align(4096) uefi.Page = @ptrCast(@alignCast(buf.ptr));
     return ptr[0..@divExact(buf.len, 4096)];
+}
+
+const AllocateError = uefi.tables.BootServices.AllocatePagesError;
+
+fn allocatePagesTest(num_pages: u32) AllocateError![]align(ARCH_PAGE_SIZE) u8 {
+    if (!builtin.is_test) @compileError("allocatePagesTest can only be used in tests");
+
+    const pages_slice_raw = std.testing.allocator.alignedAlloc([ARCH_PAGE_SIZE]u8, .fromByteUnits(ARCH_PAGE_SIZE), num_pages) catch @panic("OOM");
+    const pages_ptr: [*]align(ARCH_PAGE_SIZE) u8 = @ptrCast(pages_slice_raw);
+    const pages = pages_ptr[0 .. num_pages * ARCH_PAGE_SIZE];
+    @memset(pages, 0);
+    return pages;
+}
+
+pub fn allocatePages(num_pages: u32) AllocateError![]align(ARCH_PAGE_SIZE) u8 {
+    log.debug("Allocating {d} pages", .{num_pages});
+    if (builtin.is_test) return allocatePagesTest(num_pages); // TEST
+
+    const pages_ptr: [*]align(ARCH_PAGE_SIZE) u8 =
+        @ptrCast(try uefi.system_table.boot_services.?.allocatePages(.any, .loader_data, num_pages));
+    const pages = pages_ptr[0 .. num_pages * ARCH_PAGE_SIZE];
+    @memset(pages, 0);
+    return pages;
+}
+
+fn freePagesTest(memory: []align(ARCH_PAGE_SIZE) u8) void {
+    if (!builtin.is_test) @compileError("freePagesTest can only be used in tests");
+    std.testing.allocator.free(bytesToPages(memory));
+}
+
+pub fn freePages(memory: []align(ARCH_PAGE_SIZE) u8) void {
+    if (builtin.is_test) return freePagesTest(memory);
+    uefi.system_table.boot_services.?.freePages(bytesToPages(memory)) catch @panic("Unexpected: failed to free pages");
 }

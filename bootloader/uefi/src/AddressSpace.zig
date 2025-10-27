@@ -1,7 +1,7 @@
 const std = @import("std");
 const mem = std.mem;
+const mm = @import("mem.zig");
 const uefi = std.os.uefi;
-const constants = @import("constants.zig");
 
 const builtin = @import("builtin");
 
@@ -27,6 +27,8 @@ pub const MmapFlags = packed struct(u64) {
     global: bool = false,
     _pad: u54 = 0,
     execution_disable: bool = false,
+
+    pub const default = MmapFlags{ .present = true, .read_write = .read_write, .privilage = .supervisor };
 };
 
 pub const Pml4VirtualAddress = packed struct(u64) {
@@ -91,7 +93,7 @@ pub const PageMapping = extern struct {
         }
     };
 
-    const ENTIRES = @divExact(constants.ARCH_PAGE_SIZE, @sizeOf(Entry));
+    const ENTIRES = @divExact(mm.ARCH_PAGE_SIZE, @sizeOf(Entry));
     mappings: [ENTIRES]Entry,
 
     pub fn print(self: *const PageMapping, level: u8) void {
@@ -123,35 +125,14 @@ mapping: *PageMapping,
 levels: u8 = 4,
 
 pub fn init() Error!Self {
-    const root_ptr = try allocatePages(1);
+    const root_ptr = try mm.allocatePages(1);
     return .{
         .mapping = @ptrCast(root_ptr),
     };
 }
 
-fn allocatePagesTest(num_pages: u32) Error![]align(constants.ARCH_PAGE_SIZE) u8 {
-    if (!builtin.is_test) @compileError("allocatePagesTest can only be used in tests");
-
-    const pages_slice_raw = std.testing.allocator.alignedAlloc([constants.ARCH_PAGE_SIZE]u8, .fromByteUnits(constants.ARCH_PAGE_SIZE), num_pages) catch @panic("OOM");
-    const pages_ptr: [*]align(constants.ARCH_PAGE_SIZE) u8 = @ptrCast(pages_slice_raw);
-    const pages = pages_ptr[0 .. num_pages * constants.ARCH_PAGE_SIZE];
-    @memset(pages, 0);
-    return pages;
-}
-
-fn allocatePages(num_pages: u32) Error![]align(constants.ARCH_PAGE_SIZE) u8 {
-    log.debug("Allocating {d} pages", .{num_pages});
-    if (builtin.is_test) return allocatePagesTest(num_pages); // TEST
-
-    const pages_ptr: [*]align(constants.ARCH_PAGE_SIZE) u8 =
-        @ptrCast(try uefi.system_table.boot_services.?.allocatePages(.any, .loader_data, num_pages));
-    const pages = pages_ptr[0 .. num_pages * constants.ARCH_PAGE_SIZE];
-    @memset(pages, 0);
-    return pages;
-}
-
 pub fn mmap(self: *const Self, vaddr: VirtAddr, paddr: PhysAddr, flags: MmapFlags) Error!void {
-    const phys = mem.alignBackward(PhysAddr, paddr, constants.ARCH_PAGE_SIZE);
+    const phys = mem.alignBackward(PhysAddr, paddr, mm.ARCH_PAGE_SIZE);
 
     const pdp_mapping = try getOrCreateLevel(self.mapping, vaddr.pml4_idx);
     const pd_mapping = try getOrCreateLevel(pdp_mapping, vaddr.pdp_idx);
@@ -168,7 +149,7 @@ pub fn mmap(self: *const Self, vaddr: VirtAddr, paddr: PhysAddr, flags: MmapFlag
 fn getOrCreateLevel(mapping: *PageMapping, index: u9) Error!*PageMapping {
     const next_level: *PageMapping.Entry = &mapping.mappings[index];
     if (!next_level.present) {
-        const page = try allocatePages(1);
+        const page = try mm.allocatePages(1);
         writeEntry(next_level, @intFromPtr(page.ptr), MmapFlags{ .present = true, .read_write = .read_write });
         return @ptrCast(page);
     }
@@ -205,8 +186,8 @@ test getOrCreateLevel {
         const addr = page_map.mappings[11].getAddr();
         defer {
             // free the page
-            const page_ptr: [*]align(constants.ARCH_PAGE_SIZE) u8 = @ptrFromInt(addr);
-            const page = page_ptr[0..constants.ARCH_PAGE_SIZE]; // 1 page
+            const page_ptr: [*]align(mm.ARCH_PAGE_SIZE) u8 = @ptrFromInt(addr);
+            const page = page_ptr[0..mm.ARCH_PAGE_SIZE]; // 1 page
             std.testing.allocator.free(page);
         }
 
