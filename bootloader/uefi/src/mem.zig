@@ -1,85 +1,127 @@
 const std = @import("std");
-const BootInfo = @import("BootInfo.zig");
 const uefi = std.os.uefi;
-const builtin = @import("builtin");
+const Globals = @import("globals.zig");
+const BootloaderError = @import("errors.zig").BootloaderError;
+const Constants = @import("constants.zig");
+const BootInfo = @import("BootInfo.zig").BootInfo;
+const MemHelper = @import("mem_helper.zig");
 
-pub const ARCH_PAGE_SIZE = 4096;
+const log = std.log.scoped(.mmap);
 
-const log = std.log.scoped(.memory);
+pub fn buildMmap(bootinfo: *BootInfo) BootloaderError!u64 {
+    var status: uefi.Status = undefined;
+    const boot_services = Globals.boot_services;
 
-pub inline fn kb(size_in_bytes: comptime_int) comptime_int {
-    return size_in_bytes * 1024;
-}
-
-pub inline fn mb(size_in_bytes: comptime_int) comptime_int {
-    return kb(size_in_bytes) * 1024;
-}
-
-pub fn getMemoryMap(bootinfo: *BootInfo) !uefi.tables.MemoryMapSlice {
-    _ = bootinfo; // autofix
-    const boot_services = uefi.system_table.boot_services.?;
-    const info = try boot_services.getMemoryMapInfo();
-    const raw_buffer = try boot_services.allocatePool(.loader_data, info.len * info.descriptor_size);
-    const buffer: []align(@alignOf(uefi.tables.MemoryDescriptor)) u8 = @alignCast(raw_buffer);
-
-    const map = try boot_services.getMemoryMap(buffer);
-
-    log.debug("Descriptor size: expected={d}, actual={d}", .{ @sizeOf(uefi.tables.MemoryDescriptor), info.descriptor_size });
-    log.debug("Memory map size: {d}", .{info.len});
-    log.debug("Descriptor size: {d}", .{info.descriptor_size});
-    log.debug("Total size: {d}", .{info.len * info.descriptor_size});
-
-    var it = map.iterator();
-    while (it.next()) |desc| {
-        const end = desc.physical_start + (desc.number_of_pages * 4096);
-        log.debug("- Type={s}; {x} -> {x} (size: {x} pages): attr={x}", .{ @tagName(desc.type), desc.physical_start, end, desc.number_of_pages, @as(u64, @bitCast(desc.attribute)) });
+    var mmap_size: usize = 0;
+    var mmap: ?[*]uefi.tables.MemoryDescriptor = null;
+    var mapKey: uefi.tables.MemoryMapKey = undefined;
+    var descriptor_size: usize = undefined;
+    var descriptor_version: u32 = undefined;
+    status = boot_services._getMemoryMap(&mmap_size, @ptrCast(mmap), &mapKey, &descriptor_size, &descriptor_version);
+    switch (status) {
+        .buffer_too_small => log.debug("Need {d} bytes for memory map buffer", .{mmap_size}),
+        else => {
+            log.err("Expected BufferTooSmall but got {s} instead", .{@tagName(status)});
+            return BootloaderError.MemoryMapError;
+        },
     }
 
-    return map;
+    mmap_size += 2 * descriptor_size;
+    status = boot_services._allocatePool(MemHelper.MemoryType.RECLAIMABLE.toUefi(), mmap_size, @ptrCast(&mmap));
+    switch (status) {
+        .success => log.debug("Allocated {d} bytes for memory map at {*}", .{ mmap_size, mmap }),
+        else => {
+            log.err("Expected Success but got {s} instead", .{@tagName(status)});
+            return BootloaderError.MemoryMapError;
+        },
+    }
+
+    status = boot_services._getMemoryMap(&mmap_size, @ptrCast(mmap), &mapKey, &descriptor_size, &descriptor_version);
+    switch (status) {
+        .success => log.debug("Got memory map", .{}),
+        else => {
+            log.err("Expected Success but got {s} instead", .{@tagName(status)});
+            return BootloaderError.MemoryMapError;
+        },
+    }
+
+    log.debug("descriptor size: expected={d}, actual={d}", .{ @sizeOf(uefi.tables.MemoryDescriptor), descriptor_size });
+
+    const mmap_entries: [*]BootInfo.MmapEntry = @ptrCast(&bootinfo.mmap);
+    var mem_limit: u64 = 0;
+    var mmap_idx: u64 = 0;
+    var last_mmap_idx: ?u64 = null;
+
+    var descriptor: *uefi.tables.MemoryDescriptor = undefined;
+    var idx: usize = 0;
+    const descriptors_count = @divExact(mmap_size, descriptor_size);
+    while (idx < descriptors_count) : (idx += 1) {
+        log.debug("bootinfo.size = {d}", .{bootinfo.size});
+        if (bootinfo.size > Constants.arch_page_size - @sizeOf(BootInfo.MmapEntry)) {
+            log.err("Memory map is too big", .{});
+            return BootloaderError.MemoryMapTooBig;
+        }
+        descriptor = @ptrFromInt(idx * descriptor_size + @intFromPtr(mmap));
+        if (@as(u64, @bitCast(descriptor.attribute)) == 0) continue;
+        const descriptor_type = MemHelper.MemoryType.fromUefi(descriptor.type);
+        log.debug("- Type={s}; {X} -> {X} (size: {X} pages); attr={X}", .{ @tagName(descriptor_type), descriptor.physical_start, descriptor.physical_start + Constants.arch_page_size * descriptor.number_of_pages, descriptor.number_of_pages, @as(u64, @bitCast(descriptor.attribute)) });
+
+        const entry_type: BootInfo.MmapEntry.Type = switch (descriptor_type) {
+            .LoaderCode, .loader_data, .BootServicesCode, .BootServicesData, .ConventionalMemory => .FREE,
+            .ACPIReclaimMemory, .ACPIMemoryNVS => .ACPI,
+            .PAGING => .PAGING,
+            .RECLAIMABLE => .RECLAIMABLE,
+            .BOOTINFO => .BOOTINFO,
+            .KERNEL_MODULE => .KERNEL_MODULE,
+            .FRAMEBUFFER => .FRAMEBUFFER,
+            .TRAMPOLINE => .TRAMPOLINE,
+            else => .USED,
+        };
+
+        const mmap_entry = &mmap_entries[mmap_idx];
+        mmap_entry.* = BootInfo.MmapEntry.create(descriptor.physical_start, descriptor.number_of_pages * Constants.arch_page_size, entry_type);
+        if (mem_limit < mmap_entry.getEnd()) {
+            mem_limit = mmap_entry.getEnd();
+        }
+
+        if (last_mmap_idx) |last_idx| {
+            const last_mmap_entry = &mmap_entries[last_idx];
+            if (mmap_entry.getType() == last_mmap_entry.getType() and mmap_entry.getPtr() == last_mmap_entry.getEnd()) {
+                log.debug("Extending last mmap entry (contiguous): {any}", .{mmap_entry});
+                last_mmap_entry.len += mmap_entry.len;
+                mmap_entry.ptr = 0;
+                mmap_entry.len = 0;
+                continue;
+            }
+            log.debug("Creating a new mmap entry (not contiguous): {any}", .{mmap_entry});
+            last_mmap_idx = mmap_idx;
+        } else {
+            log.debug("Creating a new mmap entry (first iteration): {any}", .{mmap_entry});
+            last_mmap_idx = mmap_idx;
+        }
+
+        bootinfo.size += @sizeOf(BootInfo.MmapEntry);
+        mmap_idx += 1;
+    }
+    log.info("Created {d} mmap entries, bootinfo size: {d}", .{ mmap_idx, bootinfo.size });
+    return mem_limit;
 }
 
-pub fn pagesToBytes(pages: []align(4096) uefi.Page) []u8 {
-    const ptr: [*]u8 = @ptrCast(pages.ptr);
-    const buf: []u8 = ptr[0 .. pages.len * 4096];
-    return buf;
-}
+pub fn getMmapKey() BootloaderError!uefi.tables.MemoryMapKey {
+    var mmap_size: usize = 0;
+    const mmap: ?[*]uefi.tables.MemoryDescriptor = null;
+    var mapKey: uefi.tables.MemoryMapKey = undefined;
+    var descriptor_size: usize = undefined;
+    var descriptor_version: u32 = undefined;
+    const boot_services = Globals.boot_services;
+    const status = boot_services._getMemoryMap(&mmap_size, @ptrCast(mmap), &mapKey, &descriptor_size, &descriptor_version);
+    switch (status) {
+        .buffer_too_small => log.debug("Need {d} bytes for memory map buffer", .{mmap_size}),
+        else => {
+            log.err("Expected BufferTooSmall but got {s} instead", .{@tagName(status)});
+            return BootloaderError.MemoryMapError;
+        },
+    }
 
-// Asserts that buf.len is a multiple of 4096 (so that it can be converted to a slice of pages)
-pub fn bytesToPages(buf: []u8) []align(4096) uefi.Page {
-    std.debug.assert(buf.len % 4096 == 0);
-    const ptr: [*]align(4096) uefi.Page = @ptrCast(@alignCast(buf.ptr));
-    return ptr[0..@divExact(buf.len, 4096)];
-}
-
-const AllocateError = uefi.tables.BootServices.AllocatePagesError;
-
-fn allocatePagesTest(num_pages: u32) AllocateError![]align(ARCH_PAGE_SIZE) u8 {
-    if (!builtin.is_test) @compileError("allocatePagesTest can only be used in tests");
-
-    const pages_slice_raw = std.testing.allocator.alignedAlloc([ARCH_PAGE_SIZE]u8, .fromByteUnits(ARCH_PAGE_SIZE), num_pages) catch @panic("OOM");
-    const pages_ptr: [*]align(ARCH_PAGE_SIZE) u8 = @ptrCast(pages_slice_raw);
-    const pages = pages_ptr[0 .. num_pages * ARCH_PAGE_SIZE];
-    @memset(pages, 0);
-    return pages;
-}
-
-pub fn allocatePages(num_pages: u32) AllocateError![]align(ARCH_PAGE_SIZE) u8 {
-    log.debug("Allocating {d} pages", .{num_pages});
-    if (builtin.is_test) return allocatePagesTest(num_pages); // TEST
-
-    const pages_ptr: [*]align(ARCH_PAGE_SIZE) u8 =
-        @ptrCast(try uefi.system_table.boot_services.?.allocatePages(.any, .loader_data, num_pages));
-    const pages = pages_ptr[0 .. num_pages * ARCH_PAGE_SIZE];
-    @memset(pages, 0);
-    return pages;
-}
-
-fn freePagesTest(memory: []align(ARCH_PAGE_SIZE) u8) void {
-    if (!builtin.is_test) @compileError("freePagesTest can only be used in tests");
-    std.testing.allocator.free(bytesToPages(memory));
-}
-
-pub fn freePages(memory: []align(ARCH_PAGE_SIZE) u8) void {
-    if (builtin.is_test) return freePagesTest(memory);
-    uefi.system_table.boot_services.?.freePages(bytesToPages(memory)) catch @panic("Unexpected: failed to free pages");
+    return mapKey;
 }

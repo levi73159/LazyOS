@@ -2,46 +2,33 @@ const std = @import("std");
 const io = @import("io.zig");
 
 pub const Port = enum(u16) {
-    com1 = 0x3f8,
-    com2 = 0x2f8,
-    com3 = 0x3e8,
-    com4 = 0x2e8,
-    com5 = 0x5f8,
-    com6 = 0x4f8,
-    com7 = 0x5e8,
-    com8 = 0x4e8,
-
-    fn write(self: Port, offset: Offset, data: anytype) void {
-        if (@typeInfo(@TypeOf(data)) == .comptime_int) {
-            io.out(@intFromEnum(self) + @intFromEnum(offset), @as(u8, data));
-        } else {
-            io.out(@intFromEnum(self) + @intFromEnum(offset), @as(u8, @bitCast(data)));
-        }
-    }
-
-    fn testCon(self: Port, data: u8) bool {
-        io.out(@intFromEnum(self), data);
-        return io.in(u8, @intFromEnum(self)) == data;
-    }
+    COM1 = 0x3F8,
+    COM2 = 0x2F8,
+    COM3 = 0x3E8,
+    COM4 = 0x2E8,
+    COM5 = 0x5F8,
+    COM6 = 0x4F8,
+    COM7 = 0x5E8,
+    COM8 = 0x4E8,
 };
 
 pub const Offset = enum(u8) {
-    rxtx_buffer = 0, // if divisor latch is set => divisor lsb
-    int_enable, // if divisor latch is set => divisor msb
-    fifo_ctrl,
-    line_ctrl,
-    modem_ctrl,
-    line_status,
-    modem_status,
-    scratch,
+    RxTxBuffer = 0, // if dlab set => divisor LSB
+    IntEnable = 1, // if dlab set => divisor MSB
+    FifoCtrl = 2,
+    LineCtrl = 3,
+    ModemCtrl = 4,
+    LineStatus = 5,
+    ModemStatus = 6,
+    Scratch = 7,
 };
 
 const LineCtrlReg = packed struct(u8) {
     data: u2 = 0,
     stop: u1 = 0,
     parity: u3 = 0,
-    break_enable: bool = false,
-    divisor_latch: bool = false,
+    break_enable: u1 = 0,
+    dlab: u1 = 0,
 };
 
 const FifoCtrlReg = packed struct(u8) {
@@ -49,64 +36,70 @@ const FifoCtrlReg = packed struct(u8) {
     clear_rx: bool = false,
     clear_tx: bool = false,
     dma_mode: u1 = 0,
-    rsrvd: u2 = undefined, // never used
+    rsrvd: u2 = undefined,
     int_trigger: u2 = 0,
 };
 
 const ModemCtrlReg = packed struct(u8) {
-    dtr: bool = false,
-    rts: bool = false,
-    out1: bool = false,
-    out2: bool = false,
+    dtr: u1 = 1,
+    rts: u1 = 1,
+    out1: u1 = 1,
+    out2: u1 = 1,
     loop: bool = false,
-    unused: u3 = undefined,
+    rsrvd: u3 = undefined,
 };
 
 pub const SerialWriter = struct {
     port: Port,
-
+    writer: std.Io.Writer,
     pub const SerialError = error{};
-    pub const Writer = std.io.GenericWriter(*const SerialWriter, SerialError, write);
+    const Self = @This();
+    pub fn init(comptime port: Port) SerialWriter {
+        const port_num = @intFromEnum(port);
+        io.outb(port_num + @intFromEnum(Offset.IntEnable), 0);
+        io.outb(port_num + @intFromEnum(Offset.LineCtrl), @bitCast(LineCtrlReg{ .dlab = 1 }));
+        io.outb(port_num + @intFromEnum(Offset.RxTxBuffer), 3);
+        io.outb(port_num + @intFromEnum(Offset.IntEnable), 0);
+        io.outb(port_num + @intFromEnum(Offset.LineCtrl), @bitCast(LineCtrlReg{ .data = 3 }));
+        io.outb(port_num + @intFromEnum(Offset.FifoCtrl), @bitCast(FifoCtrlReg{ .enable = true, .clear_rx = true, .clear_tx = true, .int_trigger = 0b11 }));
+        io.outb(port_num + @intFromEnum(Offset.ModemCtrl), @bitCast(ModemCtrlReg{ .out1 = 0, .loop = true }));
+        io.outb(port_num + @intFromEnum(Offset.RxTxBuffer), 0xAA);
 
-    pub fn init(port: Port) !SerialWriter {
-        port.write(.int_enable, 0);
-        port.write(.line_ctrl, LineCtrlReg{ .divisor_latch = true });
-        port.write(.rxtx_buffer, 3);
-        port.write(.int_enable, 0);
-        port.write(.line_ctrl, LineCtrlReg{ .data = 0b11, .stop = 0, .divisor_latch = false });
-        port.write(.fifo_ctrl, FifoCtrlReg{ .enable = true, .clear_rx = true, .clear_tx = true });
-
-        var modem_ctrl: ModemCtrlReg = ModemCtrlReg{
-            .dtr = true,
-            .rts = true,
-            .out1 = true,
-            .out2 = true,
-            .loop = true,
-        };
-        port.write(.modem_ctrl, modem_ctrl);
-
-        var success: bool = true;
-        success = port.testCon(0xAA);
-        success = port.testCon(0x55) and success;
-        success = port.testCon(0xC7) and success;
-
-        if (!success) {
-            return error.SerialConnectionFailed;
+        if (io.inb(port_num) != 0xAA) {
+            unreachable;
         }
 
-        // disable looping
-        modem_ctrl.loop = false;
-        port.write(.modem_ctrl, modem_ctrl);
+        io.outb(port_num + @intFromEnum(Offset.ModemCtrl), @bitCast(ModemCtrlReg{}));
 
-        return SerialWriter{ .port = port };
+        return .{
+            .port = port,
+            .writer = .{
+                .vtable = &.{
+                    .drain = drain,
+                },
+                .buffer = &[0]u8{},
+            },
+        };
     }
 
-    pub fn writer(self: *const SerialWriter) Writer {
-        return .{ .context = self };
+    pub fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) !usize {
+        _ = splat;
+        const self: *SerialWriter = @fieldParentPtr("writer", w);
+        var out: usize = 0;
+        for (data) |datum|
+            out += try self.write(datum);
+        return out;
     }
 
-    fn write(self: *const SerialWriter, data: []const u8) SerialError!usize {
-        const port = @intFromEnum(self.port);
-        return io.outStr(port, data);
+    fn write(self: *const Self, bytes: []const u8) SerialError!usize {
+        const port = self.port;
+        const port_num = @intFromEnum(port);
+        for (bytes) |b| {
+            while ((io.inb(port_num + @intFromEnum(Offset.LineStatus)) & 0x20) == 0) {
+                continue;
+            }
+            io.outb(port_num, b);
+        }
+        return bytes.len;
     }
 };

@@ -1,313 +1,431 @@
 const std = @import("std");
 const uefi = std.os.uefi;
 const serial = @import("serial.zig");
-const video = @import("video.zig");
-const mem = @import("mem.zig");
-const fs = @import("fs.zig");
-const loader = @import("loader.zig");
-const BootInfo = @import("BootInfo.zig");
+const logger = @import("logger.zig");
+const Globals = @import("globals.zig");
+const BootInfo = @import("BootInfo.zig").BootInfo;
+const Config = @import("config.zig");
+const Video = @import("video.zig");
+const FileSystem = @import("fs.zig");
+const Mmap = @import("mem.zig");
+const KernelLoader = @import("loader.zig");
+const Constants = @import("constants.zig");
 const AddressSpace = @import("AddressSpace.zig");
-const cpu = @import("cpu.zig");
-
-const UefiError = uefi.Error;
-const File = uefi.protocol.File;
-
-const W = std.unicode.utf8ToUtf16LeStringLiteral;
-
-test {
-    std.testing.refAllDeclsRecursive(@This());
-}
+const BootloaderError = @import("errors.zig").BootloaderError;
+const MemHelper = @import("mem_helper.zig");
 
 pub const std_options: std.Options = .{
-    .logFn = logFn,
-    .log_level = .debug,
+    .logFn = logger.logFn,
+    .log_level = .info,
 };
 
-const config_path = "/boot/config.cfg";
-var com1_serial: serial.SerialWriter = undefined;
-
-const Config = struct {
-    name: []const u8 = "Unknown OS",
-    kernel: []const u8 = "/boot/kernel",
-    preload_msg: ?[]const u8 = null,
-    video: video.Resolution = .{ .width = 800, .height = 600 },
-};
-
-pub fn main() uefi.Error!void {
-    const sys_table = uefi.system_table;
-    const conout = sys_table.con_out.?;
-    try conout.clearScreen();
-
-    com1_serial = serial.SerialWriter.init(.com1) catch {
-        _ = try conout.outputString(W("Failed to initialize serial port!!"));
-        return abortNoPrint();
-    };
-
-    fs.init() catch |err| {
-        std.log.err("{}", .{err});
-        return abort();
-    };
-
-    std.log.info("Serial port initialized", .{});
-
-    const boot_services = sys_table.boot_services.?;
-    const conin = sys_table.con_in.?;
-
-    const config_data = fs.loadFileBuffer(config_path) catch |err| {
-        std.log.err("Failed to load config!!!", .{});
-        std.log.err("{}", .{err});
-        return abort();
-    };
-    defer config_data.free();
-
-    const config = parseConfig(config_data.contents()) catch |err| {
-        std.log.err("Failed to parse config!!!", .{});
-        std.log.err("{}", .{err});
-        return abort();
-    };
-
-    if (config.preload_msg) |msg| {
-        try printMsg(msg);
+pub fn main() uefi.Status {
+    logger.init(serial.Port.COM1);
+    Globals.init();
+    var trampoline_page: [*]u8 = @ptrFromInt(0x10000);
+    var status = Globals.boot_services._allocatePages(.max_address, MemHelper.MemoryType.TRAMPOLINE.toUefi(), 1, @ptrCast(&trampoline_page));
+    switch (status) {
+        .success => {
+            std.log.info("Reserved trampoline page {*}", .{trampoline_page});
+        },
+        else => {
+            std.log.err("Failed to create trampoline page", .{});
+            return uefi.Status.aborted;
+        },
     }
+    FileSystem.init() catch {
+        std.log.err("Failed to initialize filesystem subsystem", .{});
+        return uefi.Status.aborted;
+    };
+    Video.init();
 
-    const boot_info: *align(mem.ARCH_PAGE_SIZE) BootInfo = alloc_info: {
-        const ptr = boot_services.allocatePages(.any, .loader_data, 1) catch |err| {
-            std.log.err("Failed to allocate boot info: {}", .{err});
-            return abort();
+    const bootinfo_page = MemHelper.allocatePages(1, .BOOTINFO) catch {
+        std.log.err("Could not allocate a page for bootinfo struct", .{});
+        return uefi.Status.aborted;
+    };
+    const bootinfo: *align(Constants.arch_page_size) BootInfo = @ptrCast(bootinfo_page);
+    bootinfo.* = .{
+        .bootloader_type = .UEFI,
+        .mmap = .{
+            .ptr = 0xABABABAB,
+            .len = 12345,
+        },
+    };
+
+    const config = FileSystem.loadFile(.{ .path = "/boot/config.cfg", .type = .BOOTINFO }) catch {
+        std.log.err("Failed to load config file", .{});
+        return uefi.Status.aborted;
+    };
+    std.log.debug(
+        \\Got config:
+        \\{s}"
+    , .{config.getContents()});
+
+    const bootloader_config = Config.parseConfig(config.getContents()) catch {
+        std.log.err("Failed to parse config", .{});
+        return uefi.Status.aborted;
+    };
+    std.log.info(
+        \\Parsed config file
+        \\Kernel file: {s}
+        \\Video resolution: {d} x {d}
+        \\Page offset: 0x{x}
+    , .{
+        bootloader_config.kernel,
+        bootloader_config.video.width,
+        bootloader_config.video.height,
+        bootloader_config.page_offset,
+    });
+
+    const video_info: Video.VideoInfo = Video.getPreferredResolution() catch blk: {
+        std.log.warn("Could not resolve display preferred resolution, falling back on config", .{});
+        break :blk .{ .device_handle = null, .resolution = bootloader_config.video };
+    };
+
+    std.log.info("Using resolution {d}x{d}", .{
+        video_info.resolution.width,
+        video_info.resolution.height,
+    });
+
+    Video.getFramebuffer(video_info, bootinfo) catch {
+        std.log.err("Could not set video mode", .{});
+        return uefi.Status.aborted;
+    };
+    Video.fillRect(255, 8, 4) catch {
+        std.log.err("FillRect failed", .{});
+        return uefi.Status.aborted;
+    };
+
+    var kernel = FileSystem.loadFile(.{ .path = bootloader_config.kernel }) catch {
+        std.log.err("Could not load kernel file", .{});
+        return uefi.Status.aborted;
+    };
+
+    const kernel_info = KernelLoader.loadExecutable(kernel.getContents(), bootloader_config.page_offset) catch {
+        std.log.err("Could not load kernel executable", .{});
+        return uefi.Status.aborted;
+    };
+    if (kernel_info.debug_info_ptr) |debug_info_ptr| bootinfo.debug_info_ptr = debug_info_ptr;
+
+    std.log.debug("Bootinfo struct: {any}", .{bootinfo});
+
+    std.log.debug("Kernel info: ", .{});
+    std.log.debug("  entrypoint: 0x{x}", .{kernel_info.entrypoint});
+    std.log.debug("  entry count: {d}", .{kernel_info.segment_count});
+    if (kernel_info.debug_info_ptr) |_| {
+        std.log.debug("  debug info loaded @ 0x{?x}", .{kernel_info.debug_info_ptr});
+    }
+    for (0..kernel_info.segment_count) |idx| {
+        const mapping = kernel_info.segment_mappings[idx];
+        const mapping_vaddr = switch (mapping.vaddr) {
+            .vaddr => |x| @as(u64, @bitCast(x)),
+            else => unreachable,
         };
-
-        break :alloc_info @ptrCast(ptr);
-    };
-    boot_info.* = .{}; // init the default values
-
-    // const memmap = mem.getMemoryMap(boot_info) catch |err| {
-    //     std.log.err("Failed to get memory map: {}", .{err});
-    //     return abort();
-    // };
-
-    std.log.debug("Getting perfered resolution", .{});
-    const video_info: video.Info = video.getVideoInfo() catch |err| blk: {
-        std.log.warn("Failed to get resolution: {}; defaulting to config", .{err});
-        break :blk video.Info{
-            .resolution = config.video,
-            .device_handle = null,
+        const mapping_paddr = switch (mapping.paddr) {
+            .paddr => |x| @as(u64, @bitCast(x)),
+            else => unreachable,
         };
-    };
-    std.log.info("Perfered resolution: {d}x{d}", .{ video_info.resolution.width, video_info.resolution.height });
-
-    video.setVideoMode(video_info, boot_info) catch |err| {
-        std.log.err("Failed to set video mode: {}", .{err});
-        return abort();
-    };
-
-    video.fillRect(0, 0, 150, 200, .{ .red = 255, .green = 0, .blue = 0, .reserved = 0 }) catch |err| {
-        std.log.err("Failed to fill rect: {}", .{err});
-        return abort();
-    };
-
-    const addr_space = AddressSpace.init() catch |err| {
-        std.log.err("Failed to create address space: {}", .{err});
-        return abort();
-    };
-
-    const kernel_data = fs.loadFileBuffer(config.kernel) catch |err| {
-        std.log.err("Failed to load kernel into memory!!!", .{});
-        std.log.err("{}", .{err});
-        return abort();
-    };
-    defer kernel_data.free();
-
-    const kernel = loader.loadExe(kernel_data.contents()) catch |err| {
-        std.log.err("Failed to load kernel into memory!!!", .{});
-        std.log.err("{}", .{err});
-        return abort();
-    };
-    std.log.info("Kernel loaded", .{});
-
-    mapKernelSpace(&addr_space, &kernel, boot_info, config_data.mem.ptr) catch |err| {
-        std.log.err("Failed to map kernel space: {}", .{err});
-        return abort();
-    };
-    addr_space.print();
-
-    std.log.debug("Bootinfo:\n{any}", .{boot_info.*});
-
-    const events = [_]uefi.Event{conin.wait_for_key};
-    while (true) {
-        const event_signaled = try boot_services.waitForEvent(&events);
-
-        if (event_signaled[1] == 0) {
-            const key = try conin.readKeyStroke();
-            if (key.unicode_char == 'q') {
-                return;
-            }
-            const slice: [*:0]const u16 = &[_:0]u16{key.unicode_char};
-            _ = try conout.outputString(slice);
-        }
+        std.log.info("  mapping[{d}]: p=0x{x} v=0x{x} l={d}", .{ idx, @as(u64, mapping_paddr), @as(u64, mapping_vaddr), mapping.len });
     }
 
-    return UefiError.Timeout;
-}
+    var addr_space = AddressSpace.create() catch {
+        std.log.err("Could not create address space", .{});
+        return uefi.Status.aborted;
+    };
 
-fn mapKernelSpace(addr_space: *const AddressSpace, kernel_info: *const loader.KernelInfo, boot_info: *const BootInfo, config: [*]const u8) !void {
-    const log = std.log.scoped(.kernel_mapper);
-    // Map:
-    // - core stack
-    var i: u64 = @bitCast(@as(i64, -mem.ARCH_PAGE_SIZE));
-    log.info("Mapping core stacks to 0x{X}", .{i});
-    while (i < cpu.MAX_CORES) : (i -= mem.ARCH_PAGE_SIZE) {
-        const core_stack = try mem.allocatePages(1);
-        try addr_space.mmap(.from(@intFromPtr(core_stack.ptr)), i, .default);
-    }
-    // - kernel
-    for (kernel_info.segment_mappings) |mapping| {
-        log.info("Mapping kernel segment 0x{X} -> 0x{X}", .{ mapping.vaddr.raw(), mapping.paddr });
-        try addr_space.mmap(mapping.vaddr, mapping.paddr, .default);
-    }
-    // - bootinfo
-    if (kernel_info.bindings.bootinfo) |bootinfo| {
-        log.info("Mapping bootinfo to 0x{X}", .{bootinfo.raw()});
-        try addr_space.mmap(bootinfo.virt, @intFromPtr(boot_info), .default);
-    }
-    // - env
-    if (kernel_info.bindings.env) |env| {
-        log.info("Mapping env to 0x{X}", .{env.raw()});
-        try addr_space.mmap(env.virt, @intFromPtr(config), .default);
-    }
-    // - framebuffer
-    // TODO: make sure size is page aligned
-    if (kernel_info.bindings.framebuffer) |framebuffer| {
-        log.info("Mapping framebuffer to 0x{x}", .{framebuffer.raw()});
-        const fb_addr = video.getFrameBufferAddress();
-        const fb_size = boot_info.fb_scanline_bytes * boot_info.fb_height;
-        var fb_paddr: u64 = fb_addr;
-        var fb_vaddr: u64 = framebuffer.raw();
-        while (fb_paddr < fb_addr + fb_size) : ({
-            fb_paddr += mem.ARCH_PAGE_SIZE;
-            fb_vaddr += mem.ARCH_PAGE_SIZE;
-        }) {
-            try addr_space.mmap(.from(fb_vaddr), fb_paddr, .default);
-        }
-    }
-    // - Identity Mapping
-    i = 0;
-    while (i < mem.mb(64)) : (i += mem.ARCH_PAGE_SIZE) {
-        try addr_space.mmap(.from(i), i, .default);
-    }
-}
+    mapStacks(&addr_space) catch {
+        std.log.err("Could not map stacks", .{});
+        return uefi.Status.aborted;
+    };
+    mapKernel(&addr_space, &kernel_info, @intFromPtr(bootinfo), @intFromPtr(config.buffer)) catch {
+        std.log.err("Could not map kernel address space", .{});
+        return uefi.Status.aborted;
+    };
+    const fb_ptr = bootinfo.fb_ptr;
+    const fb_size = @as(u64, bootinfo.fb_height) * @as(u64, bootinfo.fb_scanline_bytes);
+    if (kernel_info.fb_addr) |fb_addr|
+        mapFramebuffer(&addr_space, fb_addr, fb_ptr, fb_size) catch {
+            std.log.err("Could not map framebuffer", .{});
+            return uefi.Status.aborted;
+        };
+    mapLowMemory(&addr_space) catch {
+        std.log.err("Could not map low memory", .{});
+        return uefi.Status.aborted;
+    };
 
-fn parseConfig(data: []const u8) !Config {
-    std.log.info("Parsing config:\n{s}", .{data});
-    var lines = std.mem.tokenizeAny(u8, data, "\r\n");
-    var has_name: bool = false;
-    var config = Config{};
+    std.log.debug("bootinfo page: {x}", .{bootinfo_page[0..200]});
+    kernel.deinit() catch {
+        std.log.err("Could not free kernel buffer", .{});
+        return uefi.Status.aborted;
+    };
+    const memory_limit = Mmap.buildMmap(bootinfo) catch |e| {
+        std.log.err("Failed to get memory map. Error: {}", .{e});
+        return uefi.Status.aborted;
+    };
+    mapMemory(&addr_space, bootloader_config.page_offset, memory_limit) catch {
+        std.log.err("Could not map memory", .{});
+        return uefi.Status.aborted;
+    };
+    const map_key = Mmap.getMmapKey() catch |e| {
+        std.log.err("Failed to get memory map key. Error: {}", .{e});
+        return uefi.Status.aborted;
+    };
 
-    while (lines.next()) |line| {
-        const index_eq = std.mem.indexOfScalar(u8, line, '=') orelse continue; // simply ignore it
-        const name = line[0..index_eq];
-        const value = line[index_eq + 1 .. line.len];
-
-        inline for (@typeInfo(Config).@"struct".fields) |field| {
-            if (std.mem.eql(u8, field.name, name)) {
-                if (std.mem.eql(u8, field.name, "name")) {
-                    has_name = true;
-                    config.name = value;
-                } else if (std.mem.eql(u8, field.name, "video")) {
-                    const idx = std.mem.indexOfScalar(u8, value, 'x') orelse {
-                        std.log.err("Invalid resolution: {s}", .{value});
-                        return error.InvalidResolution;
-                    };
-
-                    const width = value[0..idx];
-                    const height = value[idx + 1 .. value.len];
-
-                    const width_int = std.fmt.parseUnsigned(u16, width, 10) catch {
-                        std.log.err("Invalid width: {s}", .{width});
-                        return error.InvalidResolution;
-                    };
-
-                    const height_int = std.fmt.parseUnsigned(u16, height, 10) catch {
-                        std.log.err("Invalid height: {s}", .{height});
-                        return error.InvalidResolution;
-                    };
-
-                    config.video = .{ .width = width_int, .height = height_int };
-                } else {
-                    if (field.type == []const u8 or field.type == ?[]const u8) {
-                        @field(config, field.name) = value;
-                    } else {
-                        std.log.err("Unsupported type: {}", .{field.type});
-                        return error.UnsupportedType;
-                    }
-                }
+    std.log.info("Num table Entries: {d}", .{Globals.sys_table.number_of_table_entries});
+    const rsdp_ptr = blk: {
+        var table_ptr: *anyopaque = undefined;
+        for (0..Globals.sys_table.number_of_table_entries) |i| {
+            const config_table = Globals.sys_table.configuration_table[i];
+            if (config_table.vendor_guid.eql(uefi.tables.ConfigurationTable.acpi_20_table_guid)) {
+                std.log.debug("Found ACPI v2.0 table {*}", .{config_table.vendor_table});
+                break :blk config_table.vendor_table;
+            } else if (config_table.vendor_guid.eql(uefi.tables.ConfigurationTable.acpi_10_table_guid)) {
+                std.log.debug("Found ACPI v1.0 table {*}", .{config_table.vendor_table});
+                table_ptr = config_table.vendor_table;
             }
         }
+        break :blk table_ptr;
+    };
+    std.log.info("Config table: {*}", .{rsdp_ptr});
+    bootinfo.acpi_ptr = @intFromPtr(rsdp_ptr);
+
+    const trampoline_addr = @intFromPtr(trampoline_page);
+    std.log.info(
+        \\ preparing to exit boot services
+        \\ trampoline page -> 0x{x}
+        \\ page map -> 0x{x}
+        \\ kernel_entry -> 0x{x}
+        \\ memory limit -> 0x{x}
+    , .{ trampoline_addr, addr_space.root, kernel_info.entrypoint, memory_limit });
+
+    // TODO: exit boot services
+    status = Globals.boot_services._exitBootServices(uefi.handle, map_key);
+    switch (status) {
+        .success => {
+            std.log.info("Exited boot services. Handlng execution to kernel ...", .{});
+        },
+        else => {
+            std.log.err("Could not exit boot services, bad map key", .{});
+            while (true) {}
+        },
     }
 
-    if (!has_name) {
-        std.log.warn("No name found in config", .{});
+    // WARN: Don't use boot_services after this line
+
+    asm volatile (
+        \\ leaq .trampoline(%%rip), %rsi
+        \\ leaq .trampoline_end(%%rip), %rcx
+        \\ subq %rsi, %rcx
+        \\ movq %[trampoline_addr], %rdi
+        \\ rep movsb
+        \\ jmp *%[trampoline_addr]
+        \\ 
+        \\ .trampoline:
+        \\ mov %cr4, %rax
+        \\ or $0x620, %rax
+        \\ mov %rax, %cr4
+        \\ mov %[kernel_entry], %rax
+        \\ mov %[page_map], %cr3
+        \\ jmp *%rax
+        \\ _catch:
+        \\ jmp _catch
+        \\ .trampoline_end:
+        :
+        : [trampoline_addr] "r" (trampoline_addr),
+          [page_map] "r" (addr_space.root),
+          [kernel_entry] "r" (kernel_info.entrypoint),
+        : .{
+          .rax = true,
+          .rsi = true,
+          .rcx = true,
+          .rdi = true,
+        });
+
+    while (true) {}
+    return uefi.Status.timeout;
+}
+
+fn mapLowMemory(addr_space: *AddressSpace) BootloaderError!void {
+    const log = std.log.scoped(.KernelSpaceMapper);
+    const low_memory_limit: u64 = 0x100000;
+    log.debug("Mapping identity low memory 0 -> 0x{x}", .{low_memory_limit});
+    var i: u64 = 0;
+    while (i < low_memory_limit) : (i += Constants.arch_page_size) {
+        log.debug("Mapping identity 0x{x}", .{i});
+        try addr_space.mmap(
+            .{ .vaddr = @bitCast(i) },
+            .{ .paddr = @bitCast(i) },
+            AddressSpace.DefaultMmapFlags,
+        );
+    }
+}
+fn mapStacks(addr_space: *AddressSpace) BootloaderError!void {
+    const log = std.log.scoped(.KernelSpaceMapper);
+    log.info("Mapping kernel space", .{});
+    var core_stack_vaddr: u64 = -%@as(u64, Constants.arch_page_size);
+    for (0..Constants.max_cpu) |i| {
+        const core_stack_ptr = try MemHelper.allocatePages(1, .ReservedMemoryType);
+        log.debug("Mapping core[{d}] stack: 0x{x} -> [0x{x} -> 0x{x}]", .{
+            i,
+            @intFromPtr(core_stack_ptr),
+            core_stack_vaddr,
+            core_stack_vaddr +% Constants.arch_page_size,
+        });
+        try addr_space.mmap(
+            .{ .vaddr = @bitCast(core_stack_vaddr) },
+            .{ .paddr = @intFromPtr(core_stack_ptr) },
+            AddressSpace.DefaultMmapFlags,
+        );
+        core_stack_vaddr -%= Constants.arch_page_size;
+    }
+}
+
+fn mapFramebuffer(addr_space: *AddressSpace, fb_addr: u64, fb_ptr: u64, fb_size: u64) BootloaderError!void {
+    const log = std.log.scoped(.KernelSpaceMapper);
+    // TODO: make sure the size is page aligned
+    log.info("Mapping framebuffer from 0x{x} -> 0x{x} (0x{x})", .{ fb_ptr, fb_addr, fb_size });
+    var fb_vaddr = fb_addr;
+    var fb_paddr = fb_ptr;
+    while (fb_paddr < fb_ptr + fb_size) : ({
+        fb_paddr += Constants.arch_page_size;
+        fb_vaddr += Constants.arch_page_size;
+    }) {
+        try addr_space.mmap(
+            .{ .vaddr = @bitCast(fb_vaddr) },
+            .{ .paddr = fb_paddr },
+            AddressSpace.DefaultMmapFlags,
+        );
+    }
+}
+
+fn mapMemory(addr_space: *AddressSpace, page_offset: u64, memory_limit: ?u64) BootloaderError!void {
+    const log = std.log.scoped(.KernelSpaceMapper);
+    const memory_size: u64 = memory_limit orelse MemHelper.tb(64);
+    var i: u64 = 0;
+    log.info("Mapping physical memory to 0x{x}", .{page_offset});
+    while (i < memory_size) : (i += Constants.arch_page_size) {
+        try addr_space.mmap(
+            .{ .vaddr = @bitCast(i +% page_offset) },
+            .{ .paddr = @bitCast(i) },
+            AddressSpace.DefaultMmapFlags,
+        );
+    }
+    // i = 0x400000;
+    // log.info("Mapping physical memory to 0x{x}", .{page_offset});
+    // while (i < memory_size) : (i += Constants.arch_page_size) {
+    //     try addr_space.mmap(
+    //         .{ .vaddr = @bitCast(i) },
+    //         .{ .paddr = @bitCast(i) },
+    //         AddressSpace.DefaultMmapFlags,
+    //     );
+    // }
+}
+
+fn mapKernel(
+    addr_space: *AddressSpace,
+    kernel_info: *const KernelLoader.KernelInfo,
+    bootinfo_ptr: u64,
+    env_ptr: u64,
+) BootloaderError!void {
+    const log = std.log.scoped(.KernelSpaceMapper);
+    // env
+    if (kernel_info.env_addr) |env_addr| {
+        log.info("Mapping env map 0x{x} -> 0x{x}", .{ env_ptr, env_addr });
+        try addr_space.mmap(
+            .{ .vaddr = @bitCast(env_addr) },
+            .{ .paddr = env_ptr },
+            AddressSpace.DefaultMmapFlags,
+        );
+    }
+    // bootinfo
+    if (kernel_info.bootinfo_addr) |bootinfo_addr| {
+        log.info("Mapping bootinfo struct 0x{x} -> 0x{x}", .{ bootinfo_ptr, bootinfo_addr });
+        try addr_space.mmap(
+            .{ .vaddr = @bitCast(bootinfo_addr) },
+            .{ .paddr = bootinfo_ptr },
+            AddressSpace.DefaultMmapFlags,
+        );
+    } else {
+        @panic("No bootinfo found");
+    }
+    // kernel
+    var kernel_end: u64 = 0;
+    for (0..kernel_info.segment_count) |idx| {
+        const mapping = &kernel_info.segment_mappings[idx];
+        log.debug("kernel segment: {any}", .{mapping});
+        var mapping_vaddr = switch (mapping.vaddr) {
+            .vaddr => |x| @as(u64, @bitCast(x)),
+            else => unreachable,
+        };
+        var mapping_paddr = switch (mapping.paddr) {
+            .paddr => |x| @as(u64, @bitCast(x)),
+            else => unreachable,
+        };
+        log.debug("Mapping kernel segment 0x{x} -> 0x{x} {x}", .{
+            @as(u64, @bitCast(mapping_paddr)),
+            @as(u64, @bitCast(mapping_vaddr)),
+            mapping.len,
+        });
+        const num_pages = ((mapping.len + Constants.arch_page_size - 1) / Constants.arch_page_size);
+        for (0..num_pages) |p| {
+            defer mapping_paddr += Constants.arch_page_size;
+            defer mapping_vaddr += Constants.arch_page_size;
+            log.debug("\t kernel segment[{d}] 0x{x} -> 0x{x}", .{
+                p,
+                @as(u64, @bitCast(mapping_paddr)),
+                @as(u64, @bitCast(mapping_vaddr)),
+            });
+            try addr_space.mmap(
+                .{ .vaddr = @bitCast(mapping_vaddr) },
+                .{ .paddr = mapping_paddr },
+                AddressSpace.DefaultMmapFlags,
+            );
+            kernel_end = mapping_vaddr;
+        }
+    }
+    kernel_end += Constants.arch_page_size;
+
+    const quickmap_start = kernel_end + 2 * Constants.arch_page_size;
+    log.info("Kernel end found @ 0x{x}", .{kernel_end});
+    const quickmap_pages = Constants.max_cpu;
+    var quickmap_page = quickmap_start;
+    const placeholder_addr: u64 = 0xDEADBEEF;
+    for (0..quickmap_pages) |p| {
+        defer quickmap_page += Constants.arch_page_size;
+        log.info("\t Quickmap page[{d}] 0x{x} -> 0x{x}", .{
+            p,
+            @as(u64, @bitCast(placeholder_addr)),
+            @as(u64, @bitCast(quickmap_page)),
+        });
+        try addr_space.mmap(
+            .{ .vaddr = @bitCast(quickmap_page) },
+            .{ .paddr = placeholder_addr },
+            AddressSpace.DefaultMmapFlags,
+        );
     }
 
-    return config;
-}
+    const quickmap_pt_entry_length = std.mem.alignForward(u64, Constants.max_cpu * @sizeOf(AddressSpace.PageMapping.Entry), Constants.arch_page_size);
+    const quickmap_pt_entry_pages = @divFloor(quickmap_pt_entry_length + Constants.arch_page_size - 1, Constants.arch_page_size);
+    const quickmap_pt_entry_start = -%(@as(u64, Constants.arch_page_size) * Constants.max_cpu) - quickmap_pt_entry_length - 2 * Constants.arch_page_size;
+    var quickmap_pt_entry_page = quickmap_pt_entry_start;
+    quickmap_page = quickmap_start;
+    for (0..quickmap_pt_entry_pages) |p| {
+        defer quickmap_pt_entry_page += Constants.arch_page_size;
+        defer quickmap_page += Constants.arch_page_size;
 
-pub fn logFn(comptime level: std.log.Level, comptime scope: @Type(.enum_literal), comptime format: []const u8, args: anytype) void {
-    const color = switch (level) {
-        .debug => "\x1b[32m",
-        .info => "\x1b[36m",
-        .warn => "\x1b[33m",
-        .err => "\x1b[31m",
-    };
-    const prefix = switch (level) {
-        .err => "[ERR] ",
-        .warn => "[WARN] ",
-        .info => "[INFO] ",
-        .debug => "[DEBUG] ",
-    };
-
-    const writer = com1_serial.writer();
-    writer.writeAll(color ++ prefix) catch unreachable;
-    switch (scope) {
-        .default => {},
-        else => writer.writeAll("(" ++ @tagName(scope) ++ "): ") catch unreachable,
+        const quickmap_page_addr: AddressSpace.Pml4VirtualAddress = @bitCast(quickmap_page);
+        const pte_addr = try addr_space.getPageTableEntry(quickmap_page_addr, AddressSpace.DefaultMmapFlags);
+        log.info("Quickmap PTE 0x{x} paddr=0x{x}", .{ @intFromPtr(pte_addr), pte_addr.getAddr() });
+        const pte_page_addr = std.mem.alignBackward(u64, @intFromPtr(pte_addr), Constants.arch_page_size);
+        log.info("\t Quickmap pte page[{d}] 0x{x} -> 0x{x}", .{
+            p,
+            @as(u64, @bitCast(pte_page_addr)),
+            @as(u64, @bitCast(quickmap_pt_entry_page)),
+        });
+        try addr_space.mmap(
+            .{ .vaddr = @bitCast(quickmap_pt_entry_page) },
+            .{ .paddr = pte_page_addr },
+            AddressSpace.DefaultMmapFlags,
+        );
     }
-    writer.print(format, args) catch unreachable;
-    writer.writeAll("\x1b[0m\n") catch unreachable;
-}
-
-pub fn printMsg(msg: []const u8) !void {
-    const conout = uefi.system_table.con_out.?;
-    const boot_services = uefi.system_table.boot_services.?;
-
-    // WARN: do not remove the times 2. If it works don't touch it!
-    // TODO: Figure out why *2 works and allows it to free but removing it doesn't
-    const buf = try boot_services.allocatePool(.loader_data, msg.len * 2 + 1);
-    defer boot_services.freePool(buf.ptr) catch {
-        std.log.warn("Failed to free pool", .{});
-    };
-
-    const utf16_ptr: [*]u16 = @ptrCast(buf.ptr);
-    const utf16_buf: []u16 = utf16_ptr[0 .. msg.len + 1]; // +1 for null terminator
-    std.log.debug("Roading preload message", .{});
-    const len = std.unicode.utf8ToUtf16Le(utf16_buf, msg) catch {
-        std.log.warn("Failed to convert preload message to utf16", .{});
-        return; // ignore
-    };
-    std.log.debug("Preload message length: {d}", .{len});
-
-    utf16_buf[len] = 0;
-    const utf16_msg: [:0]const u16 = utf16_buf[0..len :0]; // convert it to a null terminated slice
-
-    _ = try conout.outputString(utf16_msg.ptr);
-    _ = try conout.outputString(W("\n"));
-}
-
-inline fn abortNoPrint() UefiError {
-    try uefi.system_table.boot_services.?.stall(3 * std.time.us_per_s);
-    return UefiError.Aborted;
-}
-
-fn abort() UefiError {
-    std.log.err("Aborting...", .{});
-    return abortNoPrint();
 }

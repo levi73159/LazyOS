@@ -17,10 +17,6 @@ const regs = arch.registers;
 
 const log = std.log.scoped(.kernel);
 
-extern const KERNEL_VIRT_START: u8;
-extern const KERNEL_PHYS_START: u8;
-extern const KERNEL_PHYS_END: u8;
-
 pub fn _start(mb: *arch.MultibootInfo) callconv(.c) void {
     // const kernel_start: usize = @intFromPtr(&__kernel_start);
     // const kernel_end: usize = @intFromPtr(&__kernel_end);

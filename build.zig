@@ -93,8 +93,6 @@ pub fn build(b: *std.Build) void {
     run_qemu_cmd.addArgs(&.{
         "-cpu",
         "qemu64",
-        "-m",
-        "64M",
         "-serial",
         "stdio",
         "-s",
@@ -186,8 +184,13 @@ pub fn getOffset(b: *std.Build, path: []const u8, opt: std.Build.Step.MakeOption
     const file = try b.build_root.handle.openFile(path, .{ .mode = .read_only });
     defer file.close();
 
+    var threaded = std.Io.Threaded.init(opt.gpa);
+    defer threaded.deinit();
+
+    const io = threaded.io();
+
     var buf: [sector_size]u8 = undefined;
-    var file_reader = file.reader(&buf);
+    var file_reader = file.reader(io, &buf);
     const reader = &file_reader.interface;
 
     try file_reader.seekTo(512);

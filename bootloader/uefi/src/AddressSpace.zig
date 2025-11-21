@@ -1,202 +1,190 @@
 const std = @import("std");
-const mem = std.mem;
-const mm = @import("mem.zig");
-const uefi = std.os.uefi;
+const BootloaderError = @import("errors.zig").BootloaderError;
+const Globals = @import("globals.zig");
+const Constants = @import("constants.zig");
+const MemHelper = @import("mem_helper.zig");
 
-const builtin = @import("builtin");
-
-const Self = @This();
 const log = std.log.scoped(.vmm);
 
-const Error = error{} || uefi.UnexpectedError || uefi.tables.BootServices.AllocatePagesError;
-
-pub const PageSize = enum(u1) {
-    @"4k",
-    @"2m",
+const ReadWrite = enum(u1) {
+    read_execute = 0,
+    read_write = 1,
+};
+const UserSupervisor = enum(u1) {
+    supervisor = 0,
+    user = 1,
+};
+const PageSize = enum(u1) {
+    normal = 0,
+    large = 1,
 };
 
-pub const MmapFlags = packed struct(u64) {
+const MmapFlags = packed struct(u64) {
     present: bool = false,
     read_write: ReadWrite = .read_write,
-    privilage: Privilege = .supervisor,
+    user_supervisor: UserSupervisor = .supervisor,
     write_through: bool = false,
-    cache_disabled: bool = false,
+    cache_disable: bool = false,
     accessed: bool = false,
     dirty: bool = false,
-    page_size: PageSize = .@"4k",
+    page_size: PageSize = .normal,
     global: bool = false,
     _pad: u54 = 0,
     execution_disable: bool = false,
-
-    pub const default = MmapFlags{ .present = true, .read_write = .read_write, .privilage = .supervisor };
 };
 
-pub const Pml4VirtualAddress = packed struct(u64) {
-    offset: u12,
-    pt_idx: u9,
-    pd_idx: u9,
-    pdp_idx: u9,
-    pml4_idx: u9,
-    __unused: u16,
-
-    pub const zero = Pml4VirtualAddress{ .offset = 0, .pt_idx = 0, .pd_idx = 0, .pdp_idx = 0, .pml4_idx = 0, .__unused = 0 };
-
-    pub fn from(vaddr: u64) Pml4VirtualAddress {
-        return @bitCast(vaddr);
-    }
-
-    pub fn raw(self: Pml4VirtualAddress) u64 {
-        return @bitCast(self);
-    }
-};
-
-pub const VirtAddr = Pml4VirtualAddress; // use a pml4VirtualAddress
-pub const PhysAddr = u64;
-
-pub const ReadWrite = enum(u1) { read_only = 0, read_write = 1 };
-pub const Privilege = enum(u1) { supervisor = 0, user = 1 };
-
-pub const Address = union(enum) {
-    virt: Pml4VirtualAddress,
-    phys: u64,
-
-    pub fn raw(self: Address) u64 {
-        return switch (self) {
-            .virt => @bitCast(self.virt),
-            .phys => self.phys,
-        };
-    }
+pub const DefaultMmapFlags: MmapFlags = .{
+    .present = true,
+    .read_write = .read_write,
 };
 
 pub const PageMapping = extern struct {
-    const Entry = packed struct(u64) {
+    pub const Entry = packed struct(u64) {
         present: bool = false,
         read_write: ReadWrite = .read_write,
-        privilage: Privilege = .supervisor,
+        user_supervisor: UserSupervisor = .supervisor,
         write_through: bool = false,
-        cache_disabled: bool = false,
+        cache_disable: bool = false,
         accessed: bool = false,
         dirty: bool = false,
-        page_size: PageSize = .@"4k",
+        page_size: PageSize = .normal,
         global: bool = false,
-        _pad: u3 = 0,
+        _pad0: u3 = 0,
         addr: u36 = 0,
-        _pad2: u15 = 0,
+        _pad1: u15 = 0,
         execution_disable: bool = false,
 
         pub fn getAddr(self: *const Entry) u64 {
-            return @as(u64, self.addr) << 12;
+            return @as(u64, @intCast(self.addr)) << 12;
         }
 
-        pub fn print(self: *const Entry, vaddr: *const Pml4VirtualAddress) void {
-            log.info("Entry: 0x{x}\t->\t0x{x}\t=\t0x{x}", .{ vaddr.raw(), self.getAddr(), @as(u64, @bitCast(self.*)) });
+        pub fn print(self: *const Entry) void {
+            log.debug("entry: {*}", .{self});
+            log.info("Addr: 0x{X} - 0x{X}", .{ self.getAddr(), @as(u64, @bitCast(self.*)) });
         }
     };
+    mappings: [@divExact(Constants.arch_page_size, @sizeOf(Entry))]Entry,
 
-    const ENTIRES = @divExact(mm.ARCH_PAGE_SIZE, @sizeOf(Entry));
-    mappings: [ENTIRES]Entry,
-
-    pub fn print(self: *const PageMapping, level: u8) void {
-        var vaddr = Pml4VirtualAddress.zero;
-        self._print(level, &vaddr);
-    }
-
-    fn _print(self: *const PageMapping, level: u8, vaddr: *Pml4VirtualAddress) void {
-        for (&self.mappings, 0..) |*entry, index| {
-            if (!entry.present) continue;
-            switch (level) {
-                4 => vaddr.pml4_idx = @intCast(index),
-                3 => vaddr.pdp_idx = @intCast(index),
-                2 => vaddr.pd_idx = @intCast(index),
+    pub fn print(self: *const PageMapping, lvl: u8, vaddr: *Pml4VirtualAddress) void {
+        for (&self.mappings, 0..) |*mapping, idx| {
+            if (!mapping.present) continue;
+            switch (lvl) {
+                4 => vaddr.pml4_idx = @intCast(idx),
+                3 => vaddr.pdp_idx = @intCast(idx),
+                2 => vaddr.pd_idx = @intCast(idx),
                 1 => {
-                    vaddr.pt_idx = @intCast(index);
-                    entry.print(vaddr);
+                    vaddr.pt_idx = @intCast(idx);
+                    log.info("VAddr: 0x{X}: 0x{x}", .{ @as(u64, @bitCast(vaddr.*)), vaddr });
+                    mapping.print();
                     continue;
                 },
-                else => @panic("Invalid level"),
+                else => unreachable,
             }
-            const next_level_mapping: *PageMapping = @ptrFromInt(entry.getAddr());
-            next_level_mapping._print(level - 1, vaddr);
+            // log.debug("vaddr: {any}", .{vaddr});
+            log.debug("mapping: {*}", .{mapping});
+            const next_level_mapping: *PageMapping = @ptrFromInt(mapping.getAddr());
+            next_level_mapping.print(lvl - 1, vaddr);
         }
     }
 };
 
-mapping: *PageMapping,
+pub const Pml4VirtualAddress = packed struct(u64) {
+    offset: u12 = 0,
+    pt_idx: u9 = 0,
+    pd_idx: u9 = 0,
+    pdp_idx: u9 = 0,
+    pml4_idx: u9 = 0,
+    _pad: u16 = 0,
+};
+
+pub const Address = union(enum) {
+    paddr: u64,
+    vaddr: Pml4VirtualAddress,
+};
+
+root: u64,
 levels: u8 = 4,
 
-pub fn init() Error!Self {
-    const root_ptr = try mm.allocatePages(1);
+const Self = @This();
+
+pub fn create() BootloaderError!Self {
+    const root_ptr = try MemHelper.allocatePages(1, .PAGING);
     return .{
-        .mapping = @ptrCast(root_ptr),
+        .root = @intFromPtr(root_ptr),
     };
 }
 
-pub fn mmap(self: *const Self, vaddr: VirtAddr, paddr: PhysAddr, flags: MmapFlags) Error!void {
-    const phys = mem.alignBackward(PhysAddr, paddr, mm.ARCH_PAGE_SIZE);
+pub fn mmap(self: *const Self, vaddr: Address, paddr: Address, flags: MmapFlags) BootloaderError!void {
+    const physical_addr = switch (paddr) {
+        .paddr => |x| std.mem.alignBackward(u64, x, Constants.arch_page_size),
+        else => return BootloaderError.BadAddressType,
+    };
+    const virtual_addr = switch (vaddr) {
+        .vaddr => |x| x,
+        else => return BootloaderError.BadAddressType,
+    };
 
-    const pdp_mapping = try getOrCreateLevel(self.mapping, vaddr.pml4_idx);
-    const pd_mapping = try getOrCreateLevel(pdp_mapping, vaddr.pdp_idx);
-    const pt_mapping = try getOrCreateLevel(pd_mapping, vaddr.pd_idx);
-    if (flags.page_size == .@"2m") {
-        // TODO: handle large pages here
-        @panic("TODO: handle large pages here");
+    const entry = try self.getPageTableEntry(virtual_addr, flags);
+    if (entry.present) {
+        log.err("Overwriting a present entry (old paddr: 0x{X}) with 0x{X}", .{ entry.getAddr(), @as(u64, @bitCast(physical_addr)) });
+        @panic("Overwritten present page");
     }
-    const entry = &pt_mapping.mappings[vaddr.pt_idx];
 
-    writeEntry(entry, phys, flags);
+    writeEntry(entry, physical_addr, flags);
+    log.debug("entry after mapping({*}): 0x{X}", .{ entry, @as(u64, @bitCast(entry.*)) });
 }
 
-fn getOrCreateLevel(mapping: *PageMapping, index: u9) Error!*PageMapping {
-    const next_level: *PageMapping.Entry = &mapping.mappings[index];
+pub fn getPageTableEntry(self: *const Self, vaddr: Pml4VirtualAddress, flags: MmapFlags) BootloaderError!*PageMapping.Entry {
+    const pml4_mapping: *PageMapping = @ptrFromInt(self.root);
+    log.debug("PML4: {*}", .{pml4_mapping});
+    const pdp_mapping = try getOrCreateMapping(pml4_mapping, vaddr.pml4_idx);
+    log.debug("PDP: {*}", .{pdp_mapping});
+    const pd_mapping = try getOrCreateMapping(pdp_mapping, vaddr.pdp_idx);
+    log.debug("PD: {*}", .{pd_mapping});
+    const pt_mapping = try getOrCreateMapping(pd_mapping, vaddr.pd_idx);
+    log.debug("PT: {*}", .{pt_mapping});
+    if (flags.page_size == .large) {
+        const entry = &pd_mapping.mappings[vaddr.pd_idx];
+        return entry;
+    }
+    const entry = &pt_mapping.mappings[vaddr.pt_idx];
+    return entry;
+}
+
+fn getOrCreateMapping(mapping: *PageMapping, idx: u9) BootloaderError!*PageMapping {
+    const next_level: *PageMapping.Entry = &mapping.mappings[idx];
     if (!next_level.present) {
-        const page = try mm.allocatePages(1);
-        writeEntry(next_level, @intFromPtr(page.ptr), MmapFlags{ .present = true, .read_write = .read_write });
-        return @ptrCast(page);
+        const page_ptr = try MemHelper.allocatePages(1, .PAGING);
+        writeEntry(next_level, @intFromPtr(page_ptr), .{ .present = true, .read_write = .read_write });
+        return @ptrCast(page_ptr);
     }
     const addr = next_level.getAddr();
     return @ptrFromInt(addr);
 }
 
-// TEST: make sure PageMapping.Entry have the correct format
-fn writeEntry(entry: *PageMapping.Entry, paddr: PhysAddr, flags: MmapFlags) void {
+fn writeEntry(entry: *PageMapping.Entry, paddr: u64, flags: MmapFlags) void {
     entry.* = @bitCast(paddr | @as(u64, @bitCast(flags)));
 }
 
-test writeEntry {
+pub fn print(self: *const Self) void {
+    const pml4_mapping: *PageMapping = @ptrFromInt(self.root);
+    var vaddr: Pml4VirtualAddress = .{};
+    pml4_mapping.print(self.levels, &vaddr);
+}
+
+test "write entry" {
     const entry = PageMapping.Entry{ .addr = 0xC00CAFEB, .present = true };
     try std.testing.expectEqual(@as(u64, @bitCast(entry)), 0xC00CAFEB003);
 }
 
-test "get Entry addr" {
+test "get addr from entry" {
     const entry = PageMapping.Entry{ .addr = 0xC00CAFEB, .present = true };
     try std.testing.expectEqual(entry.getAddr(), 0xC00CAFEB000);
 }
 
-test getOrCreateLevel {
-    var page_map = PageMapping{ .mappings = [_]PageMapping.Entry{.{}} ** PageMapping.ENTIRES };
+test "get present mapping" {
+    var page_map = PageMapping{ .mappings = [_]PageMapping.Entry{.{}} ** 512 };
     page_map.mappings[10] = PageMapping.Entry{ .addr = 0xC00CAFEB, .present = true };
-
-    {
-        const mapping = try getOrCreateLevel(&page_map, 10);
-        try std.testing.expectEqual(@intFromPtr(mapping), 0xC00CAFEB000);
-    }
-
-    {
-        const mapping = try getOrCreateLevel(&page_map, 11); // NOTE: does not exist, should create it
-        const addr = page_map.mappings[11].getAddr();
-        defer {
-            // free the page
-            const page_ptr: [*]align(mm.ARCH_PAGE_SIZE) u8 = @ptrFromInt(addr);
-            const page = page_ptr[0..mm.ARCH_PAGE_SIZE]; // 1 page
-            std.testing.allocator.free(page);
-        }
-
-        try std.testing.expectEqual(@intFromPtr(mapping), addr);
-        try std.testing.expect(page_map.mappings[11].present);
-    }
-}
-
-pub fn print(self: *const Self) void {
-    log.info("Entry: vaddr\t->\tpaddr\t\t=\tFull Entry", .{});
-    self.mapping.print(self.levels);
+    const result = try getOrCreateMapping(&page_map, 10);
+    try std.testing.expectEqual(@as(u64, @intFromPtr(result)), 0xC00CAFEB000);
 }

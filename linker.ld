@@ -1,37 +1,63 @@
+OUTPUT_FORMAT("elf64-x86-64", "elf64-x86-64", "elf64-x86-64")
+OUTPUT_ARCH(i386:x86-64)
 ENTRY(__kernel_entry)
 
-/* Changes to KERNEL_ADDR_OFFSET must also be made to KERNEL_PAGE_NUMBER in boot.zig */
-KERNEL_PHYS_START = 1M;
-KERNEL_VIRT_START = 1M; /* identical kernel virtual address */
+fb          = 0xfffffffff8000000;
+bootinfo    = 0xffffffff80000000;
+env	    = 0xffffffff80001000;
 
-fb = 0xFFFFFFFFdeadbeef;
-bootinfo = 0xFFFFFFFFcafebabe;
+SECTIONS
+{
+  . = 0xffffffff80002000;
+	.text ALIGN(4K):
+	{
+		*(.text .stub .text.* .gnu.linkonce.t.*)
+	} = 0x90909090
 
-SECTIONS {
-	. = 1M;
+  .init.text ALIGN(4K): {
+   *(.init.text)
+  }
 
-	.text : ALIGN(4K) {
-		KEEP(*(.multiboot))
-		*(.text)
+	.rodata	ALIGN(4K)	:
+	{
+		*(.rodata .rodata.* .gnu.linkonce.r.*)
+	}
+	.rodata1	:
+	{
+		*(.rodata1)
 	}
 
-	.rodata : ALIGN(4K) {
-		*(.rodata)
+	.data	ALIGN(4K)	:
+	{
+		*(.data .data.* .gnu.linkonce.d.*)
+		*(.got)
+	}
+	.data1		:
+	{
+		*(.data1)
 	}
 
-	.data : ALIGN(4K) {
-		*(.data)
-	}
-
-	.bss : ALIGN(4K) {
+	.bss	ALIGN(4K) 	:
+	{
+		*(.dynbss)
+		*(.bss .bss.* .gnu.linkonce.b.*)
 		*(COMMON)
-		*(.bss)
-		*(.kernel_heap)
 	}
 
 	.bss.stack : ALIGN(4K) {
 		KEEP(*(.bss.stack))
 	}
+	
+	.heap ALIGN(4K) (NOLOAD) :
+	{
+    . = ALIGN(4K);
+    *(.kernel_heap)
+	}
 
-	KERNEL_PHYS_END = .;
+	. = ALIGN(4K);
+	_kernel_end = .;
+	PROVIDE(_kernel_end = .);
+
+/DISCARD/ : { *(.note.GNU-stack) *(.gnu_debuglink) *(.exitcall.exit) *(.exit.data) *(.exit.text) }
 }
+
