@@ -57,7 +57,7 @@ pub const BootInfo = extern struct {
         }
     };
 
-    magic: [4]u8 = .{ 'l', 'A', 'z', 'Y' }, //0x464C434E
+    magic: [4]u8 = .{ 'F', 'L', 'C', 'N' }, //0x464C434E
     size: u32 = 96,
     bootloader_type: BootloaderType,
     unused0: [3]u8 = undefined,

@@ -4,7 +4,7 @@ const elf = std.elf;
 const Globals = @import("globals.zig");
 const BootloaderError = @import("errors.zig").BootloaderError;
 const Constants = @import("constants.zig");
-const Address = @import("AddressSpace.zig").Address;
+const Address = @import("address_space.zig").Address;
 const MemHelper = @import("mem_helper.zig");
 const debug = @import("debug.zig");
 

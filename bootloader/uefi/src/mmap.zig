@@ -3,7 +3,7 @@ const uefi = std.os.uefi;
 const Globals = @import("globals.zig");
 const BootloaderError = @import("errors.zig").BootloaderError;
 const Constants = @import("constants.zig");
-const BootInfo = @import("BootInfo.zig").BootInfo;
+const BootInfo = @import("bootinfo.zig").BootInfo;
 const MemHelper = @import("mem_helper.zig");
 
 const log = std.log.scoped(.mmap);

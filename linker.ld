@@ -44,10 +44,6 @@ SECTIONS
 		*(COMMON)
 	}
 
-	.bss.stack : ALIGN(4K) {
-		KEEP(*(.bss.stack))
-	}
-	
 	.heap ALIGN(4K) (NOLOAD) :
 	{
     . = ALIGN(4K);
@@ -60,4 +56,5 @@ SECTIONS
 
 /DISCARD/ : { *(.note.GNU-stack) *(.gnu_debuglink) *(.exitcall.exit) *(.exit.data) *(.exit.text) }
 }
+
 

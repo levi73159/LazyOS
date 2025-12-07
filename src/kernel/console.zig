@@ -210,40 +210,60 @@ pub fn dbgPrint(comptime fmt: []const u8, args: anytype) void {
     dbgWriter().print(fmt, args) catch {};
 }
 
-pub fn panic(msg: []const u8, trace: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
+pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
     // white on red
     dbg("\x1b[97;41m");
     dbgPrint("!!! KERNEL PANIC !!!\n{s}\n", .{msg});
 
-    if (trace) |t| {
-        dbgPrint("trace: {f}\n", .{t});
-        dbgPrint("return address: {?x}\n", .{ret_addr});
-    } else {
-        dbgPrint("no trace\n", .{});
-    }
+    dbgPrint("return address: {?x}\n", .{ret_addr});
     io.hlt();
 }
 
-const WriteError = error{};
-const ConWriter = std.Io.GenericWriter(void, WriteError, writefn);
-const DbgWriter = std.io.GenericWriter(void, WriteError, dbgWriteFn);
+pub fn writeFn(comptime func: fn ([]const u8) void) fn (
+    w: *std.Io.Writer,
+    data: []const []const u8,
+    splat: usize,
+) std.Io.Writer.Error!usize {
+    const Inner = struct {
+        fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
+            _ = w;
+            _ = splat; // if unused
 
-fn writefn(_: void, bytes: []const u8) WriteError!usize {
-    write(bytes);
-    return bytes.len;
+            var total: usize = 0;
+
+            for (data) |chunk| {
+                func(chunk);
+                total += chunk.len;
+            }
+
+            return total;
+        }
+    };
+
+    return Inner.drain;
 }
 
-fn dbgWriteFn(_: void, bytes: []const u8) WriteError!usize {
-    dbg(bytes);
-    return bytes.len;
+pub fn getVTable(comptime func: fn ([]const u8) void) std.Io.Writer.VTable {
+    return .{
+        .drain = writeFn(func),
+        .sendFile = std.Io.Writer.unimplementedSendFile,
+        .flush = std.Io.Writer.defaultFlush,
+        .rebase = std.Io.Writer.defaultRebase,
+    };
 }
 
-fn writer() ConWriter {
-    return ConWriter{ .context = {} };
+const ConVtable = getVTable(write);
+const DbgVtable = getVTable(dbg);
+
+var con_writer = std.Io.Writer{ .buffer = &.{}, .vtable = &ConVtable };
+var dbg_writer = std.Io.Writer{ .buffer = &.{}, .vtable = &DbgVtable };
+
+fn writer() *std.Io.Writer {
+    return &con_writer;
 }
 
-fn dbgWriter() DbgWriter {
-    return DbgWriter{ .context = {} };
+fn dbgWriter() *std.Io.Writer {
+    return &dbg_writer;
 }
 
 pub fn setFg(fg: vga.Color) void {

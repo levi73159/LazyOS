@@ -1,8 +1,6 @@
 const builtin = @import("builtin");
 
 pub const io = @import("arch/io.zig");
-pub const Multiboot = @import("arch/multiboot.zig");
-pub const MultibootInfo = Multiboot.MultibootInfo;
 
 pub const pic = @import("arch/pic.zig");
 pub const isr = @import("arch/isr.zig");

@@ -3,14 +3,14 @@ const uefi = std.os.uefi;
 const serial = @import("serial.zig");
 const logger = @import("logger.zig");
 const Globals = @import("globals.zig");
-const BootInfo = @import("BootInfo.zig").BootInfo;
+const BootInfo = @import("bootinfo.zig").BootInfo;
 const Config = @import("config.zig");
 const Video = @import("video.zig");
 const FileSystem = @import("fs.zig");
-const Mmap = @import("mem.zig");
-const KernelLoader = @import("loader.zig");
+const Mmap = @import("mmap.zig");
+const KernelLoader = @import("kernel_loader.zig");
 const Constants = @import("constants.zig");
-const AddressSpace = @import("AddressSpace.zig");
+const AddressSpace = @import("address_space.zig");
 const BootloaderError = @import("errors.zig").BootloaderError;
 const MemHelper = @import("mem_helper.zig");
 
@@ -113,7 +113,7 @@ pub fn main() uefi.Status {
     std.log.debug("  entrypoint: 0x{x}", .{kernel_info.entrypoint});
     std.log.debug("  entry count: {d}", .{kernel_info.segment_count});
     if (kernel_info.debug_info_ptr) |_| {
-        std.log.debug("  debug info loaded @ 0x{?x}", .{kernel_info.debug_info_ptr});
+        std.log.debug("  debug info loaded @ 0x{x}", .{kernel_info.debug_info_ptr});
     }
     for (0..kernel_info.segment_count) |idx| {
         const mapping = kernel_info.segment_mappings[idx];
