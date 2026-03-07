@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const arch = @import("arch.zig");
 const io = @import("arch.zig").io;
 const console = @import("console.zig");
@@ -6,8 +7,7 @@ const hal = @import("hal.zig");
 const kb = @import("keyboard.zig");
 const mouse = @import("mouse.zig");
 const pit = @import("pit.zig");
-const pmen = @import("memory/pmem.zig");
-const BootInfo = @import("bootinfo.zig").BootInfo;
+const BootInfo = @import("arch/bootinfo.zig").BootInfo;
 
 const heap = @import("memory/heap.zig");
 
@@ -18,7 +18,7 @@ const regs = arch.registers;
 
 const log = std.log.scoped(.kernel);
 
-pub fn _start(mb: *BootInfo) callconv(.c) void {
+pub fn _start(mb: *const BootInfo) callconv(.c) void {
     // const kernel_start: usize = @intFromPtr(&__kernel_start);
     // const kernel_end: usize = @intFromPtr(&__kernel_end);
     // arch.paging.init(kernel_start, kernel_end);
@@ -40,31 +40,10 @@ pub fn _start(mb: *BootInfo) callconv(.c) void {
     pit.init(100);
     kb.init();
 
-    // check bit 6 to see if boot info is valid
-    if (mb.flags >> 6 & 1 != 1) {
-        @panic("Multiboot info is invalid");
-    } else {
-        log.debug("Multiboot info is valid", .{});
-    }
-
-    const entries = mb.getMemoryMap();
-
-    log.debug("Memory map:", .{});
-    for (entries) |entry| {
-        log.debug("Start addr: {x} | next: {x} | size: {x} | type: {s}", .{
-            entry.addr,
-            entry.next,
-            entry.size,
-            @tagName(entry.type),
-        });
-    }
-
     const cpu = arch.CPU.init() catch |err| blk: {
         log.err("Failed to get the CPU: {s}", .{@errorName(err)});
         break :blk arch.CPU.unknown;
     };
-
-    pmen.init(mb, heap.allocator());
 
     console.echoToHost(false);
     io.sti();
@@ -92,15 +71,14 @@ fn getFreeRegion(map: []arch.Multiboot.MemoryMapEntry) ?arch.Multiboot.MemoryMap
 }
 
 fn main(_: arch.CPU, screen: *Screen) !void {
-    screen.createDoubleBuffer(heap.allocator()) catch |err| {
-        log.err("Failed to create double buffer: {s}", .{@errorName(err)});
-        log.err("Neaded {x} bytes", .{screen.buffer.len * @sizeOf(u32)});
-    };
-    screen.use_double_buffer = true;
-
     std.log.debug("main", .{});
-    log.info("Waiting 5 seconds...", .{});
-    log.debug("5 seconds wait", .{});
+    const is64bit = builtin.target.cpu.arch == .x86_64;
+    if (is64bit) {
+        console.print("Welcome to LazyOS 64-bit\n", .{});
+    } else {
+        console.print("Welcome to LazyOS 32-bit\n", .{});
+    }
+    console.print("Type 'help' for a list of commands\n", .{});
 
     var buf: [256]u8 = undefined;
     while (true) {

@@ -6,14 +6,14 @@ if [ "$#" -le 0 ]; then
     exit 1
 fi
 
-QEMU_ARGS="-S -gdb stdio -m 32 -hda $1"
+QEMU_ARGS="-S -gdb stdio -m 32 -cdrom $1"
 
 # kernel starts at 1M aka 0x100000
 # layout asm
 cat > .gdbinit << EOF
 symbol-file $PWD/zig-out/bin/kernel
 set disassembly-flavor intel
-target remote | qemu-system-i386 $QEMU_ARGS
+target remote | qemu-system-x86_64 $QEMU_ARGS
 EOF
 
 gdb -x .gdbinit

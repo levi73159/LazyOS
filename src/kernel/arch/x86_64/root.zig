@@ -1,9 +1,0 @@
-pub const gdt = @import("gdt.zig");
-pub const idt = @import("idt.zig");
-pub const isr = @import("isr.zig");
-pub const registers = @import("registers.zig");
-pub const pic = @import("../x86/pic.zig");
-pub const irq = @import("../x86/irq.zig");
-pub const Multiboot = @import("../x86/multiboot.zig");
-pub const MultibootInfo = Multiboot.MultibootInfo;
-pub const CPU = @import("../x86/CPU.zig");

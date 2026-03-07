@@ -1,5 +1,6 @@
 //! generate a struct that represents a CPU
 const std = @import("std");
+const builtin = @import("builtin");
 
 const Self = @This();
 
@@ -48,13 +49,55 @@ vendor: CpuVendor,
 brand_str: [48:0]u8,
 // TODO: add info about TLB/caches and so on and features
 
+inline fn as(comptime cmd: []const u8) []const u8 {
+    if (builtin.cpu.arch != .x86_64)
+        return cmd;
+
+    comptime {
+        return replaceAll(cmd);
+    }
+}
+
+fn replaceAll(comptime s: []const u8) []const u8 {
+    var buf: [4096]u8 = undefined;
+    var i: usize = 0;
+    var o: usize = 0;
+
+    while (i < s.len) {
+        if (std.mem.startsWith(u8, s[i..], "pushf")) {
+            buf[o..][0..6].* = "pushfq".*;
+            i += 5;
+            o += 6;
+        } else if (std.mem.startsWith(u8, s[i..], "popf")) {
+            buf[o..][0..5].* = "popfq".*;
+            i += 4;
+            o += 5;
+        } else if (std.mem.startsWith(u8, s[i..], "push ")) {
+            buf[o..][0..6].* = "pushq ".*;
+            i += 5;
+            o += 6;
+        } else if (std.mem.startsWith(u8, s[i..], "pop ")) {
+            buf[o..][0..5].* = "popq ".*;
+            i += 4;
+            o += 5;
+        } else {
+            buf[o] = s[i];
+            i += 1;
+            o += 1;
+        }
+    }
+
+    return buf[0..o];
+}
+
 fn checkCompatibility() bool {
     const ID_BIT: u64 = 1 << 21;
 
     // get current EFLAGS
-    const eflags = asm volatile (
-        \\ pushf
-        \\ pop %[out]
+    const eflags = asm volatile (as(
+            \\ pushf
+            \\ pop %[out]
+        )
         : [out] "=r" (-> usize),
     );
 
@@ -62,23 +105,26 @@ fn checkCompatibility() bool {
     const modified = eflags ^ ID_BIT;
 
     // write modified EFLAGS
-    asm volatile (
-        \\ push %[in]
-        \\ popf
+    asm volatile (as(
+            \\ push %[in]
+            \\ popf
+        )
         :
         : [in] "r" (modified),
     );
 
-    const updated = asm volatile (
-        \\ pushf
-        \\ pop %[out]
+    const updated = asm volatile (as(
+            \\ pushf
+            \\ pop %[out]
+        )
         : [out] "=r" (-> usize),
     );
 
     // Restore the original flags (to avoid messing up system state)
-    asm volatile (
-        \\ push %[in]
-        \\ popf
+    asm volatile (as(
+            \\ push %[in]
+            \\ popf
+        )
         :
         : [in] "r" (eflags),
     );

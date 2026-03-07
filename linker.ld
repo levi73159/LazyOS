@@ -1,60 +1,66 @@
-OUTPUT_FORMAT("elf64-x86-64", "elf64-x86-64", "elf64-x86-64")
-OUTPUT_ARCH(i386:x86-64)
-ENTRY(__kernel_entry)
+ENTRY(boot_init)
 
-fb          = 0xfffffffff8000000;
-bootinfo    = 0xffffffff80000000;
-env	    = 0xffffffff80001000;
+/* Define the program headers we want so the bootloader gives us the right */
+/* MMU permissions; this also allows us to exert more control over the linking */
+/* process. */
+PHDRS
+{
+    limine_requests PT_LOAD;
+    text PT_LOAD;
+    rodata PT_LOAD;
+    data PT_LOAD;
+}
 
 SECTIONS
 {
-  . = 0xffffffff80002000;
-	.text ALIGN(4K):
-	{
-		*(.text .stub .text.* .gnu.linkonce.t.*)
-	} = 0x90909090
+    /* We want to be placed in the topmost 2GiB of the address space, for optimisations */
+    /* and because that is what the Limine spec mandates. */
+    /* Any address in this region will do, but often 0xffffffff80000000 is chosen as */
+    /* that is the beginning of the region. */
+    . = 0xffffffff80000000;
 
-  .init.text ALIGN(4K): {
-   *(.init.text)
-  }
+    /* Define a section to contain the Limine requests and assign it to its own PHDR */
+    .limine_requests : {
+        KEEP(*(.limine_requests_start))
+        KEEP(*(.limine_requests))
+        KEEP(*(.limine_requests_end))
+    } :limine_requests
 
-	.rodata	ALIGN(4K)	:
-	{
-		*(.rodata .rodata.* .gnu.linkonce.r.*)
-	}
-	.rodata1	:
-	{
-		*(.rodata1)
-	}
+    /* Move to the next memory page for .text */
+    . = ALIGN(CONSTANT(MAXPAGESIZE));
 
-	.data	ALIGN(4K)	:
-	{
-		*(.data .data.* .gnu.linkonce.d.*)
-		*(.got)
-	}
-	.data1		:
-	{
-		*(.data1)
-	}
+    .text : {
+        *(.text .text.*)
+    } :text
 
-	.bss	ALIGN(4K) 	:
-	{
-		*(.dynbss)
-		*(.bss .bss.* .gnu.linkonce.b.*)
-		*(COMMON)
-	}
+    /* Move to the next memory page for .rodata */
+    . = ALIGN(CONSTANT(MAXPAGESIZE));
 
-	.heap ALIGN(4K) (NOLOAD) :
-	{
-    . = ALIGN(4K);
-    *(.kernel_heap)
-	}
+    .rodata : {
+        *(.rodata .rodata.*)
+    } :rodata
 
-	. = ALIGN(4K);
-	_kernel_end = .;
-	PROVIDE(_kernel_end = .);
+    /* Add a .note.gnu.build-id output section in case a build ID flag is added to the */
+    /* linker command. */
+    .note.gnu.build-id : {
+        *(.note.gnu.build-id)
+    } :rodata
 
-/DISCARD/ : { *(.note.GNU-stack) *(.gnu_debuglink) *(.exitcall.exit) *(.exit.data) *(.exit.text) }
+    /* Move to the next memory page for .data */
+    . = ALIGN(CONSTANT(MAXPAGESIZE));
+
+    .data : {
+        *(.data .data.*)
+    } :data
+
+    .bss : {
+        *(.bss .bss.*)
+        *(COMMON)
+    } :data
+
+    /* Discard .note.* and .eh_frame* since they may cause issues on some hosts. */
+    /DISCARD/ : {
+        *(.eh_frame*)
+        *(.note .note.*)
+    }
 }
-
-

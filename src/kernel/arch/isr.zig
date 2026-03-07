@@ -133,20 +133,41 @@ pub fn getVector(comptime number: u8) ?InterruptFn {
             fn handler() callconv(.naked) noreturn {
                 asm volatile ("cli");
                 if (Exception.hasErrorNumber(number)) {
-                    asm volatile (
-                        \\push %[num]
-                        \\jmp interruptCommon
-                        :
-                        : [num] "r" (@as(usize, number)),
-                    );
+                    if (builtin.cpu.arch == .x86_64) {
+                        asm volatile (
+                            \\push %[num]
+                            \\jmp interruptCommon
+                            :
+                            : [num] "r" (@as(usize, number)),
+                              [interruptCommon] "X" (@intFromPtr(&interruptCommon)),
+                        );
+                    } else {
+                        asm volatile (
+                            \\push %[num]
+                            \\jmp interruptCommon
+                            :
+                            : [num] "r" (@as(usize, number)),
+                        );
+                    }
                 } else {
-                    asm volatile (
-                        \\push $0
-                        \\push %[num]
-                        \\jmp interruptCommon
-                        :
-                        : [num] "r" (@as(usize, number)),
-                    );
+                    asm volatile ("push $0");
+
+                    if (builtin.cpu.arch == .x86_64) {
+                        asm volatile (
+                            \\push %[num]
+                            \\jmp interruptCommon
+                            :
+                            : [num] "r" (@as(usize, number)),
+                              [interruptCommon] "X" (@intFromPtr(&interruptCommon)),
+                        );
+                    } else {
+                        asm volatile (
+                            \\push %[num]
+                            \\jmp interruptCommon
+                            :
+                            : [num] "r" (@as(usize, number)),
+                        );
+                    }
                 }
             }
         }.handler,
@@ -238,6 +259,8 @@ export fn interruptCommon() callconv(.naked) noreturn {
             \\ add $10, %%rsp
             \\ 
             \\ iretq
+            :
+            : [interruptHandler] "X" (@intFromPtr(&interruptHandler)),
         ),
         else => unreachable,
     }

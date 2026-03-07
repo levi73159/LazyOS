@@ -227,19 +227,27 @@ pub fn writeFn(comptime func: fn ([]const u8) void) fn (
     const Inner = struct {
         fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
             _ = w;
-            _ = splat; // if unused
-
             var total: usize = 0;
 
-            for (data) |chunk| {
+            // write non-splat chunks
+            for (data[0 .. data.len - splat]) |chunk| {
                 func(chunk);
                 total += chunk.len;
+            }
+
+            // write splat chunk splat times
+            if (splat > 0) {
+                const repeated = data[data.len - 1];
+                var i: usize = 0;
+                while (i < splat) : (i += 1) {
+                    func(repeated);
+                    total += repeated.len;
+                }
             }
 
             return total;
         }
     };
-
     return Inner.drain;
 }
 
