@@ -8,6 +8,8 @@ const kb = @import("keyboard.zig");
 const mouse = @import("mouse.zig");
 const pit = @import("pit.zig");
 const BootInfo = @import("arch/bootinfo.zig").BootInfo;
+const pmem = @import("memory/pmem.zig");
+const paging = @import("arch/paging.zig");
 
 const heap = @import("memory/heap.zig");
 
@@ -19,6 +21,7 @@ const regs = arch.registers;
 const log = std.log.scoped(.kernel);
 
 pub fn _start(mb: *const BootInfo) callconv(.c) void {
+    pmem.init(mb.memory_map, mb.hhdm_offset);
     // const kernel_start: usize = @intFromPtr(&__kernel_start);
     // const kernel_end: usize = @intFromPtr(&__kernel_end);
     // arch.paging.init(kernel_start, kernel_end);

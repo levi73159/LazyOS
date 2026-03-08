@@ -1,11 +1,12 @@
 pub const HEADER_MAGIC = 0x1BADB002;
+pub const MemoryMapEntry = @import("limine.zig").MemmapEntry;
+
+var boot_info: BootInfo = undefined;
 
 pub const BootInfo = struct {
-    framebuffer_addr: u64,
-    framebuffer_pitch: u32,
-    framebuffer_width: u32,
-    framebuffer_height: u32,
-    framebuffer_bpp: u8,
+    framebuffer: Framebuffer,
+    memory_map: []*const MemoryMapEntry,
+    hhdm_offset: u64,
 
     pub fn getFramebuffer(self: BootInfo, comptime T: type) []T {
         if (self.framebuffer_bpp != @typeInfo(T).int.bits) @panic("Framebuffer pixel size mismatch");
@@ -17,103 +18,27 @@ pub const BootInfo = struct {
     }
 };
 
-pub const MultibootInfo = extern struct {
-    flags: u32,
-    mem_lower: u32,
-    mem_upper: u32,
-    boot_device: u32,
-    cmdline: u32,
-    mods_count: u32,
-    mods_addr: u32,
-    u: extern union {
-        aout_sym: AOUTSymbolTable,
-        elf_sec: ElfSectionHeaderTable,
-    },
+pub fn registerBootInfo(info: BootInfo) *const BootInfo {
+    boot_info = info;
+    return &boot_info;
+}
 
-    mmap_length: u32,
-    mmap_addr: u32,
+pub inline fn getBootInfo() *const BootInfo {
+    return &boot_info;
+}
 
-    drives_length: u32,
-    drives_addr: u32,
-
-    config_table: u32,
-    boot_loader_name: u32,
-    apm_table: u32,
-
-    // video
-    vbe_control_info: u32,
-    vbe_mode_info: u32,
-    vbe_mode: u16,
-    vbe_interface_seg: u16,
-    vbe_interface_off: u16,
-    vbe_interface_len: u16,
-
-    framebuffer_addr: u64,
-    framebuffer_pitch: u32,
-    framebuffer_width: u32,
-    framebuffer_height: u32,
-    framebuffer_bpp: u8,
-    framebuffer_type: FramebufferType,
-
-    framebuffer: extern union {
-        palette: extern struct { palette_addr: u32, num_colors: u16 },
-        rgb: extern struct {
-            red_field_pos: u8,
-            red_mask_size: u8,
-            green_field_pos: u8,
-            green_mask_size: u8,
-            blue_field_pos: u8,
-            blue_mask_size: u8,
-        },
-    },
-
-    pub fn getMemoryMap(self: MultibootInfo) []MemoryMapEntry {
-        const ptr: [*]MemoryMapEntry = @ptrFromInt(self.mmap_addr);
-        const slice = ptr[0 .. self.mmap_length / @sizeOf(MemoryMapEntry)];
-        return slice;
-    }
-
-    pub fn getFramebuffer(self: MultibootInfo, comptime T: type) []T {
-        if (self.framebuffer_bpp != @typeInfo(T).int.bits) @panic("Framebuffer pixel size mismatch");
-
-        const addr: usize = @intCast(self.framebuffer_addr);
-        const ptr: [*]u8 = @ptrFromInt(addr);
-        const slice = ptr[0 .. self.framebuffer_pitch * self.framebuffer_height];
-        return @ptrCast(@alignCast(slice));
-    }
+pub const Framebuffer = struct {
+    address: u64,
+    width: u64,
+    height: u64,
+    pitch: u64,
+    bpp: u16,
 };
 
-pub const AOUTSymbolTable = extern struct {
-    tabsize: u32,
-    strsize: u32,
-    addr: u32,
-    reserved: u32,
-};
+pub inline fn toVirtual(phys: u64) u64 {
+    return phys + getBootInfo().hhdm_offset;
+}
 
-pub const ElfSectionHeaderTable = extern struct {
-    num: u32,
-    size: u32,
-    addr: u32,
-    shndx: u32,
-};
-
-pub const MemoryType = enum(u32) {
-    available = 1,
-    reserved = 2,
-    acpi_reclaimable = 3,
-    nvs = 4,
-    bad_ram = 5,
-};
-
-pub const MemoryMapEntry = extern struct {
-    next: u32 align(1), // how many bytes to skip to get to the next entry
-    addr: u64 align(1),
-    size: u64 align(1),
-    type: MemoryType align(1),
-};
-
-pub const FramebufferType = enum(u8) {
-    indexed = 0,
-    rgb = 1,
-    direct = 2,
-};
+pub inline fn toPhysical(virt: u64) u64 {
+    return virt - getBootInfo().hhdm_offset;
+}

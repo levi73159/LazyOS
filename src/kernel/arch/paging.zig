@@ -1,93 +1,134 @@
-pub const PAGE_SIZE = 4096;
-const HUGE_SIZE = 2 * 1024 * 1024;
+const std = @import("std");
+const pmem = @import("../memory/pmem.zig");
+const bootinfo = @import("bootinfo.zig");
 
-const KERNEL_BASE = 0xffffffff80000000;
+const log = std.log.scoped(.paging);
 
-const Entry = packed struct(u64) {
-    present: bool = false,
-    writable: bool = false,
-    user: bool = false,
-    write_through: bool = false,
-    cache_disable: bool = false,
-    accessed: bool = false,
-    dirty: bool = false,
-    huge: bool = false,
-    global: bool = false,
-    _ignored: u3 = 0,
-    addr: u40 = 0,
-    _reserved: u11 = 0,
-    nx: bool = false,
+const PAGE_SIZE = 4096;
 
-    pub fn set(self: *Entry, phys: u64, flags: u64) void {
-        self.* = @bitCast((phys & 0x000ffffffffff000) | flags);
+const VirtualAddress = packed struct(u64) {
+    offset: u12 = 0,
+    pt_index: u9 = 0,
+    pd_index: u9 = 0,
+    pdpt_index: u9 = 0,
+    pml4_index: u9 = 0,
+    sign_extension: u16 = 0,
+
+    pub fn from(address: u64) VirtualAddress {
+        return @bitCast(address);
     }
 };
 
-var pml4 align(PAGE_SIZE) = [_]Entry{.{}} ** 512;
-var pdpt align(PAGE_SIZE) = [_]Entry{.{}} ** 512;
-var pd align(PAGE_SIZE) = [_]Entry{.{}} ** 512;
+const PageFlags = struct {
+    present: bool = false,
+    writeable: bool = false,
+    user: bool = false,
+    write_through: bool = false,
+    cache_disabled: bool = false,
+    page_size: bool = false,
+    execute_disable: bool = false,
 
-pub fn setupPaging(kernel_phys_start: u64, kernel_phys_end: u64, offset: u64) void {
-    // Clear tables
-    @memset(&pml4, .{});
-    @memset(&pdpt, .{});
-    @memset(&pd, .{});
+    pub const rw = PageFlags{ .present = true, .writeable = true };
+};
 
-    // Link tables
-    pml4[511].set(@intFromPtr(&pdpt) - offset, 0x3); // present + writable
-    pdpt[510].set(@intFromPtr(&pd) - offset, 0x3);
+const PageEntry = packed struct(u64) {
+    present: bool = false,
+    writeable: bool = false,
+    user: bool = false,
+    write_through: bool = false,
+    cache_disabled: bool = false,
+    accessed: bool = false,
+    dirty: bool = false, // reserved in non-page-sized entries
+    page_size: bool = false,
+    avl: u4 = 0, // available to software, not reserved
+    address: u40 = 0,
+    __reserved2: u11 = 0,
+    execute_disable: bool = false,
 
-    // Identity map first 1GiB using huge pages
-    var i: usize = 0;
-    while (i < 512) : (i += 1) {
-        pd[i].set(@as(u64, i) * HUGE_SIZE, 0x83);
+    pub fn init(address: u64, flags: PageFlags) PageEntry {
+        std.debug.assert(address & 0xFFF == 0); // address must be page aligned
+        return .{
+            .present = flags.present,
+            .writeable = flags.writeable,
+            .user = flags.user,
+            .write_through = flags.write_through,
+            .cache_disabled = flags.cache_disabled,
+            .page_size = flags.page_size,
+            .execute_disable = flags.execute_disable,
+            .address = @truncate(address >> 12),
+        };
     }
 
-    // Map kernel higher-half using huge pages
-    var phys = kernel_phys_start & ~(@as(u64, HUGE_SIZE - 1));
-    var virt: u64 = KERNEL_BASE;
-
-    while (phys < kernel_phys_end) : ({
-        phys += HUGE_SIZE;
-        virt += HUGE_SIZE;
-    }) {
-        const index = (virt >> 21) & 0x1ff;
-        pd[index].set(phys, 0x83);
+    pub fn getAddress(self: PageEntry) u64 {
+        return @as(u64, self.address) << 12;
     }
+};
 
-    enablePaging(@intFromPtr(&pml4) - offset);
+pub const PageTable = [512]PageEntry;
+
+var pml4: PageTable align(PAGE_SIZE) = .{.{}} ** 512;
+
+pub fn createPageTable() *PageTable {
+    const phys = pmem.allocPage() catch {
+        @panic("Failed to allocate page: Out of memory");
+    };
+    std.debug.assert(phys % PAGE_SIZE == 0); // should always hold
+
+    const virt = bootinfo.toVirtual(phys);
+    const table: *PageTable align(PAGE_SIZE) = @ptrFromInt(virt);
+    @memset(table, .{});
+
+    return table;
 }
 
-fn enablePaging(pml4_phys: u64) void {
+fn getOrCreatePageTable(table: *PageTable, index: u9) *PageTable {
+    const entry = table[index];
+    if (entry.present) {
+        return @ptrFromInt(bootinfo.toVirtual(entry.getAddress()));
+    } else {
+        const new_table = createPageTable();
+        table[index] = PageEntry.init(bootinfo.toPhysical(@intFromPtr(new_table)), .rw);
+        return new_table;
+    }
+}
+
+// NOTE: virt and phys must be page aligned
+pub fn mapPage(virt: u64, phys: u64, flags: PageFlags) void {
+    const va = VirtualAddress.from(virt);
+
+    std.debug.assert(phys & 0xFFF == 0);
+    std.debug.assert(virt & 0xFFF == 0);
+
+    const pdpt_table = getOrCreatePageTable(&pml4, va.pml4_index);
+    const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index);
+    const pt_table = getOrCreatePageTable(pd_table, va.pd_index);
+
+    pt_table[va.pt_index] = PageEntry.init(phys, flags);
+}
+
+pub fn init(kernel_phys_start: u64, kernel_virt_start: u64, kernel_size: u64) void {
+    log.debug("Initializing paging", .{});
+
+    // map all physical memory at HHDM offset (so toVirtual keeps working and this code still works)
+    const total_memory = pmem.getTotalMemory(); // total_papges * PAGE_SIZE
+    var phys: u64 = 0;
+    while (phys < total_memory) : (phys += PAGE_SIZE) {
+        mapPage(bootinfo.toVirtual(phys), phys, .rw);
+    }
+
+    // map kernel
+    var offset: u64 = 0;
+    while (offset < kernel_size) : (offset += PAGE_SIZE) {
+        mapPage(kernel_virt_start + offset, kernel_phys_start + offset, .rw);
+    }
+
+    // switches to our page tables
+    const pml4_phys = bootinfo.toPhysical(@intFromPtr(&pml4));
     asm volatile (
-        \\ mov %%cr4, %%rax
-        \\ mov $0x20, %%rbx
-        \\ or  %%rbx, %%rax
-        \\ mov %%rax, %%cr4
-        \\ mov %[pml4], %%cr3
-        \\ mov %%cr0, %%rax
-        \\ mov $0x80000000, %%rbx
-        \\ or  %%rbx, %%rax
-        \\ mov %%rax, %%cr0
+        \\mov %[pml4], %%cr3
         :
         : [pml4] "r" (pml4_phys),
-        : .{ .rax = true, .rbx = true, .memory = true });
-}
+        : .{ .memory = true });
 
-pub fn mapPage(virt: u64, phys: u64) void {
-    // Extract indices
-    const pml4_index = (virt >> 39) & 0x1ff;
-    const pdpt_index = (virt >> 30) & 0x1ff;
-    const pd_index = (virt >> 21) & 0x1ff;
-
-    // Ensure PDPT and PD entries exist (you can extend this for real PT)
-    if (pml4[pml4_index].present == false)
-        pml4[pml4_index].set(@intFromPtr(&pdpt), 0x3); // Present + Writable
-
-    if (pdpt[pdpt_index].present == false)
-        pdpt[pdpt_index].set(@intFromPtr(&pd), 0x3); // Present + Writable
-
-    // Map the page in PD (4 KiB, so PT needed)
-    // For now, we’ll use the PD as PT to keep it simple (identity mapping small kernel)
-    pd[pd_index].set(phys, 0x3); // Present + Writable
+    log.debug("Paging initialized", .{});
 }

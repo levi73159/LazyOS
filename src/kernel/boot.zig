@@ -1,6 +1,7 @@
 const std = @import("std");
 const main = @import("main.zig");
 const console = @import("console.zig");
+const bootinfo = @import("arch/bootinfo.zig");
 const BootInfo = @import("arch/bootinfo.zig").BootInfo;
 const paging = @import("arch/paging.zig");
 const limine = @import("arch/limine.zig");
@@ -38,11 +39,11 @@ export var base_revision: [3]u64 linksection(".limine_requests") = .{
 };
 
 export var framebuffer_request: limine.FramebufferRequest linksection(".limine_requests") = .{};
+
 export var memmap_request: limine.MemmapRequest linksection(".limine_requests") = .{};
+export var hhdm_request: limine.HhdmRequest linksection(".limine_requests") = .{};
 
 export var kernel_addr_request: limine.KernelAddressRequest linksection(".limine_requests") = .{};
-
-export var hhdm_request: limine.HhdmRequest linksection(".limine_requests") = .{};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Boot stack
@@ -77,14 +78,22 @@ export fn boot_init() callconv(.naked) noreturn {
 
 export fn boot_init_stage2() callconv(.c) noreturn {
     const fb = framebuffer_request.response.?.framebuffers[0];
-    const mb: BootInfo = .{
-        .framebuffer_addr = @intFromPtr(fb.address),
-        .framebuffer_width = @intCast(fb.width),
-        .framebuffer_height = @intCast(fb.height),
-        .framebuffer_pitch = @intCast(fb.pitch),
-        .framebuffer_bpp = @intCast(fb.bpp),
-    };
-    main._start(&mb);
+
+    const mmap = memmap_request.response.?.entries;
+    const mmap_count = memmap_request.response.?.entry_count;
+    const mb = bootinfo.registerBootInfo(.{
+        .framebuffer = .{
+            .address = @ptrFromInt(fb.address),
+            .width = fb.width,
+            .height = fb.height,
+            .pitch = fb.pitch,
+            .bpp = fb.bpp,
+        },
+        .memory_map = mmap[0..mmap_count],
+        .hddm_offset = hhdm_request.response.?.offset,
+    });
+
+    main._start(mb);
 
     while (true) {
         asm volatile ("hlt");
