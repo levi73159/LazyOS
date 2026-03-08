@@ -66,7 +66,7 @@ const PageEntry = packed struct(u64) {
 
 pub const PageTable = [512]PageEntry;
 
-var pml4: PageTable align(PAGE_SIZE) = .{.{}} ** 512;
+var pml4: PageTable align(PAGE_SIZE) = .{PageEntry{}} ** 512;
 
 pub fn createPageTable() *PageTable {
     const phys = pmem.allocPage() catch {
@@ -74,7 +74,7 @@ pub fn createPageTable() *PageTable {
     };
     std.debug.assert(phys % PAGE_SIZE == 0); // should always hold
 
-    const virt = bootinfo.toVirtual(phys);
+    const virt = bootinfo.toVirtualHHDM(phys);
     const table: *PageTable align(PAGE_SIZE) = @ptrFromInt(virt);
     @memset(table, .{});
 
@@ -84,10 +84,10 @@ pub fn createPageTable() *PageTable {
 fn getOrCreatePageTable(table: *PageTable, index: u9) *PageTable {
     const entry = table[index];
     if (entry.present) {
-        return @ptrFromInt(bootinfo.toVirtual(entry.getAddress()));
+        return @ptrFromInt(bootinfo.toVirtualHHDM(entry.getAddress()));
     } else {
         const new_table = createPageTable();
-        table[index] = PageEntry.init(bootinfo.toPhysical(@intFromPtr(new_table)), .rw);
+        table[index] = PageEntry.init(bootinfo.toPhysicalHHDM(@intFromPtr(new_table)), .rw);
         return new_table;
     }
 }
@@ -106,24 +106,71 @@ pub fn mapPage(virt: u64, phys: u64, flags: PageFlags) void {
     pt_table[va.pt_index] = PageEntry.init(phys, flags);
 }
 
-pub fn init(kernel_phys_start: u64, kernel_virt_start: u64, kernel_size: u64) void {
+const HUGE_PAGE_SIZE = 2 * 1024 * 1024; // 2MB
+
+pub fn mapHugePage(virt: u64, phys: u64, flags: PageFlags) void {
+    const va = VirtualAddress.from(virt);
+    std.debug.assert(phys & (HUGE_PAGE_SIZE - 1) == 0);
+    std.debug.assert(virt & (HUGE_PAGE_SIZE - 1) == 0);
+    const pdpt_table = getOrCreatePageTable(&pml4, va.pml4_index);
+    const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index);
+    // set huge page bit directly in PD, no PT needed
+    pd_table[va.pd_index] = PageEntry.init(phys, .{
+        .present = flags.present,
+        .writeable = flags.writeable,
+        .page_size = true, // this makes it a 2MB page
+        .execute_disable = flags.execute_disable,
+    });
+}
+
+fn mapFramebuffer(fb: bootinfo.Framebuffer) void {
+    const size = fb.width * fb.height * fb.bpp / 8;
+    const phys = bootinfo.toPhysicalHHDM(fb.address);
+    const virt = fb.address;
+
+    var offset: u64 = 0;
+    while (offset < size) : (offset += PAGE_SIZE) {
+        mapPage(virt + offset, phys + offset, .{
+            .present = true,
+            .write_through = true,
+            .writeable = true,
+            .execute_disable = true,
+        });
+    }
+}
+
+pub fn init(mb: *const bootinfo.BootInfo) void {
     log.debug("Initializing paging", .{});
 
     // map all physical memory at HHDM offset (so toVirtual keeps working and this code still works)
     const total_memory = pmem.getTotalMemory(); // total_papges * PAGE_SIZE
+    log.debug("Total memory: {x}", .{total_memory});
+    // replace the 4KB HHDM loop with this
     var phys: u64 = 0;
-    while (phys < total_memory) : (phys += PAGE_SIZE) {
-        mapPage(bootinfo.toVirtual(phys), phys, .rw);
+    while (phys < total_memory) : (phys += HUGE_PAGE_SIZE) {
+        mapHugePage(bootinfo.toVirtualHHDM(phys), phys, .rw);
     }
+    log.debug("Initializing paging", .{});
 
     // map kernel
     var offset: u64 = 0;
-    while (offset < kernel_size) : (offset += PAGE_SIZE) {
-        mapPage(kernel_virt_start + offset, kernel_phys_start + offset, .rw);
+    while (offset < mb.kernel.size) : (offset += PAGE_SIZE) {
+        mapPage(mb.kernel.virt_addr + offset, mb.kernel.phys_addr + offset, .rw);
     }
+    log.debug("Initializing paging", .{});
+
+    mapFramebuffer(mb.framebuffer);
+
+    const pml4_phys = bootinfo.kernelToPhysical(@intFromPtr(&pml4));
+    log.debug("kernel_virt_start: {x}", .{mb.kernel.virt_addr});
+    log.debug("kernel_phys_start: {x}", .{mb.kernel.phys_addr});
+    log.debug("kernel_size: {x}", .{mb.kernel.size});
+    log.debug("pml4_phys: {x}", .{pml4_phys});
+    const pml4_virt = @intFromPtr(&pml4);
+    log.debug("pml4 virt: {x}", .{pml4_virt});
+    log.debug("hhdm offset: {x}", .{bootinfo.getBootInfo().hhdm_offset});
 
     // switches to our page tables
-    const pml4_phys = bootinfo.toPhysical(@intFromPtr(&pml4));
     asm volatile (
         \\mov %[pml4], %%cr3
         :

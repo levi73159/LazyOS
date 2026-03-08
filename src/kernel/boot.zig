@@ -53,6 +53,12 @@ const KERNEL_STACK_SIZE: usize = 1024 * 1024; // 1 MiB
 export var kernel_stack: [KERNEL_STACK_SIZE]u8 align(16) linksection(".bss") = undefined;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Linker script variables
+// ─────────────────────────────────────────────────────────────────────────────
+
+extern const kernel_size: u8;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Entry point — must be .naked, no compiler prologue allowed
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -81,17 +87,17 @@ export fn boot_init_stage2() callconv(.c) noreturn {
 
     const mmap = memmap_request.response.?.entries;
     const mmap_count = memmap_request.response.?.entry_count;
-    const mb = bootinfo.registerBootInfo(.{
-        .framebuffer = .{
-            .address = @ptrFromInt(fb.address),
-            .width = fb.width,
-            .height = fb.height,
-            .pitch = fb.pitch,
-            .bpp = fb.bpp,
-        },
-        .memory_map = mmap[0..mmap_count],
-        .hddm_offset = hhdm_request.response.?.offset,
-    });
+    const mb = bootinfo.registerBootInfo(.{ .framebuffer = .{
+        .address = @intFromPtr(fb.address),
+        .width = fb.width,
+        .height = fb.height,
+        .pitch = fb.pitch,
+        .bpp = fb.bpp,
+    }, .memory_map = mmap[0..mmap_count], .hhdm_offset = hhdm_request.response.?.offset, .kernel = .{
+        .phys_addr = kernel_addr_request.response.?.physical_base,
+        .virt_addr = kernel_addr_request.response.?.virtual_base,
+        .size = @intFromPtr(&kernel_size),
+    } });
 
     main._start(mb);
 

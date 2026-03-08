@@ -11,13 +11,14 @@ PHDRS
     data PT_LOAD;
 }
 
+VIRT_START = 0xffffffff80000000;
 SECTIONS
 {
     /* We want to be placed in the topmost 2GiB of the address space, for optimisations */
     /* and because that is what the Limine spec mandates. */
     /* Any address in this region will do, but often 0xffffffff80000000 is chosen as */
     /* that is the beginning of the region. */
-    . = 0xffffffff80000000;
+    . = VIRT_START;
 
     /* Define a section to contain the Limine requests and assign it to its own PHDR */
     .limine_requests : {
@@ -63,4 +64,6 @@ SECTIONS
         *(.eh_frame*)
         *(.note .note.*)
     }
+
+    kernel_size = . - VIRT_START;
 }

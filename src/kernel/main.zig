@@ -21,22 +21,24 @@ const regs = arch.registers;
 const log = std.log.scoped(.kernel);
 
 pub fn _start(mb: *const BootInfo) callconv(.c) void {
-    pmem.init(mb.memory_map, mb.hhdm_offset);
     // const kernel_start: usize = @intFromPtr(&__kernel_start);
     // const kernel_end: usize = @intFromPtr(&__kernel_end);
     // arch.paging.init(kernel_start, kernel_end);
     log.debug("Initializing kernel components...\n", .{});
     hal.init();
 
-    log.debug("Finished paging init", .{});
+    pmem.init(mb.memory_map, mb.hhdm_offset);
+    paging.init(mb);
 
     const framebuffer = mb.getFramebuffer(u32);
 
-    const screen = Screen.init(framebuffer, mb.framebuffer_width, mb.framebuffer_height);
+    const screen = Screen.init(framebuffer, @intCast(mb.framebuffer.width), @intCast(mb.framebuffer.height));
+    log.debug("Finished paging init", .{});
 
     console.init(screen);
     console.clear();
     console.echoToHost(true); // echo all prints to the host
+    log.debug("Finished paging init", .{});
 
     // init hardware
     // pit timer 100Hz
