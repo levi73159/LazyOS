@@ -44,9 +44,12 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
         log.err("Failed to get the CPU: {s}", .{@errorName(err)});
         break :blk arch.CPU.unknown;
     };
+    log.debug("GOT CPU", .{});
 
     console.echoToHost(false);
+    log.debug("echo to host false", .{});
     io.sti();
+    log.debug("sti", .{});
     main(cpu, screen) catch |err| {
         log.err("Failed to run main: {s}", .{@errorName(err)});
     };

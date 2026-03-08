@@ -75,14 +75,16 @@ fn getPort(irq: *u8) u8 {
 }
 
 pub fn mask(irq: u8) void {
+    interrupt_mask |= (@as(u16, 1) << @intCast(irq));
     var new_irq = irq;
     const port = getPort(&new_irq);
     const m: u8 = getMask(irq);
 
-    io.outb(port, m | (@as(u8, 1) << @intCast(irq)));
+    io.outb(port, m | (@as(u8, 1) << @intCast(new_irq)));
 }
 
 pub fn unmask(irq: u8) void {
+    interrupt_mask &= ~(@as(u16, 1) << @intCast(irq));
     var new_irq = irq;
     const port = getPort(&new_irq);
     const m: u8 = getMask(irq);
@@ -127,11 +129,16 @@ pub fn sendEndOfInterrupt(irq: u8) void {
 pub fn readIRQRequestRegister() u16 {
     io.outb(pic1_command_port, cmd_read_irr);
     io.outb(pic2_command_port, cmd_read_irr);
-    return io.inb(pic2_data_port) | (io.inb(pic2_data_port) << 8);
+    return io.inb(pic1_data_port) | (@as(u16, io.inb(pic2_data_port)) << 8);
 }
 
 pub fn readInServiceRegister() u16 {
     io.outb(pic1_command_port, cmd_read_isr);
     io.outb(pic2_command_port, cmd_read_isr);
-    return io.inb(pic1_data_port) | (io.inb(pic2_data_port) << 8);
+    return io.inb(pic1_data_port) | (@as(u16, io.inb(pic2_data_port)) << 8);
+}
+
+pub fn isSpurious(slave: bool) bool {
+    const isr = readInServiceRegister();
+    return if (slave) (isr & 0x8000) == 0 else (isr & 0x0080) == 0;
 }
