@@ -1,6 +1,7 @@
 const std = @import("std");
 const Color = @import("Color.zig");
 const font = @import("fonts/Basic.zig");
+const bootinfo = @import("arch/bootinfo.zig");
 
 const Self = @This();
 
@@ -13,14 +14,18 @@ buffer: []u32,
 double_buffer: ?[]u32 = null,
 width: u32,
 height: u32,
+pitch: u32,
+stride: u32 = 0,
 
 use_double_buffer: bool = false,
 
-pub fn init(buffer: []u32, width: u32, height: u32) *Self {
+pub fn init(buffer: []u32, fb: bootinfo.Framebuffer) *Self {
     global = Self{
         .buffer = buffer,
-        .width = width,
-        .height = height,
+        .width = @intCast(fb.width),
+        .height = @intCast(fb.height),
+        .pitch = @intCast(fb.pitch),
+        .stride = @intCast(fb.pitch / 4),
     };
     return &global;
 }
@@ -29,8 +34,12 @@ pub fn get() *Self {
     return &global;
 }
 
-pub fn createDoubleBuffer(self: *Self, allocator: std.mem.Allocator) !void {
-    self.double_buffer = try allocator.alloc(u32, self.buffer.len);
+pub fn createDoubleBuffer(self: *Self) !void {
+    const pmem = @import("memory/pmem.zig");
+    const phys = try pmem.allocBlock(self.buffer.len);
+    const virt = bootinfo.toVirtualHHDM(phys);
+    const buffer: [*]u32 = @ptrFromInt(virt);
+    self.double_buffer = buffer[0..self.buffer.len];
     @memset(self.double_buffer.?, 0);
 }
 
@@ -49,15 +58,15 @@ pub fn getBufferConst(self: Self) []const u32 {
 }
 
 pub fn getPixel(self: Self, x: u32, y: u32) u32 {
-    return self.getBufferConst()[y * self.width + x];
+    return self.getBufferConst()[y * self.stride + x];
 }
 
 pub fn getPixelMut(self: *Self, x: u32, y: u32) *u32 {
-    return &self.getBuffer()[y * self.width + x];
+    return &self.getBuffer()[y * self.stride + x];
 }
 
 pub fn setPixel(self: *Self, x: u32, y: u32, color: Color) void {
-    const index = y * self.width + x;
+    const index = y * self.stride + x;
     if (index >= self.buffer.len) {
         return;
     }
@@ -68,7 +77,7 @@ pub fn setPixel32(self: *Self, x: u32, y: u32, color: u32) void {
     if (x >= self.width or y >= self.height) {
         return;
     }
-    const index = y * self.width + x;
+    const index = y * self.stride + x;
     self.getBuffer()[index] = color;
 }
 

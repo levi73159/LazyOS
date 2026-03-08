@@ -21,6 +21,7 @@ var screen: *Screen = undefined;
 var initialized: bool = false;
 
 var echo_to_host: bool = false;
+var no_swap: bool = false;
 
 const pixels_per_scanline = 32;
 
@@ -132,7 +133,7 @@ pub fn drawCursor() void {
 }
 
 pub fn complete() void {
-    if (initialized) screen.swapBuffers();
+    if (initialized) swapBuffers();
 }
 
 pub fn write(data: []const u8) void {
@@ -202,7 +203,6 @@ pub fn print(comptime fmt: []const u8, args: anytype) void {
 
 // print to both the terminal and the dbg port
 pub fn printB(comptime fmt: []const u8, args: anytype) void {
-    print(fmt, args);
     dbgPrint(fmt, args);
 }
 
@@ -378,37 +378,20 @@ pub fn readline(buf: []u8, echo: bool) error{BufferOverflow}![]const u8 {
 }
 
 fn scroll() void {
-    // Move each row up
-    // var row: usize = 1;
-    // while (row < vga.VGA_HEIGHT) : (row += 1) {
-    //     var col: usize = 0;
-    //     while (col < vga.VGA_WIDTH) : (col += 1) {
-    //         const entry = vga.getEntry(row * vga.VGA_WIDTH + col);
-    //         vga.writeEntry((row - 1) * vga.VGA_WIDTH + col, entry);
-    //     }
-    // }
-    var row: u16 = 1;
-    while (row < getTextHeight()) : (row += 1) {
-        var col: u16 = 0;
-        while (col < getTextWidth()) : (col += 1) {
-            var pixelY: u32 = 0;
-            while (pixelY < font.height) : (pixelY += 1) {
-                var pixelX: u32 = 0;
-                while (pixelX < font.width) : (pixelX += 1) {
-                    const pixel = screen.getPixel(col * font.width + pixelX, row * font.height + pixelY);
-                    screen.setPixel32(col * font.width + pixelX, (row - 1) * font.height + pixelY, pixel);
-                }
-            }
-        }
-    }
+    const stride = screen.stride; // pixels per row
+    const char_height = font.height;
+    const pixels_to_scroll = char_height * stride; // one text row in pixels
+    const total = stride * screen.height;
 
-    // Clear last row
-    var col: u16 = 0;
-    while (col < getTextWidth()) : (col += 1) {
-        drawChar(' ', col, @truncate(getTextHeight() - 1));
-    }
+    // shift entire framebuffer up by one character row
+    const buf = screen.getBuffer();
+    std.mem.copyForwards(u32, buf[0 .. total - pixels_to_scroll], buf[pixels_to_scroll..total]);
 
-    screen.swapBuffers();
+    // clear the last character row
+    const last_row_start = total - pixels_to_scroll;
+    @memset(buf[last_row_start..total], terminal_background.get());
+
+    swapBuffers();
 }
 
 pub fn logFn(
@@ -435,4 +418,19 @@ pub fn logFn(
     w.writeAll(prefix) catch unreachable;
     w.print(format, args) catch unreachable;
     w.writeAll(reset ++ "\n") catch unreachable;
+}
+
+pub fn noSwap() void {
+    no_swap = true;
+}
+
+pub fn swap() void {
+    no_swap = false;
+    screen.swapBuffers();
+}
+
+fn swapBuffers() void {
+    if (!no_swap) {
+        screen.swapBuffers();
+    }
 }

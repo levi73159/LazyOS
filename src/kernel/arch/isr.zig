@@ -104,7 +104,6 @@ export fn interruptHandler(frame: *InterruptFrame) callconv(.c) void {
 }
 
 fn handleError(frame: *InterruptFrame) noreturn {
-    asm volatile ("cli");
     log.debug("Unhandled interrupt", .{});
     const exception: Exception = @enumFromInt(frame.interrupt_number);
     console.printB("\x1b[97;41m", .{});

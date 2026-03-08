@@ -143,7 +143,7 @@ pub fn init(mb: *const bootinfo.BootInfo) void {
     log.debug("Initializing paging", .{});
 
     // map all physical memory at HHDM offset (so toVirtual keeps working and this code still works)
-    const total_memory = pmem.getTotalMemory(); // total_papges * PAGE_SIZE
+    const total_memory = pmem.getHighestAddress(); // total_papges * PAGE_SIZE
     log.debug("Total memory: {x}", .{total_memory});
     // replace the 4KB HHDM loop with this
     var phys: u64 = 0;

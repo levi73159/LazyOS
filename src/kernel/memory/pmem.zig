@@ -1,5 +1,6 @@
 const std = @import("std");
 const bootinfo = @import("../arch/bootinfo.zig");
+const Alignment = std.mem.Alignment;
 
 const log = std.log.scoped(.pmem);
 
@@ -17,7 +18,6 @@ pub fn init(mmap: []*bootinfo.MemoryMapEntry, hddm_offset: u64) void {
     var highest: u64 = 0;
     for (mmap) |entry| {
         // only consider usable memory
-        if (entry.type != .usable) continue;
         highest = @max(highest, entry.base + entry.length);
     }
     log.debug("Highest address: 0x{x}", .{highest});
@@ -66,6 +66,43 @@ pub fn freePage(phys: u64) void {
     if (index < last_used_index) last_used_index = index;
 }
 
+pub fn allocBlock(size: u64) !u64 {
+    const pages_needed = (size + PAGE_SIZE - 1) / PAGE_SIZE; // round up to nearest page
+    var pages_found: u32 = 0;
+
+    var i = last_used_index;
+    var start: ?u64 = null;
+    while (i < total_pages) : (i += 1) {
+        if (!getBit(i)) {
+            if (start == null) {
+                start = i;
+            }
+            pages_found += 1;
+            if (pages_found == pages_needed) {
+                for (0..pages_found) |j| {
+                    setBit(start.? + j);
+                }
+                last_used_index = i + 1;
+                return start.? * PAGE_SIZE;
+            }
+        } else {
+            pages_found = 0;
+            start = null;
+        }
+    }
+
+    return error.OutOfMemroy;
+}
+
+pub fn freeBlock(phys: u64, size: u64) void {
+    const index = phys / PAGE_SIZE;
+    const pages_needed = (size + PAGE_SIZE - 1) / PAGE_SIZE; // round up to nearest page
+    for (0..pages_needed) |i| {
+        clearBit(index + i);
+    }
+    if (index < last_used_index) last_used_index = index;
+}
+
 inline fn setBit(index: u64) void {
     bitmap[index / 8] |= (@as(u8, 1) << @intCast(index % 8));
 }
@@ -98,4 +135,8 @@ fn markUsed(base: u64, length: u64) void {
 
 pub fn getTotalMemory() u64 {
     return usable_memory;
+}
+
+pub fn getHighestAddress() u64 {
+    return total_pages * PAGE_SIZE;
 }

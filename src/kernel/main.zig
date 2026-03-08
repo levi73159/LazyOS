@@ -32,13 +32,15 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
 
     const framebuffer = mb.getFramebuffer(u32);
 
-    const screen = Screen.init(framebuffer, @intCast(mb.framebuffer.width), @intCast(mb.framebuffer.height));
-    log.debug("Finished paging init", .{});
+    const screen = Screen.init(framebuffer, mb.framebuffer);
+    screen.use_double_buffer = true;
+    screen.createDoubleBuffer() catch |err| {
+        log.err("Failed to create double buffer: {s}", .{@errorName(err)});
+    };
 
     console.init(screen);
     console.clear();
     console.echoToHost(true); // echo all prints to the host
-    log.debug("Finished paging init", .{});
 
     // init hardware
     // pit timer 100Hz
@@ -49,12 +51,9 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
         log.err("Failed to get the CPU: {s}", .{@errorName(err)});
         break :blk arch.CPU.unknown;
     };
-    log.debug("GOT CPU", .{});
 
     console.echoToHost(false);
-    log.debug("echo to host false", .{});
     io.sti();
-    log.debug("sti", .{});
     main(cpu, screen) catch |err| {
         log.err("Failed to run main: {s}", .{@errorName(err)});
     };
@@ -153,6 +152,8 @@ const commands: []const Command = &[_]Command{
 };
 
 fn help(_: []const u8) anyerror!void {
+    console.noSwap();
+    defer console.swap();
     for (commands) |cmd| {
         console.print("{s} - {s}\n", .{ cmd.name, cmd.help });
     }
@@ -188,18 +189,18 @@ fn drawLoop(screen: *Screen) void {
 
     while (true) {
         screen.clear(Color.white());
-        // screen.drawRectWithBorder(x, y, 600, 500, Color.green(), 5, Color.blue());
-        // screen.drawRect(x + 5, y + 5, 600 - 10, 30, Color.gray()); // draw window bar
-        // screen.drawText(x + 16, y + 5, "Test window", 2, Color.white());
+        screen.drawRectWithBorder(x, y, 600, 500, Color.green(), 5, Color.blue());
+        screen.drawRect(x + 5, y + 5, 600 - 10, 30, Color.gray()); // draw window bar
+        screen.drawText(x + 16, y + 5, "Test window", 2, Color.white());
 
         screen.drawRect(@intCast(mouse.x()), @intCast(mouse.y()), 10, 10, Color.red());
 
         screen.swapBuffers();
 
-        if (kb.getKeyDown(.w)) y -|= 1;
-        if (kb.getKeyDown(.s)) y += 1;
-        if (kb.getKeyDown(.a)) x -|= 1;
-        if (kb.getKeyDown(.d)) x += 1;
+        if (kb.getKeyDown(.w)) y -|= 5;
+        if (kb.getKeyDown(.s)) y += 5;
+        if (kb.getKeyDown(.a)) x -|= 5;
+        if (kb.getKeyDown(.d)) x += 5;
         if (kb.getKeyDown(.q))
             break;
     }
