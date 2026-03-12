@@ -85,7 +85,7 @@ pub fn init() void {
             idt.setGate(i, @intFromPtr(handler), .kernel_code, .{});
             idt.enableGate(i);
         } else {
-            log.debug("Excluding interrupt {d}", .{i});
+            // log.debug("Excluding interrupt {d}", .{i});
             idt.disableGate(i);
         }
     }

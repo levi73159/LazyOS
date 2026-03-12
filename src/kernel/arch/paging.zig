@@ -150,14 +150,12 @@ pub fn init(mb: *const bootinfo.BootInfo) void {
     while (phys < total_memory) : (phys += HUGE_PAGE_SIZE) {
         mapHugePage(bootinfo.toVirtualHHDM(phys), phys, .rw);
     }
-    log.debug("Initializing paging", .{});
 
     // map kernel
     var offset: u64 = 0;
     while (offset < mb.kernel.size) : (offset += PAGE_SIZE) {
         mapPage(mb.kernel.virt_addr + offset, mb.kernel.phys_addr + offset, .rw);
     }
-    log.debug("Initializing paging", .{});
 
     mapFramebuffer(mb.framebuffer);
 

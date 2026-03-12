@@ -83,11 +83,11 @@ pub fn setGate(interrupt: u16, base: usize, segment: gdt.Selector, flags: Flags)
 }
 
 pub fn enableGate(interrupt: u16) void {
-    log.debug("Enabling interrupt {d}", .{interrupt});
+    // log.debug("Enabling interrupt {d}", .{interrupt});
     idt[interrupt].flags.present = true;
 }
 
 pub fn disableGate(interrupt: u16) void {
-    log.debug("Disabling interrupt {d}", .{interrupt});
+    // log.debug("Disabling interrupt {d}", .{interrupt});
     idt[interrupt].flags.present = false;
 }

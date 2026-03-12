@@ -28,6 +28,7 @@ pub fn init(mmap: []*bootinfo.MemoryMapEntry, hddm_offset: u64) void {
     log.debug("Total pages: {d}", .{total_pages});
     // find usable memory large enough to hold bitmap itself
     for (mmap) |entry| {
+        log.debug("Entry base: 0x{x}, length: 0x{x}, type: {s}", .{ entry.base, entry.length, @tagName(entry.type) });
         if (entry.type == .usable and entry.length >= bitmap_size) {
             bitmap = @as([*]u8, @ptrFromInt(entry.base + hddm_offset))[0..bitmap_size];
             @memset(bitmap, 0xFF);
@@ -66,6 +67,18 @@ pub fn freePage(phys: u64) void {
     if (index < last_used_index) last_used_index = index;
 }
 
+// allocate a page, but returns its virtual address
+pub fn allocPageV() !u64 {
+    const phys = try allocPage();
+    return bootinfo.toVirtualHHDM(phys);
+}
+
+// free a page by its virtual address
+pub fn freePageV(virt: u64) void {
+    const phys = bootinfo.toPhysicalHHDM(virt);
+    freePage(phys);
+}
+
 pub fn allocBlock(size: u64) !u64 {
     const pages_needed = (size + PAGE_SIZE - 1) / PAGE_SIZE; // round up to nearest page
     var pages_found: u32 = 0;
@@ -92,6 +105,61 @@ pub fn allocBlock(size: u64) !u64 {
     }
 
     return error.OutOfMemroy;
+}
+
+pub fn allocBlockV(size: u64) !u64 {
+    const phys = try allocBlock(size);
+    return bootinfo.toVirtualHHDM(phys);
+}
+
+pub fn allocPages(count: usize) !u64 {
+    var i = last_used_index;
+    var pages_found: u32 = 0;
+
+    var start: ?u64 = null;
+    while (i < total_pages) : (i += 1) {
+        if (!getBit(i)) {
+            if (start == null) {
+                start = i;
+            }
+            pages_found += 1;
+            if (pages_found >= count) {
+                for (0..pages_found) |j| {
+                    setBit(start.? + j);
+                }
+                last_used_index = i + 1;
+                return start.? * PAGE_SIZE;
+            }
+        } else {
+            pages_found = 0;
+            start = null;
+        }
+    }
+
+    return error.OutOfMemroy;
+}
+
+pub fn allocPagesV(count: usize) !u64 {
+    const phys = try allocPages(count);
+    return bootinfo.toVirtualHHDM(phys);
+}
+
+pub fn freePages(phys: u64, count: usize) void {
+    const index = phys / PAGE_SIZE;
+    for (0..count) |i| {
+        clearBit(index + i);
+    }
+    if (index < last_used_index) last_used_index = index;
+}
+
+pub fn freePagesV(virt: u64, count: usize) void {
+    const phys = bootinfo.toPhysicalHHDM(virt);
+    freePages(phys, count);
+}
+
+pub fn freeBlockV(virt: u64, size: u64) void {
+    const phys = bootinfo.toPhysicalHHDM(virt);
+    freeBlock(phys, size);
 }
 
 pub fn freeBlock(phys: u64, size: u64) void {
