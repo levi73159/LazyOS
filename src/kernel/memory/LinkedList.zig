@@ -164,12 +164,16 @@ fn splitBlock(self: *Self, block: *Header, size: usize) bool {
     log.debug("block addr: {x}", .{@intFromPtr(block)});
     log.debug("other header addr: {x}", .{@intFromPtr(header)});
 
-    const remaining = block.getSize() - size;
+    const remaining = block.trueSize() - size;
     if (remaining < MIN_SPLIT + HEADER_SIZE + OFFSET_SIZE) return false;
 
+    const block_end = block_addr + block.trueSize() + size;
+    const new_header_addr = aligned_addr;
+
+    const new_block_size = block_end - new_header_addr - HEADER_SIZE - OFFSET_SIZE;
     log.debug("block remaining: {d}", .{remaining});
     header.* = .{
-        .flags = .init(block.getSize() - block.padding() - HEADER_SIZE - OFFSET_SIZE - size - block_padding, true),
+        .flags = .init(new_block_size, true),
         .next = block.next,
     };
 
