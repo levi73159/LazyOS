@@ -32,7 +32,7 @@ const Fields = packed struct(usize) {
     }
 };
 
-const MAGIC = 0xcafebabedeadbeef;
+const MAGIC: u64 = @bitCast([8]u8{ 'B', 'L', 'O', 'K', 'H', 'E', 'A', 'D' });
 const Header = struct {
     magic: u64 = MAGIC,
     flags: Fields, // does not include header of offset data header at start of data, only
@@ -113,7 +113,7 @@ pub fn deinit(self: *Self) void {
 }
 
 fn findPrev(self: *Self, block: *Header) ?*Header {
-    var current = self.start;
+    var current = self.start; // should we use last_free?
 
     while (current) |b| {
         if (b.next == block) return b;
@@ -231,9 +231,28 @@ fn mergeBlock(self: *Self, block: *Header) *Header {
 }
 
 fn findFreeBlock(self: *Self, size: usize, alignment: mem.Alignment) ?*Header {
-    var current = self.start;
+    var current = self.last_free;
 
     while (current) |block| {
+        if (block.isFree()) {
+            // Calculate padding required to satisfy alignment
+            const block_addr = @intFromPtr(block);
+            const aligned_data_addr = mem.alignForward(usize, block_addr + HEADER_SIZE + OFFSET_SIZE, alignment.toByteUnits());
+            const padding = aligned_data_addr - block_addr - HEADER_SIZE - OFFSET_SIZE;
+
+            // Check if block is large enough for requested size + offset + padding
+            if (block.getSize() >= size + padding) {
+                block.setPadding(padding);
+                return block;
+            }
+        }
+        current = block.next;
+    }
+
+    current = self.start;
+
+    while (current) |block| {
+        if (block == self.last_free) break;
         if (block.isFree()) {
             // Calculate padding required to satisfy alignment
             const block_addr = @intFromPtr(block);
@@ -257,9 +276,6 @@ pub fn allocate(self: *Self, size: usize, alignment: mem.Alignment) ![*]u8 {
     const block = self.findFreeBlock(size, alignment) orelse blk: {
         const total_size = size + alignment.toByteUnits() + HEADER_SIZE + OFFSET_SIZE;
         const pages_needed = (total_size + PAGE_SIZE - 1) / PAGE_SIZE;
-        log.debug("need to grow heap by {d} pages", .{pages_needed});
-        log.debug("required size: {d}", .{total_size});
-        self.dump();
         const block = try self.growHeap(pages_needed);
         break :blk block;
     };

@@ -323,7 +323,6 @@ pub fn testHeap() void {
         pass("coalesce", &passed);
         allocator.free(big);
     }
-    linked_list.dump();
 
     // ── results ───────────────────────────────────────────────────────────────
     console.print("\nHeap test results: {d} passed, {d} failed\n", .{ passed, failed });
