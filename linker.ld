@@ -59,11 +59,5 @@ SECTIONS
         *(COMMON)
     } :data
 
-    /* Discard .note.* and .eh_frame* since they may cause issues on some hosts. */
-    /DISCARD/ : {
-        *(.eh_frame*)
-        *(.note .note.*)
-    }
-
     kernel_size = . - VIRT_START;
 }

@@ -81,6 +81,7 @@ fn getFreeRegion(map: []arch.Multiboot.MemoryMapEntry) ?arch.Multiboot.MemoryMap
 
 pub fn testHeap() void {
     var linked_list = heap.LinkedList.init();
+    defer linked_list.deinit();
     const allocator = linked_list.allocator();
     var passed: u32 = 0;
     var failed: u32 = 0;
@@ -99,7 +100,6 @@ pub fn testHeap() void {
         }
     }.f;
 
-    linked_list.dump();
     // ── test 1: basic alloc and free ─────────────────────────────────────────
     {
         log.debug("testing basic alloc and free", .{});
@@ -113,7 +113,6 @@ pub fn testHeap() void {
         pass("basic free", &passed);
     }
 
-    linked_list.dump();
     // ── test 2: multiple allocs ───────────────────────────────────────────────
     {
         log.debug("testing multiple allocs", .{});
@@ -148,7 +147,6 @@ pub fn testHeap() void {
         allocator.destroy(c);
     }
 
-    linked_list.dump();
     // ── test 3: free and realloc ──────────────────────────────────────────────
     {
         log.debug("testing free and realloc", .{});
@@ -169,8 +167,6 @@ pub fn testHeap() void {
             fail("reuse freed block (may be ok if roving pointer)", &failed);
         allocator.destroy(b);
     }
-
-    linked_list.dump();
 
     // ── test 4: alignment ─────────────────────────────────────────────────────
     {
@@ -216,7 +212,6 @@ pub fn testHeap() void {
         allocator.destroy(e);
     }
 
-    linked_list.dump();
     // ── test 5: slice alloc ───────────────────────────────────────────────────
     {
         log.debug("testing size alloc", .{});
@@ -234,7 +229,6 @@ pub fn testHeap() void {
         allocator.free(slice);
     }
 
-    linked_list.dump();
     // ── test 6: large alloc (forces multiple pages) ───────────────────────────
     {
         log.debug("testing large alloc", .{});
@@ -242,27 +236,36 @@ pub fn testHeap() void {
             fail("large alloc", &failed);
             return;
         };
+        log.debug("large range: {x} - {x}", .{ @intFromPtr(large.ptr), @intFromPtr(large.ptr) + large.len });
         log.debug("1", .{});
-        linked_list.dump();
-        if (large.len == 8192) pass("large alloc size", &passed) else fail("large alloc size", &failed);
+
+        const screen = Screen.get();
+        log.debug("console buffer: {x} - {x}", .{ @intFromPtr(screen.buffer.ptr), @intFromPtr(screen.buffer.ptr) + screen.buffer.len });
+        log.debug("double buffer: {x} - {x}", .{ @intFromPtr(screen.double_buffer.?.ptr), @intFromPtr(screen.double_buffer.?.ptr) + screen.double_buffer.?.len });
+
+        if (large.len == 8192) {
+            pass("large alloc size", &passed);
+        } else {
+            fail("large alloc size", &failed);
+        }
+        log.debug("1.2", .{});
         // write and verify
-        for (large, 0..) |*v, i| v.* = @truncate(i);
+        for (large, 0..) |*v, i| {
+            v.* = @truncate(i);
+        }
         var ok = true;
         for (large, 0..) |v, i| if (v != @as(u8, @truncate(i))) {
             ok = false;
             break;
         };
         log.debug("1.5", .{});
-        linked_list.dump();
         if (ok) pass("large alloc write/read", &passed) else fail("large alloc write/read", &failed);
         log.debug("2", .{});
 
-        linked_list.dump();
         allocator.free(large);
         log.debug("3", .{});
     }
 
-    linked_list.dump();
     // ── test 7: stress test ───────────────────────────────────────────────────
     {
         log.debug("testing stress test", .{});
@@ -294,7 +297,6 @@ pub fn testHeap() void {
         if (ok) pass("stress test 32 allocs", &passed) else fail("stress test 32 allocs", &failed);
     }
 
-    linked_list.dump();
     // ── test 8: merging (coalescing) ──────────────────────────────────────────
     {
         log.debug("testing merging", .{});
@@ -321,8 +323,8 @@ pub fn testHeap() void {
         pass("coalesce", &passed);
         allocator.free(big);
     }
-
     linked_list.dump();
+
     // ── results ───────────────────────────────────────────────────────────────
     console.print("\nHeap test results: {d} passed, {d} failed\n", .{ passed, failed });
     if (failed == 0) {
@@ -330,7 +332,7 @@ pub fn testHeap() void {
     }
 }
 
-fn main(_: arch.CPU, screen: *Screen) !void {
+pub fn main(_: arch.CPU, screen: *Screen) !void {
     std.log.debug("main", .{});
     const is64bit = builtin.target.cpu.arch == .x86_64;
     if (is64bit) {

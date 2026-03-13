@@ -9,6 +9,9 @@ const log = std.log.scoped(.heap);
 
 const PAGE_SIZE = 4096;
 
+const HEAP_PAGES = 4;
+const HEAP_SIZE = PAGE_SIZE * HEAP_PAGES;
+
 // every time we allocate we also will have this
 // [Header] [padding] [offset] [data]
 // offset is how many bytes to offset ptr to end of header = padding
@@ -16,36 +19,27 @@ const PAGE_SIZE = 4096;
 
 const Fields = packed struct(usize) {
     is_free: bool = true,
-    even: bool = false,
     padding: u8,
     block_padding: u8 = 0,
-    size: u46,
+    size: u47,
 
     pub fn init(size: usize, is_free: bool) Fields {
         return .{
             .is_free = is_free,
-            .even = if (is_debug) size % 2 == 0 else false,
             .size = @intCast(size),
             .padding = 0,
         };
     }
-
-    pub fn verify(self: *const Fields) bool {
-        if (is_debug) {
-            const is_even = self.size % 2 == 0;
-            if (is_even != self.even) return false;
-            return true;
-        }
-        return !self.even;
-    }
 };
 
+const MAGIC = 0xcafebabedeadbeef;
 const Header = struct {
+    magic: u64 = MAGIC,
     flags: Fields, // does not include header of offset data header at start of data, only
     next: ?*Header,
 
     fn verify(self: *const Header) void {
-        if (self.flags.verify() == false) std.debug.panic("Header Corrupted at address {x}", .{@intFromPtr(self)});
+        if (self.magic != MAGIC) std.debug.panic("Header Corrupted at address {x}, magic: {x}, header: {f}", .{ @intFromPtr(self), self.magic, self });
     }
 
     fn trueSize(self: *const Header) usize {
@@ -74,14 +68,10 @@ const Header = struct {
 
     fn addSize(self: *Header, size: usize) void {
         self.flags.size += @intCast(size);
-        if (is_debug)
-            self.flags.even = self.flags.size % 2 == 0;
     }
 
     fn setSize(self: *Header, size: usize) void {
         self.flags.size = @intCast(size);
-        if (is_debug)
-            self.flags.even = self.flags.size % 2 == 0;
     }
 
     pub fn format(
@@ -102,13 +92,24 @@ last_free: ?*Header = null,
 
 pub fn init() Self {
     log.debug("HEADER SIZE: {d}", .{@sizeOf(Header)});
-    const page = pmem.allocPagesV(1) catch @panic("out of memory cannot init heap");
+    const page = pmem.allocPagesV(HEAP_PAGES) catch @panic("out of memory cannot init heap");
     const header: *Header = @ptrFromInt(page);
     header.* = .{
-        .flags = .init(PAGE_SIZE - HEADER_SIZE - OFFSET_SIZE, true),
+        .flags = .init(HEAP_SIZE - HEADER_SIZE - OFFSET_SIZE, true),
         .next = null,
     };
     return Self{ .start = header, .end = header, .last_free = header };
+}
+
+pub fn deinit(self: *Self) void {
+    var current = self.start;
+    while (current) |b| {
+        current = b.next;
+        const pages = b.trueSize() / PAGE_SIZE;
+        pmem.freePagesV(@intFromPtr(b), pages);
+
+        log.debug("freeing {d} pages at address {x}", .{ pages, @intFromPtr(b) });
+    }
 }
 
 fn findPrev(self: *Self, block: *Header) ?*Header {
@@ -161,19 +162,11 @@ fn splitBlock(self: *Self, block: *Header, size: usize) bool {
     block.flags.block_padding = @intCast(block_padding);
     const header: *Header = @ptrFromInt(aligned_addr);
 
-    log.debug("block addr: {x}", .{@intFromPtr(block)});
-    log.debug("other header addr: {x}", .{@intFromPtr(header)});
-
     const remaining = block.trueSize() - size;
     if (remaining < MIN_SPLIT + HEADER_SIZE + OFFSET_SIZE) return false;
 
-    const block_end = block_addr + block.trueSize() + size;
-    const new_header_addr = aligned_addr;
-
-    const new_block_size = block_end - new_header_addr - HEADER_SIZE - OFFSET_SIZE;
-    log.debug("block remaining: {d}", .{remaining});
     header.* = .{
-        .flags = .init(new_block_size, true),
+        .flags = .init(block.getSize() - block.padding() - HEADER_SIZE - OFFSET_SIZE - size - block_padding, true),
         .next = block.next,
     };
 
@@ -184,9 +177,6 @@ fn splitBlock(self: *Self, block: *Header, size: usize) bool {
 
     header.verify();
     block.verify();
-
-    log.debug("header true size: {d}", .{header.trueSize()});
-    log.debug("block true size: {d}", .{block.trueSize()});
 
     return true;
 }
@@ -200,8 +190,8 @@ fn mergeBlockFoward(self: *Self, block: *Header) void {
     while (block.next) |next_block| {
         if (next_block.isFree() and isClose(block, next_block)) {
             if (next_block == self.last_free) self.last_free = block;
+            if (next_block == self.end) self.end = block;
 
-            log.debug("merging blocks {f} and {f}", .{ block, next_block });
             block.addSize(next_block.trueSize() + block.flags.block_padding);
             block.flags.block_padding = next_block.flags.block_padding;
             block.next = next_block.next;
@@ -220,8 +210,8 @@ fn mergeBlockBackward(self: *Self, block: *Header) *Header {
     while (self.findPrev(current)) |prev_block| {
         if (prev_block.isFree() and isClose(prev_block, current)) {
             if (current == self.last_free) self.last_free = prev_block;
+            if (current == self.end) self.end = prev_block;
 
-            log.debug("merging blocks {f} and {f}", .{ block, prev_block });
             prev_block.addSize(current.trueSize() + prev_block.flags.block_padding);
             prev_block.flags.block_padding = current.flags.block_padding;
             prev_block.next = current.next;
@@ -264,12 +254,13 @@ fn findFreeBlock(self: *Self, size: usize, alignment: mem.Alignment) ?*Header {
 }
 
 pub fn allocate(self: *Self, size: usize, alignment: mem.Alignment) ![*]u8 {
-    log.debug("allocating {d} bytes, {d} bits", .{ size, size * 8 });
     const block = self.findFreeBlock(size, alignment) orelse blk: {
         const total_size = size + alignment.toByteUnits() + HEADER_SIZE + OFFSET_SIZE;
         const pages_needed = (total_size + PAGE_SIZE - 1) / PAGE_SIZE;
+        log.debug("need to grow heap by {d} pages", .{pages_needed});
+        log.debug("required size: {d}", .{total_size});
+        self.dump();
         const block = try self.growHeap(pages_needed);
-        log.debug("block {f}", .{block});
         break :blk block;
     };
 
@@ -278,34 +269,27 @@ pub fn allocate(self: *Self, size: usize, alignment: mem.Alignment) ![*]u8 {
     block.setFree(false);
 
     const block_addr = @intFromPtr(block);
-    log.debug("block addr: {x}", .{block_addr});
     const data_addr = block_addr + HEADER_SIZE + OFFSET_SIZE;
-    log.debug("data addr: {x}", .{data_addr});
     const aligned_data_addr = mem.alignForward(usize, data_addr, alignment.toByteUnits());
-    log.debug("aligned data addr: {x}", .{aligned_data_addr});
     const padding = aligned_data_addr - block_addr - HEADER_SIZE - OFFSET_SIZE;
-    log.debug("padding: {d}", .{padding});
     block.setPadding(padding);
 
     const offset_ptr: *u8 = @ptrFromInt(aligned_data_addr - OFFSET_SIZE);
     offset_ptr.* = @intCast(padding);
 
-    log.debug("offset: {d}", .{offset_ptr.*});
-
     if (!self.splitBlock(block, size)) {
-        log.warn("Failed to split block", .{});
+        // can't shrink block so we act like we shrink it by setting the size and adding the block padding to compensate
+        log.warn("can't shrink block", .{});
+        block.flags.block_padding += @intCast(block.getSize() - size);
+        block.setSize(size);
     }
-
-    log.debug("block {f}", .{block});
-
-    self.dump();
 
     return @ptrFromInt(aligned_data_addr);
 }
 
 pub fn free(self: *Self, ptr: [*]u8) void {
-    const offset: u8 = (ptr - 1)[0];
-    const block: *Header = @ptrFromInt(@intFromPtr(ptr) - offset - HEADER_SIZE - OFFSET_SIZE);
+    const offset: *u8 = @ptrFromInt(@intFromPtr(ptr) - OFFSET_SIZE);
+    const block: *Header = @ptrFromInt(@intFromPtr(ptr) - offset.* - HEADER_SIZE - OFFSET_SIZE);
 
     block.setFree(true);
     const updated_block = self.mergeBlock(block);
@@ -341,8 +325,8 @@ fn _resize(ctx: *anyopaque, memory: []u8, _: mem.Alignment, new_size: usize, _: 
         return true;
     }
 
-    const offset: u8 = (memory.ptr - 1)[0];
-    const block: *Header = @ptrFromInt(@intFromPtr(memory.ptr) - offset - HEADER_SIZE - OFFSET_SIZE);
+    const offset: *u8 = @ptrFromInt(@intFromPtr(memory.ptr) - OFFSET_SIZE);
+    const block: *Header = @ptrFromInt(@intFromPtr(memory.ptr) - offset.* - HEADER_SIZE - OFFSET_SIZE);
 
     if (block.getSize() > new_size) {
         if (self.splitBlock(block, new_size)) {
@@ -401,7 +385,7 @@ pub fn dump(self: *Self) void {
         log.debug("  USER DATA ADDR: {x}", .{@intFromPtr(block) + HEADER_SIZE + OFFSET_SIZE + block.padding()});
         log.debug("  Free: {}", .{block.isFree()});
         log.debug("  Next: {?*}", .{block.next});
-        log.debug("  Even: {}", .{block.flags.even});
+        log.debug("  Magic: {x}", .{block.magic});
 
         if (!block.isFree()) {
             const data_addr = @intFromPtr(block) + HEADER_SIZE + OFFSET_SIZE + block.padding();

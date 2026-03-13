@@ -32,12 +32,9 @@ pub fn build(b: *std.Build) void {
         .root_module = kernel_mod,
     });
     kernel.use_llvm = true;
-    kernel.use_lld = true;
     kernel.setLinkerScript(b.path("linker.ld"));
     kernel.pie = false;
-    kernel.link_z_relro = false;
     kernel.entry = .disabled;
-    kernel.link_z_notext = true;
 
     kernel_mod.addAssemblyFile(b.path("src/kernel/arch/arch.s"));
 
@@ -48,8 +45,10 @@ pub fn build(b: *std.Build) void {
     kernel.setLinkerScript(b.path("linker.ld"));
     b.installArtifact(kernel);
 
+    const install_kernel = b.addInstallArtifact(kernel, .{});
+
     const image = makeImage(b, kernel);
-    image.step.dependOn(&kernel.step);
+    image.step.dependOn(&install_kernel.step);
 
     // const run_qemu_cmd = b.addSystemCommand(&.{ "qemu-system-x86_64", "-hda", image.path, "-m", "32", "-debugcon", "stdio" });
     // run_qemu_cmd.step.dependOn(image.step);
