@@ -6,6 +6,15 @@ const log = std.log.scoped(.paging);
 
 const PAGE_SIZE = 4096;
 
+extern const __text_start: u8;
+extern const __text_end: u8;
+extern const __rodata_start: u8;
+extern const __rodata_end: u8;
+extern const __data_start: u8;
+extern const __data_end: u8;
+extern const __bss_start: u8;
+extern const __bss_end: u8;
+
 const VirtualAddress = packed struct(u64) {
     offset: u12 = 0,
     pt_index: u9 = 0,
@@ -154,19 +163,15 @@ pub fn init(mb: *const bootinfo.BootInfo) void {
     // map kernel
     var offset: u64 = 0;
     while (offset < mb.kernel.size) : (offset += PAGE_SIZE) {
-        mapPage(mb.kernel.virt_addr + offset, mb.kernel.phys_addr + offset, .rw);
+        const virt = mb.kernel.virt_addr + offset;
+        const physical = mb.kernel.phys_addr + offset;
+        const flags = getFlags(virt);
+        mapPage(virt, physical, flags);
     }
 
     mapFramebuffer(mb.framebuffer);
 
     const pml4_phys = bootinfo.kernelToPhysical(@intFromPtr(&pml4));
-    log.debug("kernel_virt_start: {x}", .{mb.kernel.virt_addr});
-    log.debug("kernel_phys_start: {x}", .{mb.kernel.phys_addr});
-    log.debug("kernel_size: {x}", .{mb.kernel.size});
-    log.debug("pml4_phys: {x}", .{pml4_phys});
-    const pml4_virt = @intFromPtr(&pml4);
-    log.debug("pml4 virt: {x}", .{pml4_virt});
-    log.debug("hhdm offset: {x}", .{bootinfo.getBootInfo().hhdm_offset});
 
     // switches to our page tables
     asm volatile (
@@ -176,4 +181,26 @@ pub fn init(mb: *const bootinfo.BootInfo) void {
         : .{ .memory = true });
 
     log.debug("Paging initialized", .{});
+}
+
+fn getFlags(virt: u64) PageFlags {
+    const text_start = @intFromPtr(&__text_start);
+    const text_end = @intFromPtr(&__text_end);
+    const data_start = @intFromPtr(&__data_start);
+    const data_end = @intFromPtr(&__data_end);
+    const bss_start = @intFromPtr(&__bss_start);
+    const bss_end = @intFromPtr(&__bss_end);
+    const rodata_start = @intFromPtr(&__rodata_start);
+    const rodata_end = @intFromPtr(&__rodata_end);
+
+    if (virt >= text_start and virt < text_end)
+        return .{ .present = true, .writeable = false, .execute_disable = false }
+    else if (virt >= data_start and virt < data_end)
+        return .{ .present = true, .writeable = true, .execute_disable = true }
+    else if (virt >= bss_start and virt < bss_end)
+        return .{ .present = true, .writeable = true, .execute_disable = true }
+    else if (virt >= rodata_start and virt < rodata_end)
+        return .{ .present = true, .writeable = false, .execute_disable = true }
+    else
+        return .rw;
 }

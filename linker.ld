@@ -31,14 +31,18 @@ SECTIONS
     . = ALIGN(CONSTANT(MAXPAGESIZE));
 
     .text : {
+        __text_start = .;
         *(.text .text.*)
+        __text_end = .;
     } :text
 
     /* Move to the next memory page for .rodata */
     . = ALIGN(CONSTANT(MAXPAGESIZE));
 
     .rodata : {
+        __rodata_start = .;
         *(.rodata .rodata.*)
+        __rodata_end = .;
     } :rodata
 
     /* Add a .note.gnu.build-id output section in case a build ID flag is added to the */
@@ -51,12 +55,16 @@ SECTIONS
     . = ALIGN(CONSTANT(MAXPAGESIZE));
 
     .data : {
+        __data_start = .;
         *(.data .data.*)
+        __data_end = .;
     } :data
 
     .bss : {
+        __bss_start = .;
         *(.bss .bss.*)
         *(COMMON)
+        __bss_end = .;
     } :data
 
     kernel_size = . - VIRT_START;
