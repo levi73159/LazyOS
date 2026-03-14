@@ -43,6 +43,8 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     console.clear();
     console.echoToHost(true); // echo all prints to the host
 
+    heap.init();
+
     // init hardware
     // pit timer 100Hz
     pit.init(100);
@@ -69,7 +71,7 @@ inline fn color(r: u32, g: u32, b: u32) u32 {
     return (r << 16) | (g << 8) | b;
 }
 
-fn getFreeRegion(map: []arch.Multiboot.MemoryMapEntry) ?arch.Multiboot.MemoryMapEntry {
+fn getFreeRegion(map: []arch.bootinfo.MemoryMapEntry) ?arch.bootinfo.MemoryMapEntry {
     for (map) |entry| {
         if (entry.type == .available and entry.addr != 0) {
             return entry;

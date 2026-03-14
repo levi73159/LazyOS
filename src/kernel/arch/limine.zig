@@ -214,6 +214,18 @@ pub const BootloaderInfoRequest = extern struct {
     response: ?*BootloaderInfoResponse = null,
 };
 
+// #define LIMINE_RSDP_REQUEST_ID { LIMINE_COMMON_MAGIC, 0xc5e77b6b397e7b43, 0x27637845accdcf3c }
+pub const RSDPRequest = extern struct {
+    id: [4]u64 = .{ COMMON_MAGIC[0], COMMON_MAGIC[1], 0xc5e77b6b397e7b43, 0x27637845accdcf3c },
+    revision: u64 = 0,
+    response: ?*RSDPResponse = null,
+};
+
+pub const RSDPResponse = extern struct {
+    revision: u64,
+    address: u64,
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Firmware Type
 // ─────────────────────────────────────────────────────────────────────────────

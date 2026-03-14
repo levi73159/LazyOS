@@ -4,7 +4,7 @@ const bootinfo = @import("bootinfo.zig");
 
 const log = std.log.scoped(.paging);
 
-const PAGE_SIZE = 4096;
+pub const PAGE_SIZE = 4096;
 
 extern const __text_start: u8;
 extern const __text_end: u8;
@@ -203,4 +203,13 @@ fn getFlags(virt: u64) PageFlags {
         return .{ .present = true, .writeable = false, .execute_disable = true }
     else
         return .rw;
+}
+
+pub fn getPageEntry(virt: u64) *const PageEntry {
+    const va = VirtualAddress.from(virt);
+    const pdpt_table = getOrCreatePageTable(&pml4, va.pml4_index);
+    const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index);
+    const pt_table = getOrCreatePageTable(pd_table, va.pd_index);
+
+    return &pt_table[va.pt_index];
 }
