@@ -5,7 +5,7 @@ const is_debug = @import("builtin").mode == .Debug;
 
 const Self = @This();
 
-const log = std.log.scoped(.heap);
+const log = std.log.scoped(._heap);
 
 const PAGE_SIZE = 4096;
 
@@ -425,27 +425,28 @@ pub fn allocator(self: *Self) mem.Allocator {
     };
 }
 
-pub fn dump(self: *Self) void {
+pub fn dump(self: *Self, fliter: enum { free, used, all }, comptime print: fn (comptime fmt: []const u8, args: anytype) void) void {
     var current = self.start;
-    while (current) |block| {
-        log.debug("Block {x} - {x}", .{ @intFromPtr(block), @intFromPtr(block) + block.trueSize() });
-        log.debug("  Size: {d}", .{block.getSize()});
-        log.debug("  True Size: {d}", .{block.trueSize()});
-        log.debug("  Block Padding: {d}", .{block.flags.block_padding});
-        log.debug("  Padding: {d}", .{block.padding()});
-        log.debug("  USER DATA ADDR: {x}", .{@intFromPtr(block) + HEADER_SIZE + OFFSET_SIZE + block.padding()});
-        log.debug("  Free: {}", .{block.isFree()});
-        log.debug("  Next: {?*}", .{block.next});
+    while (current) |block| : (current = block.next) {
+        if (fliter == .free and !block.isFree()) {
+            continue;
+        }
+        print("Block {x} - {x}", .{ @intFromPtr(block), @intFromPtr(block) + block.trueSize() });
+        print("  Size: {d}", .{block.getSize()});
+        print("  True Size: {d}", .{block.trueSize()});
+        print("  Block Padding: {d}", .{block.flags.block_padding});
+        print("  Padding: {d}", .{block.padding()});
+        print("  USER DATA ADDR: {x}", .{@intFromPtr(block) + HEADER_SIZE + OFFSET_SIZE + block.padding()});
+        print("  Free: {}", .{block.isFree()});
+        print("  Next: {?*}", .{block.next});
 
         if (!block.isFree()) {
             const data_addr = @intFromPtr(block) + HEADER_SIZE + OFFSET_SIZE + block.padding();
             // const data = @as([*]u8, @ptrFromInt(data_addr))[0..block.getSize()];
-            // log.debug("  DATA: {any}", .{data});
+            // print("  DATA: {any}", .{data});
 
             const offset_ptr: *u8 = @ptrFromInt(data_addr - OFFSET_SIZE);
-            log.debug("  Offset: {d}", .{offset_ptr.*});
+            print("  Offset: {d}", .{offset_ptr.*});
         }
-
-        current = block.next;
     }
 }

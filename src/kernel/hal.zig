@@ -4,18 +4,24 @@ const gdt = arch.descriptors.gdt;
 const idt = arch.descriptors.idt;
 const isr = arch.isr;
 const irq = arch.irq;
+const acpi = arch.acpi;
 
 const console = @import("console.zig");
 
 const log = std.log.scoped(.hal);
 
-pub fn init() void {
-    log.debug("Initializing HAL", .{});
+pub fn earlyInit() void {
+    log.debug("Initializing early HAL", .{});
 
     invoke(gdt.init, "GDT");
     invoke(idt.init, "IDT");
     invoke(isr.init, "ISR");
     invoke(irq.init, "IRQ");
+}
+
+pub fn init() void {
+    log.debug("Initializing HAL", .{});
+    invoke(acpi.init, "ACPI");
 }
 
 // function invoker wrapper

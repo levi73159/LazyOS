@@ -1,4 +1,5 @@
 const std = @import("std");
+const io = @import("io.zig");
 
 const c = @cImport({
     @cInclude("uacpi/uacpi.h");
@@ -6,7 +7,7 @@ const c = @cImport({
     @cInclude("uacpi/event.h");
 });
 
-const log = std.log.scoped(.acpi);
+const log = std.log.scoped(._acpi);
 
 fn check(status: c.uacpi_status) !void {
     if (status != c.UACPI_STATUS_OK) {
@@ -30,5 +31,11 @@ pub fn shutdown() void {
 
     check(c.uacpi_enter_sleep_state(c.UACPI_SLEEP_STATE_S5)) catch {
         log.err("ACPI shutdown failed: enter_sleep_state", .{});
+    };
+}
+
+pub fn reboot() void {
+    check(c.uacpi_reboot()) catch {
+        io.outb(0x64, 0xfe); // fallback on keyboard controller reset
     };
 }

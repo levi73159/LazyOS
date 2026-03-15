@@ -408,10 +408,11 @@ pub fn logFn(
     };
 
     const reset = "\x1b[0m";
-    const w = dbgWriter();
+    const scope_start_unscore = comptime std.mem.startsWith(u8, @tagName(scope), "_");
+    const w = if (scope == .host or level == .debug or scope_start_unscore) dbgWriter() else writer();
 
     const prefix = if (scope != .host and scope != .default and scope != .none)
-        color ++ "[" ++ @tagName(scope) ++ "] " ++ comptime level.asText() ++ ": "
+        color ++ "[" ++ @tagName(scope)[if (scope_start_unscore) 1 else 0..] ++ "] " ++ comptime level.asText() ++ ": "
     else
         color ++ comptime level.asText() ++ ": ";
 

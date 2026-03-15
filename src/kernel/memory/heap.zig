@@ -15,6 +15,11 @@ pub fn allocator() @import("std").mem.Allocator {
     return heap.allocator();
 }
 
+pub fn get() *LinkedList {
+    if (builtin.mode == .Debug and !has_initialized) @panic("heap not initialized");
+    return &heap;
+}
+
 // C Abi wrappers
 pub export fn malloc(size: usize) ?*anyopaque {
     return heap.allocate(size, .@"16") catch null;

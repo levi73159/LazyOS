@@ -10,7 +10,7 @@ const pit = @import("pit.zig");
 const BootInfo = @import("arch/bootinfo.zig").BootInfo;
 const pmem = @import("memory/pmem.zig");
 const paging = @import("arch/paging.zig");
-const acpi = @import("acpi/acpi.zig");
+const commands = @import("commands.zig");
 
 const acpi_oslevel = @import("acpi/osl.zig"); // NOTE: MUST BE IMPORTED FIRST FOR ACPI TO WORK
 comptime {
@@ -35,13 +35,15 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     // const kernel_end: usize = @intFromPtr(&__kernel_end);
     // arch.paging.init(kernel_start, kernel_end);
     log.debug("Initializing kernel components...\n", .{});
-    hal.init();
+    hal.earlyInit();
 
     log.debug("Kerenl location: physical 0x{x} virtual 0x{x}", .{ mb.kernel.phys_addr, mb.kernel.virt_addr });
     pmem.init(mb.memory_map, mb.hhdm_offset);
     paging.init(mb);
+    heap.init();
 
     pit.init(100);
+    hal.init();
 
     const framebuffer = mb.getFramebuffer(u32);
 
@@ -54,8 +56,6 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     console.init(screen);
     console.clear();
     console.echoToHost(true); // echo all prints to the host
-
-    heap.init();
 
     // init hardware
     // pit timer 100Hz
@@ -345,7 +345,6 @@ pub fn testHeap() void {
 }
 
 pub fn main(_: arch.CPU, screen: *Screen) !void {
-    try acpi.init();
     std.log.debug("main", .{});
     log.debug("shutting down", .{});
     const is64bit = builtin.target.cpu.arch == .x86_64;
@@ -360,7 +359,10 @@ pub fn main(_: arch.CPU, screen: *Screen) !void {
     while (true) {
         console.write("> ");
         const line = console.readline(&buf, true) catch |err| switch (err) {
-            error.BufferOverflow => @panic("Buffer overflow"),
+            error.BufferOverflow => {
+                console.print("Err: Command too long\n", .{});
+                continue;
+            },
         };
         console.write("\n");
 
@@ -372,7 +374,7 @@ pub fn main(_: arch.CPU, screen: *Screen) !void {
 
         const cmd_name = line[0 .. std.mem.indexOf(u8, line, " ") orelse line.len];
 
-        for (commands) |cmd| {
+        for (commands.commands) |cmd| {
             if (std.mem.eql(u8, cmd_name, cmd.name)) {
                 cmd.handler(line) catch |err| {
                     log.err("Command failed: {s}", .{@errorName(err)});
@@ -384,67 +386,6 @@ pub fn main(_: arch.CPU, screen: *Screen) !void {
             log.info("Try 'help'", .{});
         }
     }
-}
-
-const Command = struct {
-    name: []const u8,
-    help: []const u8,
-    handler: *const fn (line: []const u8) anyerror!void,
-};
-
-const commands: []const Command = &[_]Command{
-    Command{
-        .name = "help",
-        .help = "Prints this help message",
-        .handler = help,
-    },
-    Command{
-        .name = "hlt",
-        .help = "Halt the system",
-        .handler = hlt,
-    },
-    Command{
-        .name = "echo",
-        .help = "Prints to the screen",
-        .handler = echo,
-    },
-    Command{
-        .name = "ticks",
-        .help = "Prints the number of ticks",
-        .handler = getTicks,
-    },
-    Command{
-        .name = "clear",
-        .help = "Clears the screen",
-        .handler = clear,
-    },
-};
-
-fn help(_: []const u8) anyerror!void {
-    console.noSwap();
-    defer console.swap();
-    for (commands) |cmd| {
-        console.print("{s} - {s}\n", .{ cmd.name, cmd.help });
-    }
-}
-
-fn hlt(_: []const u8) anyerror!void {
-    io.hlt();
-}
-
-fn echo(line: []const u8) anyerror!void {
-    var args = std.mem.tokenizeScalar(u8, line, ' ');
-    _ = args.next(); // skip the cmd
-    console.write(args.rest());
-    console.write("\n");
-}
-
-fn getTicks(_: []const u8) anyerror!void {
-    console.print("IDK\n", .{});
-}
-
-fn clear(_: []const u8) anyerror!void {
-    console.clear();
 }
 
 fn drawLoop(screen: *Screen) void {
