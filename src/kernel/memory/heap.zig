@@ -16,10 +16,11 @@ pub fn allocator() @import("std").mem.Allocator {
 }
 
 // C Abi wrappers
-pub export fn malloc(size: usize) ?[*]u8 {
+pub export fn malloc(size: usize) ?*anyopaque {
     return heap.allocate(size, .@"16") catch null;
 }
 
-pub export fn free(ptr: [*]u8) void {
-    heap.free(ptr);
+pub export fn free(ptr: ?*anyopaque) void {
+    if (ptr == null) return;
+    heap.free(@ptrCast(ptr));
 }

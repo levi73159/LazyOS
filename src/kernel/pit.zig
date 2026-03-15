@@ -37,7 +37,7 @@ pub fn init(freq: u32) void {
 }
 
 fn handler(_: Frame) void {
-    tick_count += 1;
+    _ = @atomicRmw(u64, &tick_count, .Add, 1, .monotonic);
 }
 
 fn sendCommandByte(command: CommandByte) void {
@@ -45,7 +45,7 @@ fn sendCommandByte(command: CommandByte) void {
 }
 
 pub fn ticks() u64 {
-    return tick_count;
+    return @atomicLoad(u64, &tick_count, .monotonic);
 }
 
 pub fn getFrequency() u32 {
@@ -53,14 +53,9 @@ pub fn getFrequency() u32 {
 }
 
 pub fn sleep(ms: u32) void {
-    // PIT is at 100 Hz -> 1 tick = 10ms
-    const ticks_per_ms = @as(f64, @floatFromInt(frequency)) / 1000.0; // = 0.1 ticks per ms
-    const total_ticks: f64 = @as(f64, @floatFromInt(ms)) * ticks_per_ms;
-    const ticks_to_wait: u64 = @intFromFloat(@trunc(total_ticks));
-
-    const end = tick_count + ticks_to_wait;
-    while (tick_count < end) {
-        // busy-wait until enough ticks have passed
-        asm volatile ("hlt"); // sleep CPU until next interrupt
+    const ticks_to_wait = (@as(u64, ms) * frequency) / 1000;
+    const end = @atomicLoad(u64, &tick_count, .monotonic) + ticks_to_wait;
+    while (@atomicLoad(u64, &tick_count, .monotonic) < end) {
+        asm volatile ("pause"); // hint to CPU we're spinning, no race concern
     }
 }

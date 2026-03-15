@@ -145,6 +145,10 @@ pub fn allocPagesV(count: usize) !u64 {
 }
 
 pub fn freePages(phys: u64, count: usize) void {
+    if (@import("builtin").mode == .Debug) {
+        // check if phys is page aligned
+        std.debug.assert((phys & (PAGE_SIZE - 1)) == 0);
+    }
     const index = phys / PAGE_SIZE;
     for (0..count) |i| {
         clearBit(index + i);

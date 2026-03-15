@@ -10,6 +10,16 @@ const pit = @import("pit.zig");
 const BootInfo = @import("arch/bootinfo.zig").BootInfo;
 const pmem = @import("memory/pmem.zig");
 const paging = @import("arch/paging.zig");
+const acpi = @import("acpi/acpi.zig");
+
+const acpi_oslevel = @import("acpi/osl.zig"); // NOTE: MUST BE IMPORTED FIRST FOR ACPI TO WORK
+comptime {
+    _ = acpi_oslevel; // force import
+}
+
+const c = @cImport({
+    @cInclude("uacpi/acpi.h");
+});
 
 const heap = @import("memory/heap.zig");
 
@@ -31,6 +41,8 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     pmem.init(mb.memory_map, mb.hhdm_offset);
     paging.init(mb);
 
+    pit.init(100);
+
     const framebuffer = mb.getFramebuffer(u32);
 
     const screen = Screen.init(framebuffer, mb.framebuffer);
@@ -47,7 +59,6 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
 
     // init hardware
     // pit timer 100Hz
-    pit.init(100);
     kb.init();
 
     const cpu = arch.CPU.init() catch |err| blk: {
@@ -126,27 +137,27 @@ pub fn testHeap() void {
             fail("multi alloc b", &failed);
             return;
         };
-        const c = allocator.create(u32) catch {
+        const cc = allocator.create(u32) catch {
             fail("multi alloc c", &failed);
             return;
         };
         a.* = 1;
         b.* = 2;
-        c.* = 3;
-        if (a.* == 1 and b.* == 2 and c.* == 3)
+        cc.* = 3;
+        if (a.* == 1 and b.* == 2 and cc.* == 3)
             pass("multiple allocs", &passed)
         else
             fail("multiple allocs", &failed);
         // make sure they don't overlap
         if (@intFromPtr(a) != @intFromPtr(b) and
-            @intFromPtr(b) != @intFromPtr(c) and
-            @intFromPtr(a) != @intFromPtr(c))
+            @intFromPtr(b) != @intFromPtr(cc) and
+            @intFromPtr(a) != @intFromPtr(cc))
             pass("no overlap", &passed)
         else
             fail("no overlap", &failed);
         allocator.destroy(a);
         allocator.destroy(b);
-        allocator.destroy(c);
+        allocator.destroy(cc);
     }
 
     // ── test 3: free and realloc ──────────────────────────────────────────────
@@ -184,7 +195,7 @@ pub fn testHeap() void {
             return;
         };
         log.debug("align of u32: {d}", .{@alignOf(u32)});
-        const c = allocator.create(u32) catch {
+        const cc = allocator.create(u32) catch {
             fail("align u32", &failed);
             return;
         };
@@ -202,14 +213,14 @@ pub fn testHeap() void {
         const ok =
             std.mem.isAligned(@intFromPtr(a), @alignOf(u8)) and
             std.mem.isAligned(@intFromPtr(b), @alignOf(u16)) and
-            std.mem.isAligned(@intFromPtr(c), @alignOf(u32)) and
+            std.mem.isAligned(@intFromPtr(cc), @alignOf(u32)) and
             std.mem.isAligned(@intFromPtr(d), @alignOf(u64)) and
             std.mem.isAligned(@intFromPtr(e), @alignOf(u128));
 
         if (ok) pass("alignment", &passed) else fail("alignment", &failed);
         allocator.destroy(a);
         allocator.destroy(b);
-        allocator.destroy(c);
+        allocator.destroy(cc);
         allocator.destroy(d);
         allocator.destroy(e);
     }
@@ -310,13 +321,13 @@ pub fn testHeap() void {
             fail("coalesce", &failed);
             return;
         };
-        const c = allocator.create(u64) catch {
+        const cc = allocator.create(u64) catch {
             fail("coalesce", &failed);
             return;
         };
         allocator.destroy(a);
         allocator.destroy(b);
-        allocator.destroy(c);
+        allocator.destroy(cc);
         // now try to alloc something big — should fit in coalesced space
         const big = allocator.alloc(u64, 3) catch {
             fail("coalesce alloc after free", &failed);
@@ -334,7 +345,9 @@ pub fn testHeap() void {
 }
 
 pub fn main(_: arch.CPU, screen: *Screen) !void {
+    try acpi.init();
     std.log.debug("main", .{});
+    log.debug("shutting down", .{});
     const is64bit = builtin.target.cpu.arch == .x86_64;
     if (is64bit) {
         console.print("Welcome to LazyOS 64-bit\n", .{});
@@ -342,8 +355,6 @@ pub fn main(_: arch.CPU, screen: *Screen) !void {
         console.print("Welcome to LazyOS 32-bit\n", .{});
     }
     console.print("Type 'help' for a list of commands\n", .{});
-
-    testHeap();
 
     var buf: [256]u8 = undefined;
     while (true) {

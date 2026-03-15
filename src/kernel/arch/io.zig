@@ -93,3 +93,18 @@ pub fn setCursor(x: u16, y: u16, width: u16) void {
 pub fn wait() void {
     outb(unused_port, 0);
 }
+
+// get current RFLAGS
+pub fn getFlags() u64 {
+    return asm volatile ("pushfq; popq %[flags]"
+        : [flags] "=r" (-> u64),
+    );
+}
+
+// restore RFLAGS (re-enables interrupts if they were on before)
+pub fn restoreFlags(flags: u64) void {
+    asm volatile ("pushq %[flags]; popfq"
+        :
+        : [flags] "r" (flags),
+    );
+}

@@ -11,8 +11,8 @@ const Image = struct {
 };
 
 pub fn build(b: *std.Build) void {
-    var threaded = std.Io.Threaded.init(b.allocator, .{});
-    io = threaded.io();
+    // var threaded = std.Io.Threaded.init(b.allocator, .{});
+    // io = threaded.io();
     const kernel_target = b.resolveTargetQuery(.{
         .cpu_arch = .x86_64,
         .os_tag = .freestanding,
@@ -44,9 +44,9 @@ pub fn build(b: *std.Build) void {
     kernel_mod.addAssemblyFile(b.path("src/kernel/arch/arch.s"));
 
     kernel_mod.addIncludePath(b.path("src/kernel/c/headers"));
-    kernel_mod.addIncludePath(b.path("vendor/acpica/source/include/"));
+    kernel_mod.addIncludePath(b.path("vendor/uACPI/include/"));
 
-    // addAcpicaCFiles(b, kernel_mod);
+    addUACPI(b, kernel_mod);
 
     std.log.debug("install path: {s}, prefix: {s}", .{ b.install_path, b.install_prefix });
 
@@ -71,8 +71,8 @@ pub fn build(b: *std.Build) void {
         "-s",
         "-serial",
         "file:serial.log",
-        "--no-shutdown",
-        "--no-reboot",
+        // "--no-shutdown",
+        // "--no-reboot",
     });
     if (debug_int) {
         run_qemu_cmd.addArgs(&.{ "-d", "int" });
@@ -135,9 +135,9 @@ pub fn makeImage(b: *std.Build, kernel: *std.Build.Step.Compile) Image {
     return Image{ .path = out, .step = step };
 }
 
-fn addAcpicaCFiles(b: *std.Build, mod: *std.Build.Module) void {
-    const path = "vendor/acpica/source/components/";
-    const dir = b.build_root.handle.openDir(io, path, .{ .iterate = true }) catch |err| {
+fn addUACPI(b: *std.Build, mod: *std.Build.Module) void {
+    const path = "vendor/uACPI/source/";
+    const dir = b.build_root.handle.openDir(path, .{ .iterate = true }) catch |err| {
         std.log.err("Failed to open {s}: {s}", .{ path, @errorName(err) });
         exit(1);
     };
@@ -148,18 +148,9 @@ fn addAcpicaCFiles(b: *std.Build, mod: *std.Build.Module) void {
     };
     defer walker.deinit();
 
-    while (walker.next(io) catch |err| @panic(@errorName(err))) |entry| {
+    while (walker.next() catch |err| @panic(@errorName(err))) |entry| {
         if (entry.kind == .file and std.mem.endsWith(u8, entry.basename, ".c")) {
-            mod.addCSourceFile(.{
-                .file = b.path(b.pathJoin(&.{ path, entry.path })),
-                .flags = &.{
-                    "-ffreestanding",
-                    "-fno-stack-protector",
-                    "-fno-strict-aliasing",
-                    "-DACPI_CACHE_T=ACPI_MEMORY_LIST",
-                    "-DACPI_USE_LOCAL_CACHE=1",
-                },
-            });
+            mod.addCSourceFile(.{ .file = b.path(b.pathJoin(&.{ path, entry.path })), .flags = &.{} });
         }
     }
 }

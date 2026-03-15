@@ -9,7 +9,8 @@ const log = std.log.scoped(.heap);
 
 const PAGE_SIZE = 4096;
 
-const HEAP_PAGES = 4;
+const HEAP_PAGES = 64;
+const EXTRA_GROWTH = 8;
 const HEAP_SIZE = PAGE_SIZE * HEAP_PAGES;
 
 // every time we allocate we also will have this
@@ -34,11 +35,12 @@ const Fields = packed struct(usize) {
 
 const MAGIC: u64 = @bitCast([8]u8{ 'B', 'L', 'O', 'K', 'H', 'E', 'A', 'D' });
 const Header = struct {
-    magic: u64 = MAGIC,
+    magic: if (is_debug) u64 else void = if (is_debug) MAGIC else {},
     flags: Fields, // does not include header of offset data header at start of data, only
     next: ?*Header,
 
     fn verify(self: *const Header) void {
+        if (!is_debug) return;
         if (self.magic != MAGIC) std.debug.panic("Header Corrupted at address {x}, magic: {x}, header: {f}", .{ @intFromPtr(self), self.magic, self });
     }
 
@@ -84,11 +86,12 @@ const Header = struct {
 const HEADER_SIZE = @sizeOf(Header);
 const OFFSET_SIZE = @sizeOf(u8);
 
-const MIN_SPLIT = 32;
+const MIN_SPLIT = 4;
 
 start: ?*Header = null,
 end: ?*Header = null,
 last_free: ?*Header = null,
+pages_in_heap: u32 = 0,
 
 pub fn init() Self {
     log.debug("HEADER SIZE: {d}", .{@sizeOf(Header)});
@@ -98,7 +101,7 @@ pub fn init() Self {
         .flags = .init(HEAP_SIZE - HEADER_SIZE - OFFSET_SIZE, true),
         .next = null,
     };
-    return Self{ .start = header, .end = header, .last_free = header };
+    return Self{ .start = header, .end = header, .last_free = header, .pages_in_heap = HEAP_PAGES };
 }
 
 pub fn deinit(self: *Self) void {
@@ -123,8 +126,7 @@ fn findPrev(self: *Self, block: *Header) ?*Header {
     return null;
 }
 
-fn growHeap(self: *Self, pages: usize) !*Header {
-    log.debug("growing heap by {d} pages", .{pages});
+fn allocPage(pages: usize) !*Header {
     const page = try pmem.allocPagesV(pages);
     const header: *Header = @ptrFromInt(page);
 
@@ -134,12 +136,24 @@ fn growHeap(self: *Self, pages: usize) !*Header {
         .next = null,
     };
 
+    return header;
+}
+
+fn growHeap(self: *Self, pages: usize) !*Header {
+    log.debug("growing heap by {d}+1 pages", .{pages});
+    const header = try allocPage(pages);
+    const extra: ?*Header = if (self.pages_in_heap < 1_000) allocPage(EXTRA_GROWTH) catch null else null;
+
     if (self.end) |end| {
         end.next = header;
+        header.next = extra;
     }
 
-    self.end = header;
+    self.end = extra orelse header;
     self.last_free = header;
+
+    self.pages_in_heap += @intCast(pages);
+    if (extra != null) self.pages_in_heap += EXTRA_GROWTH;
     return header;
 }
 
@@ -294,8 +308,7 @@ pub fn allocate(self: *Self, size: usize, alignment: mem.Alignment) ![*]u8 {
     offset_ptr.* = @intCast(padding);
 
     if (!self.splitBlock(block, size)) {
-        // can't shrink block so we act like we shrink it by setting the size and adding the block padding to compensate
-        log.warn("can't shrink block", .{});
+        // can't shrink block so we act like we splitting it by setting the size and adding the block padding to compensate
         block.flags.block_padding += @intCast(block.getSize() - size);
         block.setSize(size);
     }
@@ -313,8 +326,30 @@ pub fn free(self: *Self, ptr: [*]u8) void {
 
     updated_block.addSize(updated_block.padding());
     updated_block.setPadding(0);
-
     updated_block.verify();
+
+    if (self.pages_in_heap > HEAP_PAGES) {
+        var page_addr = @intFromPtr(block);
+        var how_much_pages = block.trueSize() / PAGE_SIZE;
+
+        if (HEAP_PAGES > self.pages_in_heap - how_much_pages) {
+            // figure out how much we can free
+            how_much_pages = self.pages_in_heap - HEAP_PAGES;
+
+            // sanity check: make sure we are not freeing the header, if we are skip this
+            page_addr += how_much_pages * PAGE_SIZE;
+            if (page_addr <= @intFromPtr(ptr) + MIN_SPLIT) return;
+            block.setSize(block.getSize() - how_much_pages * PAGE_SIZE);
+        }
+
+        // can free entire block
+        const prev = self.findPrev(block);
+        if (prev) |p| {
+            p.next = block.next;
+        }
+
+        pmem.freePagesV(page_addr, how_much_pages);
+    }
 }
 
 fn _alloc(ctx: *anyopaque, size: usize, alignment: mem.Alignment, ret_addr: usize) ?[*]u8 {
@@ -401,7 +436,6 @@ pub fn dump(self: *Self) void {
         log.debug("  USER DATA ADDR: {x}", .{@intFromPtr(block) + HEADER_SIZE + OFFSET_SIZE + block.padding()});
         log.debug("  Free: {}", .{block.isFree()});
         log.debug("  Next: {?*}", .{block.next});
-        log.debug("  Magic: {x}", .{block.magic});
 
         if (!block.isFree()) {
             const data_addr = @intFromPtr(block) + HEADER_SIZE + OFFSET_SIZE + block.padding();

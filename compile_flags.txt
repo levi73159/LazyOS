@@ -1,0 +1,2 @@
+-I/home/levi/Projects/LazyOS/src/kernel/c/headers/
+-I/home/levi/Projects/LazyOS/vendor/acpica/source/include/

@@ -408,7 +408,7 @@ pub fn logFn(
     };
 
     const reset = "\x1b[0m";
-    const w = if (scope == .host or level == .debug) dbgWriter() else writer();
+    const w = dbgWriter();
 
     const prefix = if (scope != .host and scope != .default and scope != .none)
         color ++ "[" ++ @tagName(scope) ++ "] " ++ comptime level.asText() ++ ": "

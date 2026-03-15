@@ -50,6 +50,15 @@ pub fn register(irq: u8, handler: Handler) void {
     handlers[irq] = handler;
 }
 
+/// return false if the irq is already registered
+pub fn registerNoOverwrite(irq: u8, handler: Handler) bool {
+    if (handlers[irq] == null) {
+        handlers[irq] = handler;
+        return true;
+    }
+    return false;
+}
+
 pub fn unregister(irq: u8) void {
     handlers[irq] = null;
 }
