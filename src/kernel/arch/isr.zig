@@ -9,10 +9,9 @@ const host = @import("std").log.scoped(.host);
 const io = @import("io.zig");
 
 const InterruptFn = *const fn () callconv(.naked) noreturn;
-pub const Handler = *const fn (frame: GlobalFrame) void;
+pub const Handler = *const fn (frame: *InterruptFrame) void;
 
-const InterruptFrame = @import("registers.zig").ArchFrame;
-const GlobalFrame = @import("registers.zig").InterruptFrame;
+const InterruptFrame = @import("registers.zig").InterruptFrame;
 
 pub const Exception = enum(u8) {
     division_by_zero = 0,
@@ -95,7 +94,7 @@ pub fn init() void {
 
 export fn interruptHandler(frame: *InterruptFrame) callconv(.c) void {
     if (handlers[frame.interrupt_number]) |handler| {
-        handler(GlobalFrame.fromArchFrame(frame));
+        handler(frame);
     } else if (frame.interrupt_number >= 32) {
         host.warn("Unhandled interrupt {d}", .{frame.interrupt_number});
     } else {

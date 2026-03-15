@@ -262,7 +262,7 @@ const IrqHandler = struct {
 
 var uacpi_irq_handlers: [16]?IrqHandler = [_]?IrqHandler{null} ** 16;
 
-fn wrapper(frame: arch.registers.InterruptFrame) void {
+fn wrapper(frame: *arch.registers.InterruptFrame) void {
     const number: u8 = @truncate(frame.interrupt_number - 1);
     log.debug("IRQ {d}", .{number});
     if (number >= 16) {
