@@ -20,10 +20,6 @@ comptime {
     _ = acpi_oslevel; // force import
 }
 
-const c = @cImport({
-    @cInclude("uacpi/acpi.h");
-});
-
 const heap = @import("memory/heap.zig");
 
 const Screen = @import("Screen.zig");
@@ -78,12 +74,29 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     console.echoToHost(false);
 
     scheduler.init();
-    scheduler.addTask(&mainWrapper);
-    // mainWrapper();
+    scheduler.addTask(&blinkTask);
+
     io.sti();
+    mainWrapper();
     while (true) {}
     std.log.debug("HALTING", .{});
     io.hlt();
+}
+
+fn blinkTask() noreturn {
+    const screen = Screen.get();
+    var tick: u32 = 0;
+    while (true) {
+        const c = if (tick % 2 == 0) Color.red() else Color.blue();
+        screen.drawRect(0, 0, 20, 20, c);
+        screen.swapBuffers();
+        // busy wait ~100ms
+        var i: u32 = 0;
+        while (i < 1_000_000) : (i += 1) {
+            asm volatile ("pause");
+        }
+        tick += 1;
+    }
 }
 
 inline fn color(r: u32, g: u32, b: u32) u32 {

@@ -5,7 +5,7 @@ const heap = @import("memory/heap.zig");
 const page_allocator = heap.page_allocator; // use to allocate stack
 const PAGE_SIZE = heap.PAGE_SIZE;
 
-const STACK_SIZE = 1024 * 1024;
+const STACK_SIZE = 16 * 1024; // or 4 pages
 
 const log = std.log.scoped(._scheduler);
 
@@ -183,4 +183,3 @@ fn appendTask(task: *Task) void {
         task.next = null;
     }
 }
-
