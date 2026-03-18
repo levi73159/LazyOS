@@ -2,6 +2,8 @@ const builtin = @import("builtin");
 pub const page_allocator = @import("page_allocator.zig").allocator;
 pub const LinkedList = @import("LinkedList.zig");
 
+pub const PAGE_SIZE = 0x1000;
+
 var heap: LinkedList = undefined;
 var has_initialized = false;
 

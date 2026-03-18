@@ -145,10 +145,6 @@ pub fn allocPagesV(count: usize) !u64 {
 }
 
 pub fn freePages(phys: u64, count: usize) void {
-    if (@import("builtin").mode == .Debug) {
-        // check if phys is page aligned
-        std.debug.assert((phys & (PAGE_SIZE - 1)) == 0);
-    }
     const index = phys / PAGE_SIZE;
     for (0..count) |i| {
         clearBit(index + i);
@@ -189,7 +185,7 @@ inline fn getBit(index: u64) bool {
 
 fn freeRegion(base: u64, length: u64) void {
     const start = base / PAGE_SIZE;
-    const count = length / PAGE_SIZE;
+    const count = (length + PAGE_SIZE - 1) / PAGE_SIZE;
 
     for (0..count) |i| {
         clearBit(start + i);
@@ -198,7 +194,8 @@ fn freeRegion(base: u64, length: u64) void {
 
 fn markUsed(base: u64, length: u64) void {
     const start = base / PAGE_SIZE;
-    const count = length / PAGE_SIZE;
+    // round length to nearest page
+    const count = (length + PAGE_SIZE - 1) / PAGE_SIZE;
 
     for (0..count) |i| {
         setBit(start + i);

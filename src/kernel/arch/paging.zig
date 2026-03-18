@@ -123,6 +123,10 @@ pub fn mapHugePage(virt: u64, phys: u64, flags: PageFlags) void {
     std.debug.assert(virt & (HUGE_PAGE_SIZE - 1) == 0);
     const pdpt_table = getOrCreatePageTable(&pml4, va.pml4_index);
     const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index);
+    const entry = pd_table[va.pd_index];
+    if (entry.present and entry.page_size) {
+        log.debug("HUGE PAGE CONFLICT at {x}", .{virt});
+    }
     // set huge page bit directly in PD, no PT needed
     pd_table[va.pd_index] = PageEntry.init(phys, .{
         .present = flags.present,
@@ -159,6 +163,10 @@ pub fn init(mb: *const bootinfo.BootInfo) void {
     while (phys < total_memory) : (phys += HUGE_PAGE_SIZE) {
         mapHugePage(bootinfo.toVirtualHHDM(phys), phys, .rw);
     }
+
+    log.debug("kernel virt range: {x} - {x}", .{ mb.kernel.virt_addr, mb.kernel.virt_addr + mb.kernel.size });
+
+    log.debug("bss: {x} - {x}", .{ @intFromPtr(&__bss_start), @intFromPtr(&__bss_end) });
 
     // map kernel
     var offset: u64 = 0;
@@ -206,6 +214,15 @@ fn getFlags(virt: u64) PageFlags {
 }
 
 pub fn getPageEntry(virt: u64) *const PageEntry {
+    const va = VirtualAddress.from(virt);
+    const pdpt_table = getOrCreatePageTable(&pml4, va.pml4_index);
+    const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index);
+    const pt_table = getOrCreatePageTable(pd_table, va.pd_index);
+
+    return &pt_table[va.pt_index];
+}
+
+pub fn getPageEntryMut(virt: u64) *PageEntry {
     const va = VirtualAddress.from(virt);
     const pdpt_table = getOrCreatePageTable(&pml4, va.pml4_index);
     const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index);

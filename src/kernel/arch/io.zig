@@ -63,9 +63,15 @@ pub fn inl(port: u16) u32 {
     return in(u32, port);
 }
 
-pub fn hlt() noreturn {
+pub fn hltNoInt() noreturn {
     while (true) {
         asm volatile ("cli");
+        asm volatile ("hlt");
+    }
+}
+
+pub fn hlt() noreturn {
+    while (true) {
         asm volatile ("hlt");
     }
 }

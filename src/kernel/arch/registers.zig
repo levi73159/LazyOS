@@ -63,11 +63,13 @@ pub const InterruptFrame = packed struct {
             self.rflags,
         });
 
-        try writer.print("   cs={x}   ds={x}\n", .{
+        try writer.print("   cs={x}   ds={x}   ss={x}\n", .{
             self.cs,
             self.ds,
+            self.ss,
         });
 
         try writer.print("   error={x}   interrupt={x}", .{ self.error_code, self.interrupt_number });
+        try writer.print("   rsp % 16 = {x}", .{self.rsp & 0xf});
     }
 };

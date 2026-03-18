@@ -62,7 +62,7 @@ fn help(_: []const u8) anyerror!void {
 }
 
 fn hlt(_: []const u8) anyerror!void {
-    io.hlt();
+    io.hltNoInt();
 }
 
 fn echo(line: []const u8) anyerror!void {

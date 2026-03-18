@@ -6,6 +6,7 @@ const kb = @import("keyboard.zig");
 const Screen = @import("Screen.zig");
 const Color = @import("Color.zig");
 const font = @import("fonts/Basic.zig");
+const SerialWriter = @import("arch/serial.zig").SerialWriter;
 
 const charmap = @import("fonts/charmap.zig");
 
@@ -25,10 +26,16 @@ var no_swap: bool = false;
 
 const pixels_per_scanline = 32;
 
+var serial: ?*std.Io.Writer = null;
+
 pub fn init(_screen: *Screen) void {
     std.log.debug("Initializing console", .{});
     screen = _screen;
     initialized = true;
+}
+
+pub fn initSerial(serial_writer: *std.Io.Writer) void {
+    serial = serial_writer;
 }
 
 pub fn echoToHost(enabled: bool) void {
@@ -76,10 +83,14 @@ pub fn getTextHeight() u32 {
 }
 
 fn dbgc(c: u8) void {
+    if (serial) |s| {
+        s.writeByte(c) catch {};
+    }
     io.out(0xe9, c);
 }
 
 pub fn putchar(c: u8) void {
+    if (c == '\r') return; // ignore carriage returns
     if (!initialized) {
         dbgc(c);
         return;
@@ -140,7 +151,6 @@ pub fn write(data: []const u8) void {
     var i: usize = 0;
     var buf: [4]u8 = undefined;
     var ib: usize = 0;
-
     while (i < data.len) {
         const c = data[i];
         if (!initialized) {
@@ -203,6 +213,9 @@ pub fn print(comptime fmt: []const u8, args: anytype) void {
 
 // print to both the terminal and the dbg port
 pub fn printB(comptime fmt: []const u8, args: anytype) void {
+    if (serial) |s| {
+        s.print(fmt, args) catch {};
+    }
     dbgPrint(fmt, args);
 }
 
@@ -212,11 +225,18 @@ pub fn dbgPrint(comptime fmt: []const u8, args: anytype) void {
 
 pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
     // white on red
+    if (serial) |s| {
+        s.writeAll("\x1b[97;41m") catch {};
+        s.print("!!! KERNEL PANIC !!!\n{s}\n", .{msg}) catch {};
+
+        s.print("return address: {?x}\n", .{ret_addr}) catch {};
+    }
+
     dbg("\x1b[97;41m");
     dbgPrint("!!! KERNEL PANIC !!!\n{s}\n", .{msg});
 
     dbgPrint("return address: {?x}\n", .{ret_addr});
-    io.hlt();
+    io.hltNoInt();
 }
 
 pub fn writeFn(comptime func: fn ([]const u8) void) fn (
@@ -409,7 +429,7 @@ pub fn logFn(
 
     const reset = "\x1b[0m";
     const scope_start_unscore = comptime std.mem.startsWith(u8, @tagName(scope), "_");
-    const w = if (scope == .host or level == .debug or scope_start_unscore) dbgWriter() else writer();
+    const w = if (scope == .host or level == .debug or scope_start_unscore) serial orelse dbgWriter() else writer();
 
     const prefix = if (scope != .host and scope != .default and scope != .none)
         color ++ "[" ++ @tagName(scope)[if (scope_start_unscore) 1 else 0..] ++ "] " ++ comptime level.asText() ++ ": "
@@ -418,7 +438,7 @@ pub fn logFn(
 
     w.writeAll(prefix) catch unreachable;
     w.print(format, args) catch unreachable;
-    w.writeAll(reset ++ "\n") catch unreachable;
+    w.writeAll(reset ++ "\r\n") catch unreachable;
 }
 
 pub fn noSwap() void {

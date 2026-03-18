@@ -25,6 +25,7 @@ pub fn init() !void {
 }
 
 pub fn shutdown() void {
+    io.cli();
     check(c.uacpi_prepare_for_sleep_state(c.UACPI_SLEEP_STATE_S5)) catch {
         log.err("ACPI shutdown failed: prepare_for_sleep_state", .{});
     };
@@ -35,6 +36,7 @@ pub fn shutdown() void {
 }
 
 pub fn reboot() void {
+    io.cli();
     check(c.uacpi_reboot()) catch {
         io.outb(0x64, 0xfe); // fallback on keyboard controller reset
     };

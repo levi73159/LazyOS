@@ -12,7 +12,7 @@ QEMU_ARGS="-S -gdb stdio -cdrom $1"
 # layout asm
 cat > .gdbinit << EOF
 symbol-file $PWD/zig-out/bin/kernel
-set disassembly-flavor intel
+set disassembly-flavor att
 target remote | qemu-system-x86_64 $QEMU_ARGS
 EOF
 

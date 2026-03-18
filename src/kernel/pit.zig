@@ -1,6 +1,7 @@
 const std = @import("std");
 const arch = @import("arch.zig");
 const io = arch.io;
+const scheduler = @import("scheduler.zig");
 
 const Frame = arch.registers.InterruptFrame;
 
@@ -36,8 +37,9 @@ pub fn init(freq: u32) void {
     arch.irq.enable(0);
 }
 
-fn handler(_: *Frame) void {
+fn handler(frame: *Frame) void {
     _ = @atomicRmw(u64, &tick_count, .Add, 1, .monotonic);
+    scheduler.schedule(frame);
 }
 
 fn sendCommandByte(command: CommandByte) void {

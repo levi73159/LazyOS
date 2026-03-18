@@ -11,6 +11,9 @@ const BootInfo = @import("arch/bootinfo.zig").BootInfo;
 const pmem = @import("memory/pmem.zig");
 const paging = @import("arch/paging.zig");
 const commands = @import("commands.zig");
+const acpi = arch.acpi;
+const scheduler = @import("scheduler.zig");
+const serial = @import("arch/serial.zig");
 
 const acpi_oslevel = @import("acpi/osl.zig"); // NOTE: MUST BE IMPORTED FIRST FOR ACPI TO WORK
 comptime {
@@ -34,6 +37,11 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     // const kernel_start: usize = @intFromPtr(&__kernel_start);
     // const kernel_end: usize = @intFromPtr(&__kernel_end);
     // arch.paging.init(kernel_start, kernel_end);
+    var serial_writer = serial.SerialWriter.init(.COM1);
+    const writer = &serial_writer.writer;
+    console.initSerial(writer);
+
+    console.dbg("Init Kernel\n");
     log.debug("Initializing kernel components...\n", .{});
     hal.earlyInit();
 
@@ -65,15 +73,15 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
         log.err("Failed to get the CPU: {s}", .{@errorName(err)});
         break :blk arch.CPU.unknown;
     };
+    _ = cpu;
 
     console.echoToHost(false);
+
+    scheduler.init();
+    scheduler.addTask(&mainWrapper);
+    // mainWrapper();
     io.sti();
-
-    main(cpu, screen) catch |err| {
-        log.err("Failed to run main: {s}", .{@errorName(err)});
-    };
-
-    console.write("You reached the end of the kernel, halting...\n");
+    while (true) {}
     std.log.debug("HALTING", .{});
     io.hlt();
 }
@@ -344,7 +352,19 @@ pub fn testHeap() void {
     }
 }
 
-pub fn main(_: arch.CPU, screen: *Screen) !void {
+fn mainWrapper() noreturn {
+    const screen = Screen.get();
+    main(screen) catch |err| {
+        std.log.scoped(.host).err("Main failed: {s}", .{@errorName(err)});
+    };
+    std.log.scoped(.host).err("Shutting down", .{});
+    acpi.shutdown();
+    while (true) {
+        asm volatile ("hlt");
+    }
+}
+
+fn main(screen: *Screen) !void {
     std.log.debug("main", .{});
     log.debug("shutting down", .{});
     const is64bit = builtin.target.cpu.arch == .x86_64;
