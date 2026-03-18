@@ -74,7 +74,6 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     console.echoToHost(false);
 
     scheduler.init();
-    scheduler.addTask(&blinkTask);
 
     io.sti();
     mainWrapper();
@@ -83,12 +82,29 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     io.hlt();
 }
 
-fn blinkTask() noreturn {
+fn blinkTask() callconv(.c) void {
     const screen = Screen.get();
     var tick: u32 = 0;
     while (true) {
         const c = if (tick % 2 == 0) Color.red() else Color.blue();
         screen.drawRect(0, 0, 20, 20, c);
+        screen.swapBuffers();
+        // busy wait ~100ms
+        var i: u32 = 0;
+        while (i < 1_000_000) : (i += 1) {
+            asm volatile ("pause");
+        }
+        tick += 1;
+    }
+}
+
+fn returnTask() callconv(.c) void {
+    const screen = Screen.get();
+    var tick: u32 = 0;
+    while (true) {
+        if (tick == 10) return;
+        const c = if (tick % 2 == 0) Color.red() else Color.blue();
+        screen.drawRect(100, 100, 20, 20, c);
         screen.swapBuffers();
         // busy wait ~100ms
         var i: u32 = 0;
@@ -365,7 +381,7 @@ pub fn testHeap() void {
     }
 }
 
-fn mainWrapper() noreturn {
+fn mainWrapper() callconv(.c) noreturn {
     const screen = Screen.get();
     main(screen) catch |err| {
         std.log.scoped(.host).err("Main failed: {s}", .{@errorName(err)});

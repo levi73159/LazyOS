@@ -31,12 +31,14 @@ pub fn build(b: *std.Build) void {
         .red_zone = false,
         .sanitize_thread = false,
         .pic = false,
+        .strip = false,
     });
     const kernel = b.addExecutable(.{
         .name = "kernel",
         .root_module = kernel_mod,
     });
     kernel.use_llvm = true;
+    kernel.use_lld = true;
     kernel.setLinkerScript(b.path("linker.ld"));
     kernel.pie = false;
     kernel.entry = .disabled;

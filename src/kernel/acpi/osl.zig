@@ -1,6 +1,7 @@
 const std = @import("std");
 const arch = @import("../arch.zig");
 const heap = @import("../memory/heap.zig");
+const scheduler = @import("../scheduler.zig");
 const bootinfo = arch.bootinfo;
 const limine = arch.limine;
 const paging = arch.paging;
@@ -329,6 +330,7 @@ export fn uacpi_kernel_handle_firmware_request(req: *c.uacpi_firmware_request) c
 }
 
 // ── Work scheduling ───────────────────────────────────────────────────────
+var work_ids: std.ArrayList(u32) = .empty;
 
 export fn uacpi_kernel_schedule_work(
     work_type: c.uacpi_work_type,
@@ -337,10 +339,19 @@ export fn uacpi_kernel_schedule_work(
 ) c.uacpi_status {
     _ = work_type;
     // call directly until we have a scheduler
-    handler.?(ctx);
+    const h = handler orelse return c.UACPI_STATUS_INVALID_ARGUMENT;
+    const id = scheduler.addTask(h, .{@intFromPtr(ctx)});
+    work_ids.append(heap.allocator(), id) catch return c.UACPI_STATUS_OUT_OF_MEMORY;
+    log.debug("Spawned task: {d}", .{id});
     return c.UACPI_STATUS_OK;
 }
 
 export fn uacpi_kernel_wait_for_work_completion() c.uacpi_status {
+    for (work_ids.items) |id| {
+        log.debug("Waiting for task {d}", .{id});
+        scheduler.waitForTask(id);
+    }
+    work_ids.clearRetainingCapacity();
+    log.debug("Completed work", .{});
     return c.UACPI_STATUS_OK; // no-op, work runs synchronously above
 }

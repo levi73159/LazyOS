@@ -1,6 +1,8 @@
 const std = @import("std");
 const arch = @import("arch.zig");
 const heap = @import("memory/heap.zig");
+const io = arch.io;
+const pit = @import("pit.zig");
 
 const page_allocator = heap.page_allocator; // use to allocate stack
 const PAGE_SIZE = heap.PAGE_SIZE;
@@ -9,16 +11,24 @@ const STACK_SIZE = 16 * 1024; // or 4 pages
 
 const log = std.log.scoped(._scheduler);
 
-pub const TaskState = enum { ready, running, blocked, dead };
+var paused: bool = false;
+
+pub const TaskState = union(enum) {
+    ready, // ready to run
+    running, // currently running
+    dead, // task is dead
+    waiting: u32, // waiting for task with id
+};
 
 pub const Task = struct {
+    registers: arch.registers.InterruptFrame,
+    stack: []u8,
+    next: ?*Task,
+
     id: u32,
     state: TaskState,
-    stack: []u8,
 
     // saved register state (provied by interrupt handler)
-    registers: arch.registers.InterruptFrame,
-    next: ?*Task,
 };
 
 // will be stored on the heap
@@ -36,7 +46,7 @@ pub fn init() void {
 
     task.* = .{
         .next = null,
-        .id = 0,
+        .id = 1,
         .state = .running,
         .registers = undefined, // set in the first schedule
         .stack = &.{}, // not own by us
@@ -49,12 +59,15 @@ pub fn init() void {
 pub fn schedule(frame: *arch.registers.InterruptFrame) void {
     if (task_list == null) return; // no tasks
 
-    // log.debug("Scheduling", .{});
-    // log.debug("\n{f}", .{frame.*});
+    paused = false;
+    if (pit.ticks() % 5 == 0) {
+        removeDeadTasks();
+    }
+
     if (current) |task| {
         if (task.state == .dead) {
-            // log.warn("Task {d} is dead", .{task.id});
-            // removeTask(task);
+            log.warn("Task {d} is dead", .{task.id});
+            checkWaitingTasks(task);
         } else {
             // log.debug("Copying frame to registers", .{});
             task.state = .ready;
@@ -74,22 +87,41 @@ pub fn schedule(frame: *arch.registers.InterruptFrame) void {
 
     current = next;
     current.?.state = .running;
-    // log.debug("switching to rsp={x}", .{current.?.registers.rsp});
-    // log.debug("current task: {d}", .{current.?.id});
-
     frame.* = current.?.registers; // copy saved register state
-    // log.debug("rsp mod 16 = {}", .{current.?.registers.rsp % 16});
 }
 
-fn taskExit() noreturn {
+fn checkWaitingTasks(task: *Task) void {
+    var current_node = task_list;
+    while (current_node) |node| : (current_node = node.next) {
+        if (node.state == .waiting and node.state.waiting == task.id) {
+            node.state = .ready;
+        }
+    }
+}
+
+fn removeDeadTasks() void {
+    var current_node = task_list;
+    while (current_node) |task| : (current_node = task.next) {
+        if (current == task) continue; // do not remove current task even if it is dead
+        if (task.state == .dead) {
+            removeTask(task);
+        }
+    }
+}
+
+fn taskReturn() noreturn {
+    asm volatile ("andq $-16, %%rsp");
+    io.cli();
+    log.warn("Task Exit", .{});
     current.?.state = .dead;
     log.warn("Task {d} exited", .{current.?.id});
+    io.sti();
     while (true) {
         asm volatile ("hlt");
     }
 }
 
-// add a way of creating a task
+// add two ways of creating a task (adding task which adds a task and with a specify entry_point, usefull if you want a task that is a function and doesn't wanna spawn task at current position)
 // 1. allocate 16KB stack from heap/page allocator and add a return address that will point to taskExit
 // 2. set up initial InterruptFrame:
 //    - RIP = function entry point
@@ -102,11 +134,24 @@ fn taskExit() noreturn {
 //    (so context pointer points into the task's own stack)
 // 4. add task to linked list
 // 5. set state = .ready
-pub fn addTask(entry_point: *const fn () noreturn) void {
+pub fn addTask(entry_point: anytype, args: anytype) u32 {
+    const entry_info = @typeInfo(@TypeOf(entry_point));
+    if (entry_info != .pointer) {
+        @compileError("entry_point must be a function");
+    }
+    const entry_fn = if (entry_info == .@"fn") entry_info.@"fn" else @typeInfo(entry_info.pointer.child).@"fn";
+    const args_info = @typeInfo(@TypeOf(args));
+    if (args_info != .@"struct" or args_info.@"struct".is_tuple == false) {
+        @compileError("args must be a tuple");
+    }
+    if (args_info.@"struct".fields.len != entry_fn.params.len) {
+        @compileError("Not enough arguments for entry_point, specify more arguments");
+    }
+
     const allocator = heap.allocator();
-    const stack = allocator.alignedAlloc(u8, .@"16", STACK_SIZE) catch {
+    const stack = page_allocator.alignedAlloc(u8, .@"16", STACK_SIZE) catch {
         log.err("Failed to allocate stack", .{});
-        return;
+        return 0;
     };
 
     log.debug("stack: {x} - {x}", .{ @intFromPtr(stack.ptr), @intFromPtr(stack.ptr) + STACK_SIZE });
@@ -115,15 +160,34 @@ pub fn addTask(entry_point: *const fn () noreturn) void {
 
     // leave 128 bytes of space before taskExit
     // so the function prologue doesn't overwrite it
-    const error_slot = stack_top - 32; // 16 bytes padding
-    const rsp = stack_top - 128 - 8;
+    const rsp = stack_top - 48 - 8;
 
     const ret_addr: *usize = @ptrFromInt(rsp);
-    ret_addr.* = @intFromPtr(&taskExit);
+    ret_addr.* = @intFromPtr(&taskReturn);
 
     const task = allocator.create(Task) catch {
         log.err("Failed to allocate task", .{});
-        return;
+        return 0;
+    };
+
+    const helper = struct {
+        pub fn getArg(_args: anytype, comptime index: comptime_int) usize {
+            const info = @typeInfo(@TypeOf(_args));
+            if (info != .@"struct" or info.@"struct".is_tuple == false) {
+                @compileError("_args must be a tuple");
+            }
+            if (index >= info.@"struct".fields.len) {
+                return 0;
+            }
+            const field_type = info.@"struct".fields[index].type;
+            const field_info = @typeInfo(field_type);
+            switch (field_info) {
+                .int => return _args[index],
+                .pointer => return @intFromPtr(_args[index]),
+                else => @compileError("Unsupported argument type: " ++ @typeName(field_type)),
+            }
+            return _args[index];
+        }
     };
 
     log.debug("Adding task with entry_point: {x}", .{@intFromPtr(entry_point)});
@@ -135,7 +199,14 @@ pub fn addTask(entry_point: *const fn () noreturn) void {
         .ss = 0x10,
         .ds = 0x10,
         .rip = @intFromPtr(entry_point),
-        .rdi = error_slot,
+
+        // args
+        .rdi = helper.getArg(args, 0),
+        .rsi = helper.getArg(args, 1),
+        .rdx = helper.getArg(args, 2),
+        .rcx = helper.getArg(args, 3),
+        .r8 = helper.getArg(args, 4),
+        .r9 = helper.getArg(args, 5),
 
         .error_code = 0,
         .interrupt_number = 0,
@@ -145,13 +216,8 @@ pub fn addTask(entry_point: *const fn () noreturn) void {
         .r13 = 0,
         .r14 = 0,
         .r15 = 0,
-        .r8 = 0,
-        .r9 = 0,
         .rax = 0,
         .rbx = 0,
-        .rcx = 0,
-        .rdx = 0,
-        .rsi = 0,
     };
 
     task.* = .{
@@ -163,6 +229,7 @@ pub fn addTask(entry_point: *const fn () noreturn) void {
     };
 
     appendTask(task);
+    return task.id;
 }
 
 /// NOTE: also sets id
@@ -181,5 +248,81 @@ fn appendTask(task: *Task) void {
         task_list = task;
         task.id = 0;
         task.next = null;
+    }
+}
+
+fn getPrev(task: *Task) ?*Task {
+    if (task == task_list) return null;
+    var current_node = task_list;
+    while (current_node) |node| {
+        if (node.next == task) {
+            return node;
+        }
+        current_node = node.next;
+    }
+    return null;
+}
+
+fn getTask(id: u32) ?*Task {
+    var current_node = task_list;
+    while (current_node) |node| {
+        if (node.id == id) {
+            return node;
+        }
+        current_node = node.next;
+    }
+    return null;
+}
+
+fn removeTask(task: *Task) void {
+    const prev = getPrev(task) orelse {
+        log.warn("Tried to remove first task", .{});
+        return;
+    };
+
+    prev.next = task.next;
+    // const
+    // deallocate stack, task, etc..
+    if (task.stack.len != 0) {
+        page_allocator.free(task.stack);
+    }
+
+    const allocator = heap.allocator();
+    allocator.destroy(task);
+}
+
+pub fn killTask(id: u32) void {
+    if (getTask(id)) |task| {
+        task.state = .dead;
+    }
+}
+
+pub fn currentTask() u32 {
+    return if (current) |task| task.id else 0;
+}
+
+pub fn taskExit() noreturn {
+    io.cli();
+    current.?.state = .dead;
+    io.sti();
+    io.hlt();
+}
+
+pub fn waitForTask(id: u32) void {
+    // check if task is alreay dead or gone
+    if (getTask(id)) |task| {
+        if (task.state == .dead) return;
+    } else {
+        return;
+    }
+
+    if (current) |task| {
+        task.state = .{ .waiting = id };
+    }
+    while (true) {
+        asm volatile ("hlt");
+        if (current) |task| {
+            if (task.state == .ready or task.state == .running) break;
+        }
     }
 }
