@@ -1,142 +1,168 @@
 const std = @import("std");
-const io = @import("arch.zig").io;
-const irq = @import("arch.zig").irq;
-const Screen = @import("Screen.zig");
+const arch = @import("arch.zig");
+const irq = arch.irq;
+const io = arch.io;
 
-const InterruptFrame = @import("arch.zig").registers.InterruptFrame;
+const log = std.log.scoped(._mouse);
 
-var mouse_x: u32 = 0;
-var mouse_y: u32 = 0;
+pub const MousePos = struct {
+    x: u32,
+    y: u32,
+};
 
-const MOUSE_PORT = 0x60;
-const MOUSE_STATUS = 0x64;
-const MOUSE_ABIT = 0x02;
-const MOUSE_BBIT = 0x01;
-const MOUSE_WRITE = 0xD4;
-const MOUSE_F_BIT = 0x20;
-const MOUSE_V_BIT = 0x08;
+pub const MouseButton = enum {
+    left,
+    right,
+    middle,
+};
 
-const ACK = 0xFA;
-const RESEND = 0xFE;
+const DATA_PORT = 0x60;
+const COMMAND_REGISTER = 0x64;
+const STATUS_REGISTER = 0x64;
 
-var cycle: u8 = 0;
-var mouse_bytes: [4]u8 = .{0} ** 4;
+const MOUSE_PORT = 0xD4;
 
-var window_height: u32 = 0;
-var window_width: u32 = 0;
+const StatusRegister = packed struct(u8) {
+    output_buffer_full: bool,
+    input_buffer_full: bool,
+    system_flag: bool,
+    use_command: bool,
+    unknown1: bool,
+    unknown2: bool,
+    time_out_error: bool,
+    parity_error: bool,
 
-const DATA_INDEX = 0; // for mouse bytes
-const X_MOVE_INDEX = 1; // for mouse bytes
-const Y_MOVE_INDEX = 2; // for mouse bytes
-const EXTRA_INDEX = 3; // for mouse bytes
+    pub fn read() StatusRegister {
+        return @bitCast(io.inb(STATUS_REGISTER));
+    }
+};
+
+const MouseCommand = enum(u8) {
+    scale_11 = 0xE6,
+    scale_21 = 0xE7,
+    set_resolution = 0xE8,
+    status_request = 0xE9,
+    set_stream_mode = 0xEA,
+    read_data = 0xEB,
+    reset_wrap_mouse = 0xEC,
+    set_wrap_mode = 0xEE,
+    set_remote_mode = 0xF0,
+    get_device_id = 0xF2,
+    set_sampling_rate = 0xF3,
+    enable_data_reporting = 0xF4,
+    disable_data_reporting = 0xF5,
+    set_defaults = 0xF6,
+    resend = 0xFE,
+    reset = 0xFF,
+};
+
+fn sendCommand(command: MouseCommand) !void {
+    io.outb(COMMAND_REGISTER, MOUSE_PORT); // tell the ps2 controller were address port 2 (mouse)
+    io.outb(DATA_PORT, @intFromEnum(command));
+
+    waitForData();
+
+    const ack = io.inb(DATA_PORT);
+    if (ack != 0xFA) {
+        log.err("Failed to send mouse command (NO ACK): recived {x}", .{ack});
+        return error.NoAck;
+    }
+}
+
+fn waitForData() void {
+    while (!StatusRegister.read().output_buffer_full) {
+        asm volatile ("pause");
+    }
+}
+
+var mouse_pos: MousePos = .{ .x = 0, .y = 0 };
+var mouse_clamp: MousePos = .{ .x = std.math.maxInt(u32), .y = std.math.maxInt(u32) };
+var packet: [3]u8 = undefined;
+var packet_idx: u32 = 0;
+
+pub fn init() void {
+    log.debug("Initializing mouse", .{});
+    // io.outb(COMMAND_REGISTER, 0xA8); // enable aux mouse device
+    //
+    // // enable mouse interrupts via command byte
+    // io.outb(COMMAND_REGISTER, 0x20); // read command byte
+    // waitForData();
+    // var cmd = io.inb(DATA_PORT);
+    // cmd |= 0x02; // enable IRQ12
+    // cmd &= ~@as(u8, 0x20); // enable mouse clock
+    // io.outb(COMMAND_REGISTER, 0x60);
+    // io.outb(DATA_PORT, cmd);
+
+    sendCommand(.set_defaults) catch |err| {
+        log.err("Failed to set mouse defaults: {s}", .{@errorName(err)});
+    };
+    sendCommand(.enable_data_reporting) catch |err| {
+        log.err("Failed to enable mouse data reporting: {s}", .{@errorName(err)});
+    };
+
+    irq.register(12, &handler);
+    irq.enable(12);
+}
+
+pub fn handler(_: *arch.registers.InterruptFrame) void {
+    const status = StatusRegister.read();
+
+    if (status.time_out_error) {
+        log.err("Mouse timeout error", .{});
+        return;
+    }
+
+    if (status.parity_error) {
+        log.err("Mouse parity error", .{});
+        return;
+    }
+
+    // nothing to do
+    if (!status.output_buffer_full) {
+        return;
+    }
+
+    packet[packet_idx] = io.inb(DATA_PORT);
+    packet_idx += 1;
+
+    if (packet_idx == 3) {
+        packet_idx = 0;
+        processPacket();
+    }
+}
+
+fn processPacket() void {
+    const mouse_status = packet[0];
+    const xu8 = packet[1];
+    const yu8 = packet[2];
+
+    if (mouse_status & 0x08 == 0) {
+        log.warn("Packet is dsynced", .{});
+        return;
+    }
+
+    const xi8: i8 = @bitCast(xu8);
+    const yi8: i8 = @bitCast(yu8);
+
+    const xi32: i32 = @intCast(mouse_pos.x);
+    const yi32: i32 = @intCast(mouse_pos.y);
+
+    mouse_pos.x = @intCast(std.math.clamp(xi32 + xi8, 0, mouse_clamp.x));
+    mouse_pos.y = @intCast(std.math.clamp(yi32 - yi8, 0, mouse_clamp.y));
+}
+
+pub fn addClamp(_x: u32, _y: u32) void {
+    mouse_clamp = .{ .x = _x, .y = _y };
+}
+
+pub fn getPosition() MousePos {
+    return mouse_pos;
+}
 
 pub fn x() u32 {
-    return mouse_x;
+    return mouse_pos.x;
 }
 
 pub fn y() u32 {
-    return mouse_y;
-}
-
-pub fn handler(_: InterruptFrame) void {
-    const byte = read();
-    mouse_bytes[cycle] = byte;
-    cycle = (cycle + 1) % 3;
-    if (cycle == 0) {
-        const dx: i8 = @bitCast(mouse_bytes[X_MOVE_INDEX]);
-        const dy: i8 = @bitCast(mouse_bytes[Y_MOVE_INDEX]);
-
-        std.log.debug("dx: {d}, dy: {d}", .{ dx, dy });
-
-        if (dx >= 0) {
-            mouse_x += @intCast(dx);
-        } else {
-            mouse_x -|= @intCast(-dx);
-        }
-
-        if (dy >= 0) {
-            mouse_y -|= @intCast(dy);
-        } else {
-            mouse_y += @intCast(-dy);
-        }
-
-        if (mouse_x > window_width) mouse_x = window_width - 1;
-        if (mouse_y > window_height) mouse_y = window_height - 1;
-
-        Screen.get().clear(.white());
-        Screen.get().drawRect(mouse_x, mouse_y, 10, 10, .red());
-        Screen.get().swapBuffers();
-    }
-}
-
-pub fn init() !void {
-    io.cli();
-    defer io.sti();
-
-    // enable the aux mouse device
-    wait(1);
-    io.outb(MOUSE_STATUS, 0xA8);
-
-    // update controller command byte to enable IRQ1 + IRQ12
-    wait(1);
-    io.outb(0x64, 0x20);
-    wait(0);
-    const cmd = io.inb(0x60);
-    const new_cmd = cmd | 0b11;
-    wait(1);
-    io.outb(0x64, 0x60);
-    wait(1);
-    io.outb(0x60, new_cmd);
-
-    // tell mouse to use default settings
-    try write(0xF6);
-
-    // Enable the mouse
-    try write(0xF4); // enable data reporting
-
-    // enable interrupt for 12
-    irq.register(12, handler);
-    irq.enable(12);
-
-    const s = Screen.get();
-    window_height = s.height;
-    window_width = s.width;
-}
-
-fn read() u8 {
-    wait(0);
-    return io.inb(MOUSE_PORT);
-}
-
-fn write(value: u8) !void {
-    wait(1);
-    io.outb(MOUSE_STATUS, 0xD4);
-    wait(1);
-    io.outb(MOUSE_PORT, value);
-
-    const response = read();
-    if (response == RESEND) {
-        std.log.debug("Resending mouse command", .{});
-        return write(value);
-    } else if (response != ACK) {
-        std.log.debug("Mouse command failed", .{});
-        return error.CommandNotAcked;
-    }
-}
-
-fn wait(a_type: u8) void {
-    var _time_out: u32 = 100000;
-    if (a_type == 0) {
-        while (_time_out > 0) : (_time_out -= 1) {
-            if ((io.inb(0x64) & 1) == 1) {
-                return;
-            }
-        }
-    } else {
-        while (_time_out > 0) : (_time_out -= 1) {
-            if ((io.inb(0x64) & 2) == 0) {
-                return;
-            }
-        }
-    }
+    return mouse_pos.y;
 }

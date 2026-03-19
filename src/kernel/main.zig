@@ -65,6 +65,7 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     // init hardware
     // pit timer 100Hz
     kb.init();
+    mouse.init();
 
     const cpu = arch.CPU.init() catch |err| blk: {
         log.err("Failed to get the CPU: {s}", .{@errorName(err)});
@@ -447,13 +448,11 @@ fn drawLoop(screen: *Screen) void {
     var x: u32 = 0;
     var y: u32 = 0;
 
+    mouse.addClamp(screen.width, screen.height);
+
     while (true) {
         screen.clear(Color.white());
-        screen.drawRectWithBorder(x, y, 600, 500, Color.green(), 5, Color.blue());
-        screen.drawRect(x + 5, y + 5, 600 - 10, 30, Color.gray()); // draw window bar
-        screen.drawText(x + 16, y + 5, "Test window", 2, Color.white());
-
-        screen.drawRect(@intCast(mouse.x()), @intCast(mouse.y()), 10, 10, Color.red());
+        screen.drawRect(@min(mouse.x(), screen.width), @min(mouse.y(), screen.height), 10, 10, Color.black());
 
         screen.swapBuffers();
 

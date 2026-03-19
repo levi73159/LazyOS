@@ -68,13 +68,11 @@ pub fn build(b: *std.Build) void {
     run_qemu_cmd.addArgs(&.{
         "-cpu",
         "qemu64",
-        // "-debugcon",
-        // "stdio",
         "-s",
         "-serial",
         "stdio",
-        // "--no-shutdown",
-        // "--no-reboot",
+        "-display",
+        "sdl",
     });
     if (debug_int) {
         run_qemu_cmd.addArgs(&.{ "-d", "int" });
