@@ -86,7 +86,7 @@ const Header = struct {
 const HEADER_SIZE = @sizeOf(Header);
 const OFFSET_SIZE = @sizeOf(u8);
 
-const MIN_SPLIT = 4;
+const MIN_SPLIT = HEADER_SIZE + OFFSET_SIZE + 1;
 
 start: ?*Header = null,
 end: ?*Header = null,
@@ -147,8 +147,8 @@ fn growHeap(self: *Self, pages: usize) !*Header {
 
     if (self.end) |end| {
         end.next = header;
-        header.next = extra;
     }
+    header.next = extra;
 
     self.end = extra orelse header;
     self.last_free = header;
@@ -176,9 +176,6 @@ fn splitBlock(self: *Self, block: *Header, size: usize) bool {
 
     block.flags.block_padding = @intCast(block_padding);
     const header: *Header = @ptrFromInt(aligned_addr);
-
-    const remaining = block.trueSize() - size;
-    if (remaining < MIN_SPLIT + HEADER_SIZE + OFFSET_SIZE) return false;
 
     header.* = .{
         .flags = .init(block.getSize() - block.padding() - HEADER_SIZE - OFFSET_SIZE - size - block_padding, true),
@@ -326,7 +323,9 @@ pub fn free(self: *Self, ptr: [*]u8) void {
     self.last_free = updated_block;
 
     updated_block.addSize(updated_block.padding());
+    block.flags.block_padding -|= updated_block.padding();
     updated_block.setPadding(0);
+    // update block padding
     updated_block.verify();
 
     if (self.pages_in_heap > HEAP_PAGES) {
@@ -334,22 +333,18 @@ pub fn free(self: *Self, ptr: [*]u8) void {
         var how_much_pages = block.trueSize() / PAGE_SIZE;
 
         if (HEAP_PAGES > self.pages_in_heap - how_much_pages) {
-            // figure out how much we can free
             how_much_pages = self.pages_in_heap - HEAP_PAGES;
-
-            // sanity check: make sure we are not freeing the header, if we are skip this
             page_addr += how_much_pages * PAGE_SIZE;
             if (page_addr <= @intFromPtr(ptr) + MIN_SPLIT) return;
-            block.setSize(block.getSize() - how_much_pages * PAGE_SIZE);
+            updated_block.setSize(updated_block.getSize() - how_much_pages * PAGE_SIZE);
+            self.pages_in_heap -= @intCast(how_much_pages);
+            self.pmem.freePagesV(page_addr, how_much_pages);
+        } else {
+            const prev = self.findPrev(updated_block);
+            if (prev) |p| p.next = updated_block.next;
+            self.pages_in_heap -= @intCast(how_much_pages);
+            self.pmem.freePagesV(page_addr, how_much_pages);
         }
-
-        // can free entire block
-        const prev = self.findPrev(block);
-        if (prev) |p| {
-            p.next = block.next;
-        }
-
-        self.pmem.freePagesV(page_addr, how_much_pages);
     }
 }
 

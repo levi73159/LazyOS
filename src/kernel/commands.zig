@@ -90,6 +90,17 @@ fn reboot(_: []const u8) anyerror!void {
     return error.FailedToReboot;
 }
 
-fn dumpHeap(_: []const u8) anyerror!void {
-    heap.get().dump(.all, std.log.debug);
+fn dumpHeap(cmd: []const u8) anyerror!void {
+    var args = std.mem.tokenizeScalar(u8, cmd, ' ');
+    _ = args.next(); // skip the cmd
+    const what = args.next() orelse "";
+    if (std.mem.eql(u8, what, "kernel")) {
+        heap.get().dump(.all, std.log.debug);
+    } else if (std.mem.eql(u8, what, "acpi")) {
+        heap.get_acpi().dump(.all, std.log.debug);
+    } else if (what.len == 0) {
+        heap.get().dump(.all, std.log.debug);
+    } else {
+        console.print("Unknown heap: {s}\n", .{what});
+    }
 }
