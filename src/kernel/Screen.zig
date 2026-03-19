@@ -36,7 +36,9 @@ pub fn get() *Self {
 
 pub fn createDoubleBuffer(self: *Self) !void {
     const pmem = @import("memory/pmem.zig");
-    const phys = try pmem.allocBlock(self.buffer.len * 4);
+    const size = self.buffer.len * 4;
+    const pages = (size + pmem.PAGE_SIZE - 1) / pmem.PAGE_SIZE;
+    const phys = try pmem.kernel().allocPages(pages);
     const virt = bootinfo.toVirtualHHDM(phys);
     const buffer: [*]u32 = @ptrFromInt(virt);
     self.double_buffer = buffer[0..self.buffer.len];

@@ -4,7 +4,6 @@ const heap = @import("memory/heap.zig");
 const io = arch.io;
 const pit = @import("pit.zig");
 
-const page_allocator = heap.page_allocator; // use to allocate stack
 const PAGE_SIZE = heap.PAGE_SIZE;
 
 const STACK_SIZE = 16 * 1024; // or 4 pages
@@ -149,7 +148,7 @@ pub fn addTask(entry_point: anytype, args: anytype) u32 {
     }
 
     const allocator = heap.allocator();
-    const stack = page_allocator.alignedAlloc(u8, .@"16", STACK_SIZE) catch {
+    const stack = allocator.alignedAlloc(u8, .@"16", STACK_SIZE) catch {
         log.err("Failed to allocate stack", .{});
         return 0;
     };
@@ -281,13 +280,13 @@ fn removeTask(task: *Task) void {
     };
 
     prev.next = task.next;
+    const allocator = heap.allocator();
     // const
     // deallocate stack, task, etc..
     if (task.stack.len != 0) {
-        page_allocator.free(task.stack);
+        allocator.free(task.stack);
     }
 
-    const allocator = heap.allocator();
     allocator.destroy(task);
 }
 

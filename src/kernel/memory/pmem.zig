@@ -1,211 +1,34 @@
 const std = @import("std");
-const bootinfo = @import("../arch/bootinfo.zig");
-const Alignment = std.mem.Alignment;
+const BitmapAllocator = @import("BitmapAllocator.zig");
+const BootInfo = @import("../arch/bootinfo.zig").BootInfo;
 
-const log = std.log.scoped(.pmem);
+pub const PAGE_SIZE: usize = 4096;
 
-var bitmap: []u8 = undefined; // use a bitmap allocator to track free pages
-const PAGE_SIZE = 4096;
+const PhysicalMemoryAllocators = struct {
+    kernel: BitmapAllocator,
+    acpi: BitmapAllocator,
+};
 
-var total_pages: u64 = 0;
-var last_used_index: u64 = 0;
-var usable_memory: u64 = 0;
+var allocators: ?PhysicalMemoryAllocators = null;
 
-pub fn init(mmap: []*bootinfo.MemoryMapEntry, hddm_offset: u64) void {
-    log.debug("Initializing PMEM", .{});
+pub fn init(mb: *const BootInfo) void {
+    std.log.debug("Initializing physical memory", .{});
+    std.log.debug("HHDM offset: {x}", .{mb.hhdm_offset});
+    std.log.debug("Initializing ACPI PMEM", .{});
+    const _acpi = BitmapAllocator.init(mb.memory_map, mb.hhdm_offset, .init(0, 16 * 1024 * 1024));
+    std.log.debug("Initializing KERNEL PMEM", .{});
+    const _kernel = BitmapAllocator.init(mb.memory_map, mb.hhdm_offset, .init(16 * 1024 * 1024, 1024 * 1024 * 1024)); // 1 GB of kernel memory
 
-    // find the highest address in memory to size the bitmap
-    var highest: u64 = 0;
-    for (mmap) |entry| {
-        // only consider usable memory
-        highest = @max(highest, entry.base + entry.length);
-    }
-    log.debug("Highest address: 0x{x}", .{highest});
-
-    total_pages = highest / PAGE_SIZE;
-    const bitmap_size = (total_pages + 7) / 8; // round up to nearest byte
-
-    log.debug("Total pages: {d}", .{total_pages});
-    // find usable memory large enough to hold bitmap itself
-    for (mmap) |entry| {
-        log.debug("Entry base: 0x{x}, length: 0x{x}, type: {s}", .{ entry.base, entry.length, @tagName(entry.type) });
-        if (entry.type == .usable and entry.length >= bitmap_size) {
-            bitmap = @as([*]u8, @ptrFromInt(entry.base + hddm_offset))[0..bitmap_size];
-            @memset(bitmap, 0xFF);
-            break;
-        }
-    }
-
-    // now mark usable memory as free
-    for (mmap) |entry| {
-        if (entry.type == .usable) {
-            freeRegion(entry.base, entry.length);
-            usable_memory += entry.length;
-        }
-    }
-
-    markUsed(@intFromPtr(bitmap.ptr) - hddm_offset, bitmap_size);
+    allocators = PhysicalMemoryAllocators{
+        .acpi = _acpi,
+        .kernel = _kernel,
+    };
 }
 
-pub fn allocPage() !u64 {
-    // finds a free bit starting from last_used_index
-    var i = last_used_index;
-    while (i < total_pages) : (i += 1) {
-        if (!getBit(i)) {
-            setBit(i); // mark as used
-            last_used_index = i + 1;
-            return i * PAGE_SIZE;
-        }
-    }
-
-    return error.OutOfMemroy;
+pub fn kernel() *BitmapAllocator {
+    return &allocators.?.kernel;
 }
 
-pub fn freePage(phys: u64) void {
-    const index = phys / PAGE_SIZE;
-    clearBit(index);
-    if (index < last_used_index) last_used_index = index;
-}
-
-// allocate a page, but returns its virtual address
-pub fn allocPageV() !u64 {
-    const phys = try allocPage();
-    return bootinfo.toVirtualHHDM(phys);
-}
-
-// free a page by its virtual address
-pub fn freePageV(virt: u64) void {
-    const phys = bootinfo.toPhysicalHHDM(virt);
-    freePage(phys);
-}
-
-pub fn allocBlock(size: u64) !u64 {
-    const pages_needed = (size + PAGE_SIZE - 1) / PAGE_SIZE; // round up to nearest page
-    var pages_found: u32 = 0;
-
-    var i = last_used_index;
-    var start: ?u64 = null;
-    while (i < total_pages) : (i += 1) {
-        if (!getBit(i)) {
-            if (start == null) {
-                start = i;
-            }
-            pages_found += 1;
-            if (pages_found == pages_needed) {
-                for (0..pages_found) |j| {
-                    setBit(start.? + j);
-                }
-                last_used_index = i + 1;
-                return start.? * PAGE_SIZE;
-            }
-        } else {
-            pages_found = 0;
-            start = null;
-        }
-    }
-
-    return error.OutOfMemroy;
-}
-
-pub fn allocBlockV(size: u64) !u64 {
-    const phys = try allocBlock(size);
-    return bootinfo.toVirtualHHDM(phys);
-}
-
-pub fn allocPages(count: usize) !u64 {
-    var i = last_used_index;
-    var pages_found: u32 = 0;
-
-    var start: ?u64 = null;
-    while (i < total_pages) : (i += 1) {
-        if (!getBit(i)) {
-            if (start == null) {
-                start = i;
-            }
-            pages_found += 1;
-            if (pages_found >= count) {
-                for (0..pages_found) |j| {
-                    setBit(start.? + j);
-                }
-                last_used_index = i + 1;
-                return start.? * PAGE_SIZE;
-            }
-        } else {
-            pages_found = 0;
-            start = null;
-        }
-    }
-
-    return error.OutOfMemroy;
-}
-
-pub fn allocPagesV(count: usize) !u64 {
-    const phys = try allocPages(count);
-    return bootinfo.toVirtualHHDM(phys);
-}
-
-pub fn freePages(phys: u64, count: usize) void {
-    const index = phys / PAGE_SIZE;
-    for (0..count) |i| {
-        clearBit(index + i);
-    }
-    if (index < last_used_index) last_used_index = index;
-}
-
-pub fn freePagesV(virt: u64, count: usize) void {
-    const phys = bootinfo.toPhysicalHHDM(virt);
-    freePages(phys, count);
-}
-
-pub fn freeBlockV(virt: u64, size: u64) void {
-    const phys = bootinfo.toPhysicalHHDM(virt);
-    freeBlock(phys, size);
-}
-
-pub fn freeBlock(phys: u64, size: u64) void {
-    const index = phys / PAGE_SIZE;
-    const pages_needed = (size + PAGE_SIZE - 1) / PAGE_SIZE; // round up to nearest page
-    for (0..pages_needed) |i| {
-        clearBit(index + i);
-    }
-    if (index < last_used_index) last_used_index = index;
-}
-
-inline fn setBit(index: u64) void {
-    bitmap[index / 8] |= (@as(u8, 1) << @intCast(index % 8));
-}
-
-inline fn clearBit(index: u64) void {
-    bitmap[index / 8] &= ~(@as(u8, 1) << @intCast(index % 8));
-}
-
-inline fn getBit(index: u64) bool {
-    return (bitmap[index / 8] & (@as(u8, 1) << @intCast(index % 8))) != 0;
-}
-
-fn freeRegion(base: u64, length: u64) void {
-    const start = base / PAGE_SIZE;
-    const count = (length + PAGE_SIZE - 1) / PAGE_SIZE;
-
-    for (0..count) |i| {
-        clearBit(start + i);
-    }
-}
-
-fn markUsed(base: u64, length: u64) void {
-    const start = base / PAGE_SIZE;
-    // round length to nearest page
-    const count = (length + PAGE_SIZE - 1) / PAGE_SIZE;
-
-    for (0..count) |i| {
-        setBit(start + i);
-    }
-}
-
-pub fn getTotalMemory() u64 {
-    return usable_memory;
-}
-
-pub fn getHighestAddress() u64 {
-    return total_pages * PAGE_SIZE;
+pub fn acpi() *BitmapAllocator {
+    return &allocators.?.acpi;
 }

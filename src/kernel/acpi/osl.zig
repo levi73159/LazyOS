@@ -156,12 +156,12 @@ export fn uacpi_kernel_io_write32(handle: c.uacpi_handle, offset: usize, val: u3
 }
 
 export fn uacpi_kernel_alloc(size: c.uacpi_size) ?*anyopaque {
-    return heap.malloc(size);
+    return heap.malloc(heap.get_acpi(), size);
 }
 
 export fn uacpi_kernel_free(ptr: ?*anyopaque) void {
     if (ptr == null) return;
-    heap.free(ptr);
+    heap.free(heap.get_acpi(), ptr);
 }
 
 export fn uacpi_kernel_get_nanoseconds_since_boot() c.uacpi_u64 {
@@ -224,14 +224,14 @@ export fn uacpi_kernel_reset_event(handle: c.uacpi_handle) void {
 
 // ── Spinlocks ─────────────────────────────────────────────────────────────
 export fn uacpi_kernel_create_spinlock() c.uacpi_handle {
-    const lock = heap.allocator().create(sync.SpinLock) catch return null;
+    const lock = heap.acpi_allocator().create(sync.SpinLock) catch return null;
     lock.* = .init();
     return @ptrCast(@alignCast(lock));
 }
 
 export fn uacpi_kernel_free_spinlock(handle: c.uacpi_handle) void {
     const lock: *sync.SpinLock = @ptrCast(@alignCast(handle));
-    heap.allocator().destroy(lock);
+    heap.acpi_allocator().destroy(lock);
 }
 
 export fn uacpi_kernel_lock_spinlock(handle: c.uacpi_handle) c.uacpi_cpu_flags {
@@ -341,7 +341,7 @@ export fn uacpi_kernel_schedule_work(
     // call directly until we have a scheduler
     const h = handler orelse return c.UACPI_STATUS_INVALID_ARGUMENT;
     const id = scheduler.addTask(h, .{@intFromPtr(ctx)});
-    work_ids.append(heap.allocator(), id) catch return c.UACPI_STATUS_OUT_OF_MEMORY;
+    work_ids.append(heap.acpi_allocator(), id) catch return c.UACPI_STATUS_OUT_OF_MEMORY;
     log.debug("Spawned task: {d}", .{id});
     return c.UACPI_STATUS_OK;
 }

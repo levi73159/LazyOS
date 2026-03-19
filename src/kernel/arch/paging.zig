@@ -1,6 +1,6 @@
 const std = @import("std");
-const pmem = @import("../memory/pmem.zig");
 const bootinfo = @import("bootinfo.zig");
+const pmem = @import("../memory/pmem.zig");
 
 const log = std.log.scoped(.paging);
 
@@ -78,7 +78,7 @@ pub const PageTable = [512]PageEntry;
 var pml4: PageTable align(PAGE_SIZE) = .{PageEntry{}} ** 512;
 
 pub fn createPageTable() *PageTable {
-    const phys = pmem.allocPage() catch {
+    const phys = pmem.kernel().allocPage() catch {
         @panic("Failed to allocate page: Out of memory");
     };
     std.debug.assert(phys % PAGE_SIZE == 0); // should always hold
@@ -156,7 +156,11 @@ pub fn init(mb: *const bootinfo.BootInfo) void {
     log.debug("Initializing paging", .{});
 
     // map all physical memory at HHDM offset (so toVirtual keeps working and this code still works)
-    const total_memory = pmem.getHighestAddress(); // total_papges * PAGE_SIZE
+    var highest_address: u64 = 0;
+    for (mb.memory_map) |entry| {
+        highest_address = @max(highest_address, entry.base + entry.length);
+    }
+    const total_memory = highest_address;
     log.debug("Total memory: {x}", .{total_memory});
     // replace the 4KB HHDM loop with this
     var phys: u64 = 0;

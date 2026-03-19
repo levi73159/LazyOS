@@ -8,12 +8,12 @@ const kb = @import("keyboard.zig");
 const mouse = @import("mouse.zig");
 const pit = @import("pit.zig");
 const BootInfo = @import("arch/bootinfo.zig").BootInfo;
-const pmem = @import("memory/pmem.zig");
 const paging = @import("arch/paging.zig");
 const commands = @import("commands.zig");
 const acpi = arch.acpi;
 const scheduler = @import("scheduler.zig");
 const serial = @import("arch/serial.zig");
+const pmem = @import("memory/pmem.zig");
 
 const acpi_oslevel = @import("acpi/osl.zig"); // NOTE: MUST BE IMPORTED FIRST FOR ACPI TO WORK
 comptime {
@@ -42,7 +42,8 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     hal.earlyInit();
 
     log.debug("Kerenl location: physical 0x{x} virtual 0x{x}", .{ mb.kernel.phys_addr, mb.kernel.virt_addr });
-    pmem.init(mb.memory_map, mb.hhdm_offset);
+
+    pmem.init(mb);
     paging.init(mb);
     heap.init();
 

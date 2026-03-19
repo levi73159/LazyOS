@@ -1,6 +1,6 @@
 const std = @import("std");
 const mem = std.mem;
-const pmem = @import("pmem.zig");
+const BitmapAllocator = @import("BitmapAllocator.zig");
 const is_debug = @import("builtin").mode == .Debug;
 
 const Self = @This();
@@ -92,8 +92,9 @@ start: ?*Header = null,
 end: ?*Header = null,
 last_free: ?*Header = null,
 pages_in_heap: u32 = 0,
+pmem: *BitmapAllocator = undefined,
 
-pub fn init() Self {
+pub fn init(pmem: *BitmapAllocator) Self {
     log.debug("HEADER SIZE: {d}", .{@sizeOf(Header)});
     const page = pmem.allocPagesV(HEAP_PAGES) catch @panic("out of memory cannot init heap");
     const header: *Header = @ptrFromInt(page);
@@ -101,7 +102,7 @@ pub fn init() Self {
         .flags = .init(HEAP_SIZE - HEADER_SIZE - OFFSET_SIZE, true),
         .next = null,
     };
-    return Self{ .start = header, .end = header, .last_free = header, .pages_in_heap = HEAP_PAGES };
+    return Self{ .start = header, .end = header, .last_free = header, .pages_in_heap = HEAP_PAGES, .pmem = pmem };
 }
 
 pub fn deinit(self: *Self) void {
@@ -109,7 +110,7 @@ pub fn deinit(self: *Self) void {
     while (current) |b| {
         current = b.next;
         const pages = b.trueSize() / PAGE_SIZE;
-        pmem.freePagesV(@intFromPtr(b), pages);
+        self.pmem.freePagesV(@intFromPtr(b), pages);
 
         log.debug("freeing {d} pages at address {x}", .{ pages, @intFromPtr(b) });
     }
@@ -126,8 +127,8 @@ fn findPrev(self: *Self, block: *Header) ?*Header {
     return null;
 }
 
-fn allocPage(pages: usize) !*Header {
-    const page = try pmem.allocPagesV(pages);
+fn allocPage(self: *Self, pages: usize) !*Header {
+    const page = try self.pmem.allocPagesV(pages);
     const header: *Header = @ptrFromInt(page);
 
     const size = pages * PAGE_SIZE;
@@ -141,8 +142,8 @@ fn allocPage(pages: usize) !*Header {
 
 fn growHeap(self: *Self, pages: usize) !*Header {
     log.debug("growing heap by {d}+1 pages", .{pages});
-    const header = try allocPage(pages);
-    const extra: ?*Header = if (self.pages_in_heap < 1_000) allocPage(EXTRA_GROWTH) catch null else null;
+    const header = try self.allocPage(pages);
+    const extra: ?*Header = if (self.pages_in_heap < 1_000) self.allocPage(EXTRA_GROWTH) catch null else null;
 
     if (self.end) |end| {
         end.next = header;
@@ -348,7 +349,7 @@ pub fn free(self: *Self, ptr: [*]u8) void {
             p.next = block.next;
         }
 
-        pmem.freePagesV(page_addr, how_much_pages);
+        self.pmem.freePagesV(page_addr, how_much_pages);
     }
 }
 
