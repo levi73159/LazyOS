@@ -69,7 +69,7 @@ pub fn getPixelMut(self: *Self, x: u32, y: u32) *u32 {
 
 pub fn setPixel(self: *Self, x: u32, y: u32, color: Color) void {
     const index = y * self.stride + x;
-    if (index >= self.buffer.len) {
+    if (x >= self.width or y >= self.height) {
         return;
     }
     self.getBuffer()[index] = color.get();
