@@ -183,20 +183,28 @@ export fn uacpi_kernel_sleep(msec: c.uacpi_u64) void {
 // ── Mutex ─────────────────────────────────────────────────────────────────
 
 export fn uacpi_kernel_create_mutex() c.uacpi_handle {
-    return @ptrFromInt(1); // stub — no real mutex yet
+    const allocator = heap.acpi_allocator();
+    const mutex = allocator.create(sync.Mutex) catch return null;
+    mutex.* = .init(allocator);
+    return @ptrCast(@alignCast(mutex));
 }
 
 export fn uacpi_kernel_free_mutex(handle: c.uacpi_handle) void {
-    _ = handle;
+    const mutex: *sync.Mutex = @ptrCast(@alignCast(handle));
+    mutex.deinit();
+    mutex.allocator.destroy(mutex);
 }
 
 export fn uacpi_kernel_acquire_mutex(handle: c.uacpi_handle, timeout: c.uacpi_u16) c.uacpi_status {
-    _ = .{ handle, timeout };
+    _ = timeout; // TODO: implement lock with a timeout
+    const mutex: *sync.Mutex = @ptrCast(@alignCast(handle));
+    mutex.lock();
     return c.UACPI_STATUS_OK;
 }
 
 export fn uacpi_kernel_release_mutex(handle: c.uacpi_handle) void {
-    _ = handle;
+    const mutex: *sync.Mutex = @ptrCast(@alignCast(handle));
+    mutex.unlock();
 }
 
 // ── Events (semaphore-like) ───────────────────────────────────────────────
@@ -349,7 +357,7 @@ export fn uacpi_kernel_schedule_work(
 export fn uacpi_kernel_wait_for_work_completion() c.uacpi_status {
     for (work_ids.items) |id| {
         log.debug("Waiting for task {d}", .{id});
-        scheduler.waitForTask(id);
+        scheduler.waitForTaskToExit(id);
     }
     work_ids.clearRetainingCapacity();
     log.debug("Completed work", .{});

@@ -16,7 +16,17 @@ pub const TaskState = union(enum) {
     ready, // ready to run
     running, // currently running
     dead, // task is dead
-    waiting: u32, // waiting for task with id
+    waiting: WaitingState, // waiting for task with id
+};
+
+pub const WaitType = enum(u8) {
+    wake, // waits for task to be called
+    exit, // waits for task to exit
+};
+
+pub const WaitingState = struct {
+    task_id: u32,
+    wait_type: WaitType,
 };
 
 pub const Task = struct {
@@ -64,9 +74,9 @@ pub fn schedule(frame: *arch.registers.InterruptFrame) void {
     }
 
     if (current) |task| {
+        checkWaitingTasks(task);
         if (task.state == .dead) {
             log.warn("Task {d} is dead", .{task.id});
-            checkWaitingTasks(task);
         } else {
             // log.debug("Copying frame to registers", .{});
             task.state = .ready;
@@ -92,8 +102,20 @@ pub fn schedule(frame: *arch.registers.InterruptFrame) void {
 fn checkWaitingTasks(task: *Task) void {
     var current_node = task_list;
     while (current_node) |node| : (current_node = node.next) {
-        if (node.state == .waiting and node.state.waiting == task.id) {
-            node.state = .ready;
+        if (node.state == .waiting) {
+            if (node.state.waiting.task_id != task.id) continue;
+            switch (node.state.waiting.wait_type) {
+                .wake => {
+                    if (task.state == .ready or task.state == .running) {
+                        node.state = .ready;
+                    }
+                },
+                .exit => {
+                    if (task.state == .dead) {
+                        node.state = .ready;
+                    }
+                },
+            }
         }
     }
 }
@@ -307,7 +329,7 @@ pub fn taskExit() noreturn {
     io.hlt();
 }
 
-pub fn waitForTask(id: u32) void {
+pub fn waitForTaskToExit(id: u32) void {
     // check if task is alreay dead or gone
     if (getTask(id)) |task| {
         if (task.state == .dead) return;
@@ -316,12 +338,41 @@ pub fn waitForTask(id: u32) void {
     }
 
     if (current) |task| {
-        task.state = .{ .waiting = id };
+        task.state = .{ .waiting = .{
+            .task_id = id,
+            .wait_type = .exit,
+        } };
     }
     while (true) {
         asm volatile ("hlt");
         if (current) |task| {
             if (task.state == .ready or task.state == .running) break;
+        }
+    }
+}
+
+pub fn waitForTaskToWake(id: u32) void {
+    if (current) |task| {
+        task.state = .{ .waiting = .{
+            .wait_type = .wake,
+            .task_id = id,
+        } };
+    }
+    while (true) {
+        asm volatile ("hlt");
+        if (getTask(id)) |task| {
+            if (task.state == .ready or task.state == .running) break;
+        }
+    }
+}
+
+// wait for task to wake
+pub fn wakeTask(id: u32) void {
+    if (getTask(id)) |task| {
+        switch (task.state) {
+            .waiting => task.state = .ready,
+            .dead => {}, // can't wake dead task
+            else => {}, // already ready or running
         }
     }
 }
