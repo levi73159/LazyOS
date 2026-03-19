@@ -76,6 +76,10 @@ pub fn hlt() noreturn {
     }
 }
 
+pub inline fn pause() void {
+    asm volatile ("pause");
+}
+
 pub inline fn cli() void {
     asm volatile ("cli");
 }

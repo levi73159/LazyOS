@@ -9,6 +9,7 @@ const io = arch.io;
 const pit = @import("../pit.zig");
 const InterruptFrame = arch.registers.InterruptFrame;
 const irq = arch.irq;
+const sync = @import("../sync.zig");
 
 const log = std.log.scoped(.acpi_osl);
 
@@ -222,26 +223,25 @@ export fn uacpi_kernel_reset_event(handle: c.uacpi_handle) void {
 }
 
 // ── Spinlocks ─────────────────────────────────────────────────────────────
-
 export fn uacpi_kernel_create_spinlock() c.uacpi_handle {
-    return @ptrFromInt(1); // stub
+    const lock = heap.allocator().create(sync.SpinLock) catch return null;
+    lock.* = .init();
+    return @ptrCast(@alignCast(lock));
 }
 
 export fn uacpi_kernel_free_spinlock(handle: c.uacpi_handle) void {
-    _ = handle;
+    const lock: *sync.SpinLock = @ptrCast(@alignCast(handle));
+    heap.allocator().destroy(lock);
 }
 
 export fn uacpi_kernel_lock_spinlock(handle: c.uacpi_handle) c.uacpi_cpu_flags {
-    _ = handle;
-    // disable interrupts and return flags
-    const flags = io.getFlags();
-    io.cli();
-    return flags;
+    const lock: *sync.SpinLock = @ptrCast(@alignCast(handle));
+    return @intCast(lock.lock());
 }
 
 export fn uacpi_kernel_unlock_spinlock(handle: c.uacpi_handle, flags: c.uacpi_cpu_flags) void {
-    _ = handle;
-    io.restoreFlags(flags);
+    const lock: *sync.SpinLock = @ptrCast(@alignCast(handle));
+    lock.unlock(flags);
 }
 
 // ── Interrupts ────────────────────────────────────────────────────────────
