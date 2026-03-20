@@ -14,6 +14,11 @@ const acpi = arch.acpi;
 const scheduler = @import("scheduler.zig");
 const serial = @import("arch/serial.zig");
 const pmem = @import("memory/pmem.zig");
+const iso9660 = @import("fs/iso9660.zig");
+const Disk = @import("Disk.zig");
+comptime {
+    _ = iso9660;
+}
 
 const acpi_oslevel = @import("acpi/osl.zig"); // NOTE: MUST BE IMPORTED FIRST FOR ACPI TO WORK
 comptime {
@@ -57,6 +62,19 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     screen.createDoubleBuffer() catch |err| {
         log.err("Failed to create double buffer: {s}", .{@errorName(err)});
     };
+
+    const disk: ?Disk = Disk.init(1) catch |err| blk: {
+        log.err("Failed to init disk: {s}", .{@errorName(err)});
+        break :blk null;
+    };
+    if (disk) |d| {
+        log.info("Disk init with type: {s}", .{@tagName(d.drive_type)});
+        var data: [512 * 4]u8 = undefined;
+        d.read(0, &data) catch |err| {
+            log.err("Failed to read disk: {s}", .{@errorName(err)});
+        };
+        log.debug("Data[0..5]: {x:0>2} {x:0>2} {x:0>2} {x:0>2} {x:0>2}", .{ data[0], data[1], data[2], data[3], data[4] });
+    }
 
     console.init(screen);
     console.clear();
