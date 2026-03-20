@@ -22,6 +22,9 @@ const STATUS_REGISTER = 0x64;
 
 const MOUSE_PORT = 0xD4;
 
+// [mouse] error: Failed to send mouse command (NO ACK): recived e0
+// [mouse] error: Failed to set mouse defaults: NoAck
+
 const StatusRegister = packed struct(u8) {
     output_buffer_full: bool,
     input_buffer_full: bool,

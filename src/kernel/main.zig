@@ -14,11 +14,8 @@ const acpi = arch.acpi;
 const scheduler = @import("scheduler.zig");
 const serial = @import("arch/serial.zig");
 const pmem = @import("memory/pmem.zig");
-const iso9660 = @import("fs/iso9660.zig");
+const Iso9660 = @import("fs/Iso9660.zig");
 const Disk = @import("Disk.zig");
-comptime {
-    _ = iso9660;
-}
 
 const acpi_oslevel = @import("acpi/osl.zig"); // NOTE: MUST BE IMPORTED FIRST FOR ACPI TO WORK
 comptime {
@@ -63,17 +60,29 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
         log.err("Failed to create double buffer: {s}", .{@errorName(err)});
     };
 
-    const disk: ?Disk = Disk.init(1) catch |err| blk: {
+    var disk: Disk = Disk.init(1) catch |err| {
         log.err("Failed to init disk: {s}", .{@errorName(err)});
-        break :blk null;
+        io.hlt();
     };
-    if (disk) |d| {
-        log.info("Disk init with type: {s}", .{@tagName(d.drive_type)});
-        var data: [512 * 4]u8 = undefined;
-        d.read(0, &data) catch |err| {
-            log.err("Failed to read disk: {s}", .{@errorName(err)});
-        };
-        log.debug("Data[0..5]: {x:0>2} {x:0>2} {x:0>2} {x:0>2} {x:0>2}", .{ data[0], data[1], data[2], data[3], data[4] });
+    const fs = Iso9660.init(&disk) catch |err| {
+        log.err("Failed to init filesystem: {s}", .{@errorName(err)});
+        io.hlt();
+    };
+    var it = fs.it(fs.rootDir());
+    while (it.next() catch |err| @panic(@errorName(err))) |entry| {
+        log.info("{s}", .{entry.fileNameClean()});
+    }
+
+    const file = fs.find("/boot/test/../test/test.msg") catch |err| @panic(@errorName(err));
+    if (file == null) {
+        log.err("Failed to find test file", .{});
+        io.hlt();
+    } else {
+        log.info("Found test file", .{});
+        const buf = heap.allocator().alloc(u8, file.?.data_length.value()) catch unreachable;
+        const data = fs.readFile(&file.?, buf) catch |err| @panic(@errorName(err));
+        log.info("{s}", .{data});
+        heap.allocator().free(buf);
     }
 
     console.init(screen);
