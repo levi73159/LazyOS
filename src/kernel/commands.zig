@@ -3,6 +3,7 @@ const console = @import("console.zig");
 const arch = @import("arch.zig");
 const io = arch.io;
 const heap = @import("memory/heap.zig");
+const FS = @import("fs/FileSystem.zig");
 
 pub const Command = struct {
     name: []const u8,
@@ -50,6 +51,16 @@ pub const commands: []const Command = &[_]Command{
         .name = "dump",
         .help = "Dumps the heap",
         .handler = dumpHeap,
+    },
+    Command{
+        .name = "ls",
+        .help = "Lists the contents of a directory",
+        .handler = ls,
+    },
+    Command{
+        .name = "cat",
+        .help = "Prints the contents of a file",
+        .handler = cat,
     },
 };
 
@@ -103,4 +114,28 @@ fn dumpHeap(cmd: []const u8) anyerror!void {
     } else {
         console.print("Unknown heap: {s}\n", .{what});
     }
+}
+
+fn ls(cmd: []const u8) anyerror!void {
+    var args = std.mem.tokenizeScalar(u8, cmd, ' ');
+    _ = args.next(); // skip the cmd
+    const path = args.next() orelse "";
+
+    const fs = FS.getGlobal();
+    var it = try fs.it(path);
+    while (try it.next()) |entry| {
+        console.print("{s}\n", .{entry.name});
+    }
+}
+
+fn cat(cmd: []const u8) anyerror!void {
+    var args = std.mem.tokenizeScalar(u8, cmd, ' ');
+    _ = args.next(); // skip the cmd
+    const path = args.next() orelse "";
+
+    const fs = FS.getGlobal();
+    const file = try fs.open(path);
+    var buf: [4096]u8 = undefined;
+    const data = try file.readAll(&buf);
+    console.write(data);
 }

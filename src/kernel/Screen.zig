@@ -2,6 +2,7 @@ const std = @import("std");
 const Color = @import("Color.zig");
 const font = @import("fonts/Basic.zig");
 const bootinfo = @import("arch/bootinfo.zig");
+const Texture = @import("ui.zig").Texture;
 
 const Self = @This();
 
@@ -183,5 +184,21 @@ pub fn clear(self: *Self, color: Color) void {
 pub fn swapBuffers(self: *Self) void {
     if (self.use_double_buffer) {
         @memcpy(self.buffer, self.double_buffer.?);
+    }
+}
+
+pub fn drawTexture(self: *Self, x: u32, y: u32, texture: Texture) void {
+    const width = texture.width;
+    const height = texture.height;
+
+    var row: u32 = 0;
+    while (row < height) : (row += 1) {
+        var col: u32 = 0;
+        while (col < width) : (col += 1) {
+            const pixel = texture.getPixel(col, row);
+
+            const color = Color.init(pixel.r, pixel.b, pixel.g);
+            self.setPixel(x + col, y + row, color);
+        }
     }
 }

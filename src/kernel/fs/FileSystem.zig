@@ -22,10 +22,34 @@ pub const FsVtable = struct {
     read_file: *const fn (fs: *AnyFs, handle: *Handle, buf: []u8) anyerror!usize,
     open_file: *const fn (fs: *AnyFs, path: []const u8) anyerror!Handle,
     stat: *const fn (fs: *AnyFs, path: []const u8) anyerror!FileInfo,
+    iter_dir: *const fn (fs: *AnyFs, path: []const u8) anyerror!DirIterator,
+};
+
+pub const DirIterator = struct {
+    fs: *AnyFs,
+    ctx: [4096]u8 align(8) = undefined, // filesystem stores its state here
+    vtable: *const VTable,
+
+    pub const VTable = struct {
+        next: *const fn (ctx: *[4096]u8) anyerror!?Entry,
+        reset: *const fn (ctx: *[4096]u8) void,
+    };
+
+    pub const Entry = struct {
+        name: []const u8,
+        info: FileInfo,
+    };
+
+    pub fn next(self: *DirIterator) !?Entry {
+        return self.vtable.next(&self.ctx);
+    }
+
+    pub fn reset(self: *DirIterator) void {
+        self.vtable.reset(&self.ctx);
+    }
 };
 
 pub const AnyFs = struct {
-    disk: Disk, // the disk the filesystem is on
     vtable: FsVtable,
     fs_type: FileSysetmType,
 
@@ -53,19 +77,25 @@ pub const Error = error{
 inner: AnyFs,
 handles: [MAX_HANDLES]Handle = [_]Handle{.{}} ** MAX_HANDLES,
 
-pub fn init(disk_num: u8) Error!Self {
-    var disk = try Disk.init(disk_num);
+var global: ?Self = null;
 
-    var anyfs = if (try detectIso9660(&disk)) blk: {
-        break :blk Iso9660.mount(&disk) catch |err| return convertToError(err);
+pub fn init(disk: *Disk) Error!Self {
+    const anyfs = if (try detectIso9660(disk)) blk: {
+        break :blk Iso9660.mount(disk) catch |err| return convertToError(err);
     } else return error.UnknownFileSystem;
-
-    anyfs.disk = disk;
 
     return Self{
         .inner = anyfs,
         .handles = [_]Handle{.{}} ** MAX_HANDLES,
     };
+}
+
+pub fn setGlobal(fs: Self) void {
+    global = fs;
+}
+
+pub fn getGlobal() *Self {
+    return &global.?;
 }
 
 fn convertToError(err: anyerror) Error {
@@ -123,6 +153,11 @@ pub fn close(self: *Self, handle: u8) void {
 pub fn getHandle(self: *Self, handle: u8) error{BadFileHandle}!*Handle {
     if (handle >= MAX_HANDLES) return error.BadFileHandle;
     return &self.handles[handle];
+}
+
+pub fn it(self: *Self, path: []const u8) Error!DirIterator {
+    const iter = self.inner.vtable.iter_dir(&self.inner, path) catch |err| return convertToError(err);
+    return iter;
 }
 
 // DETECTION FUNCTIONS

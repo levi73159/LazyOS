@@ -165,6 +165,7 @@ fd: u8,
 
 const Error = FS.Error;
 const UnxpectedEOF = error{UnexpectedEOF} || Error;
+const AllocReadError = std.mem.Allocator.Error || Error;
 
 pub fn close(self: *const Self) void {
     return self.fs.close(self.fd);
@@ -174,7 +175,7 @@ pub fn read(self: *const Self, buf: []u8) Error!usize {
     return self.fs.read(self.fd, buf);
 }
 
-pub fn readAlloc(self: *const Self, allocator: std.mem.Allocator) UnxpectedEOF![]u8 {
+pub fn readAlloc(self: *const Self, allocator: std.mem.Allocator) AllocReadError![]u8 {
     const handle = try self.fs.getHandle(self.fd);
     // calculate how much is left to read
     const left = handle.size - handle.pos;
@@ -183,7 +184,7 @@ pub fn readAlloc(self: *const Self, allocator: std.mem.Allocator) UnxpectedEOF![
     errdefer allocator.free(buf);
 
     const size = try self.read(buf);
-    if (size != left) return error.UnexpectedEOF; //
+    if (size != left) @panic("SIZE MISMATCH: UnexpectedEOF");
     return buf[0..size];
 }
 

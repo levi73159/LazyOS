@@ -261,6 +261,10 @@ pub fn init(disk: *Disk) !Self {
 }
 
 pub fn readSector(self: *const Self, lba: u32, buf: *[2048]u8) !void {
+    if (lba >= self.pvd.volume_space_size.value()) {
+        log.err("LBA {d} out of range (max {d})", .{ lba, self.pvd.volume_space_size.value() });
+        return error.LBAOutOfRange;
+    }
     try self.disk.read(lba, buf);
 }
 
@@ -412,6 +416,8 @@ fn vfsFindEntry(disk: *Disk, dir: *const DirEntry, name: []const u8) !?DirEntry 
     var buf: [2048]u8 = undefined;
     var s: u32 = 0;
 
+    log.debug("find {s} in {x} - {x}", .{ name, lba, lba + sectors });
+
     while (s < sectors) : (s += 1) {
         try disk.read(lba + s, &buf);
         var offset: usize = 0;
@@ -465,9 +471,10 @@ pub fn readFile(self: *const Self, entry: *const DirEntry, buf: []u8) ![]u8 {
 // };
 
 fn vfsOpenFile(fs: *FS.AnyFs, path: []const u8) anyerror!FS.Handle {
-    const pvd: *const PrimaryVolumeDescriptor = @ptrCast(&fs.state);
+    const self: *const Self = @ptrCast(&fs.state);
 
-    const entry = try vfsFind(&fs.disk, pvd, path) orelse return error.FileNotFound;
+    const entry = try self.find(path) orelse return error.FileNotFound;
+    if (entry.isDirectory()) return error.NotFile;
 
     return FS.Handle{
         .pos = 0,
@@ -478,6 +485,8 @@ fn vfsOpenFile(fs: *FS.AnyFs, path: []const u8) anyerror!FS.Handle {
 }
 
 fn vfsReadFile(fs: *FS.AnyFs, handle: *FS.Handle, buf: []u8) anyerror!usize {
+    const self: *const Self = @ptrCast(&fs.state);
+
     if (handle.pos >= handle.size) return 0; // EOF
 
     const lba: u32 = @truncate(handle.ctx);
@@ -492,7 +501,7 @@ fn vfsReadFile(fs: *FS.AnyFs, handle: *FS.Handle, buf: []u8) anyerror!usize {
         const sector_off = abs_pos / 2048;
         const byte_off = abs_pos % 2048;
 
-        try fs.disk.read(lba + sector_off, &secotr_buf);
+        try self.readSector(lba + sector_off, &secotr_buf);
 
         const chunk = @min(2048 - byte_off, to_read - done);
         @memcpy(buf[done..][0..chunk], secotr_buf[byte_off..][0..chunk]);
@@ -504,9 +513,9 @@ fn vfsReadFile(fs: *FS.AnyFs, handle: *FS.Handle, buf: []u8) anyerror!usize {
 }
 
 fn vfsStat(fs: *FS.AnyFs, path: []const u8) anyerror!FS.FileInfo {
-    const pvd: *const PrimaryVolumeDescriptor = @ptrCast(&fs.state);
+    const self: *const Self = @ptrCast(&fs.state);
 
-    const entry = try vfsFind(&fs.disk, pvd, path) orelse return error.FileNotFound;
+    const entry = try self.find(path) orelse return error.FileNotFound;
 
     return FS.FileInfo{
         .size = entry.data_length.value(),
@@ -514,14 +523,101 @@ fn vfsStat(fs: *FS.AnyFs, path: []const u8) anyerror!FS.FileInfo {
     };
 }
 
+const VfsDirIterCtx = struct {
+    disk: *Disk,
+    lba: u32,
+    size: u32,
+    sectors: u32,
+    buf: [2048]u8 align(@alignOf(DirEntry)),
+    bytes_read: u32,
+    sector: u32,
+    offset: u32,
+
+    pub fn init(disk: *Disk, entry: *const DirEntry) VfsDirIterCtx {
+        var ctx: VfsDirIterCtx = undefined;
+        ctx.disk = disk;
+        ctx.lba = entry.location_of_extent.value();
+        ctx.size = entry.data_length.value();
+        ctx.sectors = std.math.divCeil(u32, ctx.size, 2048) catch unreachable;
+        ctx.bytes_read = 0;
+        ctx.sector = 0;
+        ctx.offset = 0;
+        disk.read(ctx.lba, &ctx.buf) catch {};
+        return ctx;
+    }
+
+    pub fn next(raw: *[4096]u8) anyerror!?FS.DirIterator.Entry {
+        const ctx: *VfsDirIterCtx = @ptrCast(@alignCast(raw));
+
+        while (true) {
+            if (ctx.sector >= ctx.sectors) return null;
+            if (ctx.bytes_read >= ctx.size) return null;
+
+            if (ctx.offset >= ctx.buf.len) {
+                ctx.sector += 1;
+                if (ctx.sector >= ctx.sectors) return null;
+                ctx.offset = 0;
+                try ctx.disk.read(ctx.lba + ctx.sector, &ctx.buf);
+            }
+
+            const entry: *const DirEntry = @ptrCast(@alignCast(&ctx.buf[ctx.offset]));
+            if (entry.length == 0) return null;
+
+            ctx.bytes_read += entry.length;
+            ctx.offset += entry.length;
+
+            if (entry.isCurrentDir() or entry.isParentDir()) continue;
+
+            return FS.DirIterator.Entry{
+                .name = entry.fileNameClean(),
+                .info = .{
+                    .size = entry.data_length.value(),
+                    .type = if (entry.isDirectory()) .directory else .file,
+                },
+            };
+        }
+    }
+
+    pub fn reset(raw: *[4096]u8) void {
+        const ctx: *VfsDirIterCtx = @ptrCast(@alignCast(raw));
+        ctx.bytes_read = 0;
+        ctx.sector = 0;
+        ctx.offset = 0;
+        ctx.disk.read(ctx.lba, &ctx.buf) catch {};
+    }
+};
+
+const vfs_dir_iter_vtable = FS.DirIterator.VTable{
+    .next = VfsDirIterCtx.next,
+    .reset = VfsDirIterCtx.reset,
+};
+
+fn vfsIterDir(fs: *FS.AnyFs, path: []const u8) anyerror!FS.DirIterator {
+    const self: *const Self = @ptrCast(@alignCast(&fs.state));
+
+    const entry = try self.find(path) orelse return error.FileNotFound;
+    if (!entry.isDirectory()) return error.NotDirectory;
+
+    var iter = FS.DirIterator{
+        .fs = fs,
+        .vtable = &vfs_dir_iter_vtable,
+    };
+
+    // init the context into the iterator's inline storage
+    const ctx: *VfsDirIterCtx = @ptrCast(@alignCast(&iter.ctx));
+    ctx.* = VfsDirIterCtx.init(self.disk, &entry);
+    return iter;
+}
+
 pub fn mount(disk: *Disk) !FS.AnyFs {
     var iso9660 = try init(disk);
-    var anyfs = FS.AnyFs{ .disk = disk.*, .vtable = .{
+    var anyfs = FS.AnyFs{ .vtable = .{
         .read_file = &vfsReadFile,
         .open_file = &vfsOpenFile,
         .stat = &vfsStat,
+        .iter_dir = &vfsIterDir,
     }, .fs_type = .iso9660 };
-    const bytes = std.mem.asBytes(&iso9660.pvd);
+    const bytes = std.mem.asBytes(&iso9660);
     @memcpy(anyfs.state[0..bytes.len], bytes);
     return anyfs;
 }

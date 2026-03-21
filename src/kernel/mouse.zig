@@ -22,6 +22,7 @@ const STATUS_REGISTER = 0x64;
 
 const MOUSE_PORT = 0xD4;
 
+// BUG: find cause and fix these bugs
 // [mouse] error: Failed to send mouse command (NO ACK): recived e0
 // [mouse] error: Failed to set mouse defaults: NoAck
 

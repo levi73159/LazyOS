@@ -2,6 +2,7 @@
 
 const io = @import("../arch.zig").io;
 const ata = @import("ata.zig");
+const std = @import("std");
 
 pub const CMD_IDENTIFY_PACKET = 0xA1;
 pub const CMD_PACKET = 0xA0;
@@ -33,22 +34,44 @@ pub fn identify(base: u16, drive_info: *[256]u16) !void {
     }
 }
 
-const Packet = packed struct(u96) {
+const Packet = extern struct {
     opcode: u8,
     flags: u8 = 0,
-    lba: u32,
+    lba: [4]u8, // big-endian manually
     reserved: u8 = 0,
-    count: u16,
+    count: [2]u8, // big-endian manually
     control: u8 = 0,
-    __pad: u16 = 0,
+    pad: [2]u8 = .{ 0, 0 },
+
+    pub fn init(opcode: u8, lba: u32, count: u16) Packet {
+        return .{
+            .opcode = opcode,
+            .lba = .{
+                @truncate(lba >> 24),
+                @truncate(lba >> 16),
+                @truncate(lba >> 8),
+                @truncate(lba),
+            },
+            .count = .{
+                @truncate(count >> 8),
+                @truncate(count),
+            },
+        };
+    }
 
     pub fn getBytes(self: *const Packet) *const [12]u8 {
         return @ptrCast(self);
     }
 };
 
+comptime {
+    std.debug.assert(@sizeOf(Packet) == 12);
+}
+
 fn sendPacket(base: u16, packet: Packet, byte_count: u16) !void {
     io.outb(base + ata.DRIVE_REGISTER, 0xA0);
+    ata.delay400ns(base);
+    try ata.waitBusy(base);
     io.outb(base + ata.FEATURES_REGISTER, 0); // PIO mode
     io.outb(base + ata.LBA_MID_REGISTER, @truncate(byte_count));
     io.outb(base + ata.LBA_HIGH_REGISTER, @truncate(byte_count >> 8));
@@ -72,13 +95,9 @@ fn sendPacket(base: u16, packet: Packet, byte_count: u16) !void {
 pub const Sector = [SECTOR_SIZE]u8;
 
 pub fn readSectors(base: u16, lba: u32, buf: []Sector) !void {
-    @import("std").debug.assert(buf.len <= @import("std").math.maxInt(u16));
-    const packet = Packet{
-        .opcode = SCSI_READ_10,
-        .lba = @byteSwap(lba),
-        .count = @byteSwap(@as(u16, @truncate(buf.len))),
-    };
+    std.debug.assert(buf.len <= std.math.maxInt(u16));
 
+    const packet = Packet.init(SCSI_READ_10, lba, @intCast(buf.len));
     try sendPacket(base, packet, SECTOR_SIZE);
     for (buf) |*sector| {
         try ata.waitBusy(base);
