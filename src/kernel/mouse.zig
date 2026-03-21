@@ -22,10 +22,6 @@ const STATUS_REGISTER = 0x64;
 
 const MOUSE_PORT = 0xD4;
 
-// BUG: find cause and fix these bugs
-// [mouse] error: Failed to send mouse command (NO ACK): recived e0
-// [mouse] error: Failed to set mouse defaults: NoAck
-
 const StatusRegister = packed struct(u8) {
     output_buffer_full: bool,
     input_buffer_full: bool,
@@ -61,10 +57,15 @@ const MouseCommand = enum(u8) {
 };
 
 fn sendCommand(command: MouseCommand) !void {
+    waitInputReady();
     io.outb(COMMAND_REGISTER, MOUSE_PORT); // tell the ps2 controller were address port 2 (mouse)
+    waitInputReady();
     io.outb(DATA_PORT, @intFromEnum(command));
 
-    waitForData();
+    if (!waitForData()) {
+        log.err("Timeout sending mouse command", .{});
+        return error.Timeout;
+    }
 
     const ack = io.inb(DATA_PORT);
     if (ack != 0xFA) {
@@ -73,9 +74,19 @@ fn sendCommand(command: MouseCommand) !void {
     }
 }
 
-fn waitForData() void {
-    while (!StatusRegister.read().output_buffer_full) {
+fn waitInputReady() void {
+    while (StatusRegister.read().input_buffer_full) {
         asm volatile ("pause");
+    }
+}
+
+pub fn flushBuffer() void {
+    // read and discard up to 16 bytes until buffer is empty
+    var i: usize = 0;
+    while (i < 16) : (i += 1) {
+        const status = io.inb(0x64);
+        if (status & 0x01 == 0) break; // output buffer empty
+        _ = io.inb(0x60);
     }
 }
 
@@ -84,28 +95,73 @@ var mouse_clamp: MousePos = .{ .x = std.math.maxInt(u32), .y = std.math.maxInt(u
 var packet: [3]u8 = undefined;
 var packet_idx: u32 = 0;
 
+fn readCommandByte() ?u8 {
+    flushBuffer();
+    waitInputReady();
+    io.outb(COMMAND_REGISTER, 0x20);
+    if (!waitForData()) {
+        log.err("Timeout reading PS/2 command byte", .{});
+        return null;
+    }
+    return io.inb(DATA_PORT);
+}
+
+fn writeCommandByte(cmd: u8) void {
+    waitInputReady();
+    io.outb(COMMAND_REGISTER, 0x60);
+    waitInputReady();
+    io.outb(DATA_PORT, cmd);
+}
+
+// returns true if data appeared, false if timed out
+fn waitForData() bool {
+    var timeout: u32 = 100_000;
+    while (timeout > 0) : (timeout -= 1) {
+        if (StatusRegister.read().output_buffer_full) return true;
+        asm volatile ("pause");
+    }
+    return false;
+}
+
 pub fn init() void {
     log.debug("Initializing mouse", .{});
-    // io.outb(COMMAND_REGISTER, 0xA8); // enable aux mouse device
-    //
-    // // enable mouse interrupts via command byte
-    // io.outb(COMMAND_REGISTER, 0x20); // read command byte
-    // waitForData();
-    // var cmd = io.inb(DATA_PORT);
-    // cmd |= 0x02; // enable IRQ12
-    // cmd &= ~@as(u8, 0x20); // enable mouse clock
-    // io.outb(COMMAND_REGISTER, 0x60);
-    // io.outb(DATA_PORT, cmd);
+    io.cli();
+    defer io.sti();
+
+    const cmd_byte = readCommandByte() orelse {
+        log.err("Failed to read PS/2 command byte", .{});
+        return;
+    };
+    log.debug("PS/2 command byte: 0x{x}", .{cmd_byte});
+
+    const aux_disabled = cmd_byte & 0x20 != 0;
+    if (aux_disabled) {
+        log.debug("Aux device disabled, enabling...", .{});
+        waitInputReady();
+        io.outb(COMMAND_REGISTER, 0xA8);
+        flushBuffer();
+    }
+
+    // only touch bits 1 and 5 — leave everything else (esp bit 6) intact
+    var new_cmd = cmd_byte;
+    new_cmd |= 0x02; // enable IRQ12
+    new_cmd &= ~@as(u8, 0x20); // enable mouse clock
+    writeCommandByte(new_cmd);
+
+    flushBuffer();
 
     sendCommand(.set_defaults) catch |err| {
         log.err("Failed to set mouse defaults: {s}", .{@errorName(err)});
+        return;
     };
     sendCommand(.enable_data_reporting) catch |err| {
         log.err("Failed to enable mouse data reporting: {s}", .{@errorName(err)});
+        return;
     };
 
     irq.register(12, &handler);
     irq.enable(12);
+    log.debug("Mouse initialized", .{});
 }
 
 pub fn handler(_: *arch.registers.InterruptFrame) void {
