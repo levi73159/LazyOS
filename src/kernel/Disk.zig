@@ -51,8 +51,6 @@ pub fn init(disk: u8) DiskError!Self {
 pub fn read(self: Self, lba: u32, buf: []u8) DiskError!void {
     if (buf.len == 0) return;
 
-    log.debug("reading lba: {d}", .{lba});
-
     switch (self.drive_type) {
         .ata => {
             if (buf.len % ata.SECTOR_SIZE != 0) return error.UnalignedBuffer;
