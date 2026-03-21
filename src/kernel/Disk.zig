@@ -22,7 +22,12 @@ drive_info: [256]u16,
 drive_type: DriveType,
 read_only: bool = false,
 
-pub fn init(disk: u8) !Self {
+pub const DiskError = error{
+    InvalidDisk,
+    UnalignedBuffer,
+} || ata.DriveError;
+
+pub fn init(disk: u8) DiskError!Self {
     const base: u16 = if (disk == 0) DISK_0 else if (disk == 1) DISK_1 else return error.InvalidDisk;
     var self = Self{
         .base = base,
@@ -43,7 +48,7 @@ pub fn init(disk: u8) !Self {
     return self;
 }
 
-pub fn read(self: Self, lba: u32, buf: []u8) !void {
+pub fn read(self: Self, lba: u32, buf: []u8) DiskError!void {
     if (buf.len == 0) return;
 
     switch (self.drive_type) {
@@ -60,7 +65,7 @@ pub fn read(self: Self, lba: u32, buf: []u8) !void {
     }
 }
 
-pub fn write(self: Self, lba: u32, data: []const u8) !void {
+pub fn write(self: Self, lba: u32, data: []const u8) DiskError!void {
     if (data.len == 0) return;
     if (self.read_only) return error.ReadOnlyDisk;
 

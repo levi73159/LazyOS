@@ -71,15 +71,28 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
         log.err("Failed to open test file: {s}", .{@errorName(err)});
         io.hlt();
     };
-    defer fs.close(file);
+    defer file.close();
 
     var buf: [1024]u8 = undefined;
-    const size = fs.read(file, &buf) catch |err| {
-        log.err("Failed to read test file: {s}", .{@errorName(err)});
+    var reader = file.reader(&buf);
+    var data1: [1024]u8 = undefined;
+    var data2: [1024]u8 = undefined;
+
+    const data1_size = reader.interface.readSliceShort(&data1) catch |err| {
+        log.err("Failed to read file: {s}", .{@errorName(err)});
+        io.hlt();
+    };
+    reader.seekTo(0) catch |err| {
+        log.err("Failed to seek to start of file: {s}", .{@errorName(err)});
+        io.hlt();
+    };
+    const data2_size = reader.interface.readSliceShort(&data2) catch |err| {
+        log.err("Failed to read file: {s}", .{@errorName(err)});
         io.hlt();
     };
 
-    log.debug("File contents: {s}", .{buf[0..size]});
+    log.debug("File contents: {s}", .{data1[0..data1_size]});
+    log.debug("File contents: {s}", .{data2[0..data2_size]});
 
     console.init(screen);
     console.clear();
