@@ -65,12 +65,29 @@ pub fn init(mmap: []*bootinfo.MemoryMapEntry, hddm_offset: u64, range: PhysRange
     }
     var usable_memory: u64 = 0;
 
-    // now mark usable memory as free
+    // bitmap placement — find usable entry that overlaps range and is large enough
     for (mmap) |entry| {
-        if (entry.type == .usable and range.inside(entry.base)) {
-            freeRegion(bitmap, entry.base, entry.length, range);
-            usable_memory += entry.length;
+        if (entry.type != .usable) continue;
+        if (!overlapsRange(entry.base, entry.length, range)) continue;
+
+        const base, const len = clampToRange(entry.base, entry.length, range);
+        if (len >= bitmap_size) {
+            bitmap = @as([*]u8, @ptrFromInt(base + hddm_offset))[0..bitmap_size];
+            @memset(bitmap, 0xFF);
+            break;
         }
+    } else {
+        @panic("Couldn't find usable memory large enough to hold the bitmap");
+    }
+
+    // mark free regions — clamp each entry to range bounds
+    for (mmap) |entry| {
+        if (entry.type != .usable) continue;
+        if (!overlapsRange(entry.base, entry.length, range)) continue;
+
+        const base, const len = clampToRange(entry.base, entry.length, range);
+        freeRegion(bitmap, base, len, range);
+        usable_memory += len;
     }
 
     markUsed(bitmap, @intFromPtr(bitmap.ptr) - hddm_offset, bitmap_size, range);
@@ -96,6 +113,18 @@ pub fn allocPage(self: *Self) !u64 {
     }
 
     return error.OutOfMemroy;
+}
+
+fn overlapsRange(entry_base: u64, entry_len: u64, range: PhysRange) bool {
+    return entry_base < range.end() and entry_base + entry_len > range.start;
+}
+
+// clamp an entry to the range bounds
+fn clampToRange(base: u64, length: u64, range: PhysRange) struct { u64, u64 } {
+    const clamped_base = @max(base, range.start);
+    const clamped_end = @min(base + length, range.end());
+    if (clamped_end <= clamped_base) return .{ 0, 0 };
+    return .{ clamped_base, clamped_end - clamped_base };
 }
 
 pub fn freePage(self: *Self, phys: u64) void {
@@ -174,24 +203,31 @@ inline fn getBit(bitmap: []u8, index: u64) bool {
 }
 
 fn freeRegion(bitmap: []u8, base: u64, length: u64, range: PhysRange) void {
+    const total_pages = bitmap.len * 8;
     const start = (base - range.start) / PAGE_SIZE;
-    const count = (length + PAGE_SIZE - 1) / PAGE_SIZE;
-
-    for (0..count) |i| {
-        clearBit(bitmap, start + i);
+    // clamp end to total_pages so we never write past the bitmap
+    const end_page = @min(
+        (base + length - range.start + PAGE_SIZE - 1) / PAGE_SIZE,
+        total_pages,
+    );
+    if (end_page <= start) return;
+    for (start..end_page) |i| {
+        clearBit(bitmap, i);
     }
 }
 
 fn markUsed(bitmap: []u8, base: u64, length: u64, range: PhysRange) void {
+    const total_pages = bitmap.len * 8;
     const start = base / PAGE_SIZE - range.start / PAGE_SIZE;
-    // round length to nearest page
-    const count = (length + PAGE_SIZE - 1) / PAGE_SIZE;
-
-    for (0..count) |i| {
-        setBit(bitmap, start + i);
+    const end_page = @min(
+        (base + length - range.start + PAGE_SIZE - 1) / PAGE_SIZE,
+        total_pages,
+    );
+    if (end_page <= start) return;
+    for (start..end_page) |i| {
+        setBit(bitmap, i);
     }
 }
-
 pub fn getTotalMemory(self: *Self) u64 {
     return self.usable_memory;
 }
