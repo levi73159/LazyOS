@@ -75,7 +75,6 @@ pub fn build(b: *std.Build) void {
         "-display",
         @tagName(display),
     });
-    run_qemu_cmd.addArgs(&.{ "-drive", "file=disk.img,format=raw,if=ide,index=0" });
     if (debug_int) {
         run_qemu_cmd.addArgs(&.{ "-d", "int" });
     }

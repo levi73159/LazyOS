@@ -16,6 +16,7 @@ const serial = @import("arch/serial.zig");
 const pmem = @import("memory/pmem.zig");
 const Iso9660 = @import("fs/Iso9660.zig");
 const Disk = @import("Disk.zig");
+const FileSystem = @import("fs/FileSystem.zig");
 
 const acpi_oslevel = @import("acpi/osl.zig"); // NOTE: MUST BE IMPORTED FIRST FOR ACPI TO WORK
 comptime {
@@ -60,30 +61,25 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
         log.err("Failed to create double buffer: {s}", .{@errorName(err)});
     };
 
-    var disk: Disk = Disk.init(1) catch |err| {
-        log.err("Failed to init disk: {s}", .{@errorName(err)});
+    // init file system on disk 1 (boot disk)
+    var fs = FileSystem.init(1) catch |err| {
+        log.err("Failed to init file system: {s}", .{@errorName(err)});
         io.hlt();
     };
-    const fs = Iso9660.init(&disk) catch |err| {
-        log.err("Failed to init filesystem: {s}", .{@errorName(err)});
-        io.hlt();
-    };
-    var it = fs.it(fs.rootDir());
-    while (it.next() catch |err| @panic(@errorName(err))) |entry| {
-        log.info("{s}", .{entry.fileNameClean()});
-    }
 
-    const file = fs.find("/boot/test/../test/test.msg") catch |err| @panic(@errorName(err));
-    if (file == null) {
-        log.err("Failed to find test file", .{});
+    const file = fs.open("/boot/test/test.msg") catch |err| {
+        log.err("Failed to open test file: {s}", .{@errorName(err)});
         io.hlt();
-    } else {
-        log.info("Found test file", .{});
-        const buf = heap.allocator().alloc(u8, file.?.data_length.value()) catch unreachable;
-        const data = fs.readFile(&file.?, buf) catch |err| @panic(@errorName(err));
-        log.info("{s}", .{data});
-        heap.allocator().free(buf);
-    }
+    };
+    defer fs.close(file);
+
+    var buf: [1024]u8 = undefined;
+    const size = fs.read(file, &buf) catch |err| {
+        log.err("Failed to read test file: {s}", .{@errorName(err)});
+        io.hlt();
+    };
+
+    log.debug("File contents: {s}", .{buf[0..size]});
 
     console.init(screen);
     console.clear();
