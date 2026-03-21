@@ -90,6 +90,23 @@ pub fn readError(base: u16) DriveError {
     return err.getError() orelse error.UnknownError;
 }
 
+pub const DeviceControl = packed struct(u8) {
+    _reserved: u1 = 0,
+    nien: bool, // set to TRUE to DISABLE interrupts
+    srst: bool, // software reset
+    _reserved2: u4 = 0,
+    hob: bool, // high order byte (LBA48)
+};
+
+pub fn setInterrupts(base: u16, enabled: bool) void {
+    const ctrl = DeviceControl{
+        .nien = !enabled, // nien=1 disables, nien=0 enables
+        .srst = false,
+        .hob = false,
+    };
+    io.outb(base + CONTROL_REGISTER, @bitCast(ctrl));
+}
+
 pub fn delay400ns(base: u16) void {
     _ = readAlternateStatus(base);
     _ = readAlternateStatus(base);
@@ -119,6 +136,7 @@ pub fn waitDrq(base: u16) !void {
 /// Returns error.DriveIsATAPI if an ATAPI device is detected — caller
 /// should hand off to atapi.identify().
 pub fn identify(base: u16, drive_info: *[256]u16) !void {
+    setInterrupts(base, false);
     io.outb(base + DRIVE_REGISTER, 0xA0);
     io.outb(base + SECTOR_COUNT_REGISTER, 0);
     io.outb(base + LBA_LOW_REGISTER, 0);

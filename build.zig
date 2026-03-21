@@ -78,7 +78,7 @@ pub fn build(b: *std.Build) void {
     if (debug_int) {
         run_qemu_cmd.addArgs(&.{ "-d", "int" });
     }
-    run_qemu_cmd.addArgs(&.{ "-bios", "/usr/share/ovmf/x64/OVMF.4m.fd" });
+    // run_qemu_cmd.addArgs(&.{ "-bios", "/usr/share/ovmf/x64/OVMF.4m.fd" });
 
     run_qemu_cmd.step.dependOn(image.step);
 
