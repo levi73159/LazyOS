@@ -26,7 +26,7 @@ var no_swap: bool = false;
 
 const pixels_per_scanline = 32;
 
-var serial: ?*std.Io.Writer = null;
+pub var serial: ?*std.Io.Writer = null;
 
 pub fn init(_screen: *Screen) void {
     std.log.debug("Initializing console", .{});

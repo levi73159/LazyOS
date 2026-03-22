@@ -74,6 +74,11 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     };
     FileSystem.setGlobal(fs);
 
+    ui.init(FileSystem.getGlobal(), "ui", heap.allocator()) catch |err| {
+        log.err("Failed to init UI Components: {s}", .{@errorName(err)});
+        io.hlt();
+    };
+
     console.init(screen);
     console.clear();
     console.echoToHost(true); // echo all prints to the host
@@ -404,7 +409,6 @@ fn mainWrapper() callconv(.c) noreturn {
     main(screen) catch |err| {
         std.log.scoped(.host).err("Main failed: {s}", .{@errorName(err)});
     };
-    std.log.scoped(.host).err("Shutting down", .{});
     acpi.shutdown();
     while (true) {
         asm volatile ("hlt");
@@ -413,7 +417,6 @@ fn mainWrapper() callconv(.c) noreturn {
 
 fn main(screen: *Screen) !void {
     std.log.debug("main", .{});
-    log.debug("shutting down", .{});
     const is64bit = builtin.target.cpu.arch == .x86_64;
     if (is64bit) {
         console.print("Welcome to LazyOS 64-bit\n", .{});
@@ -466,9 +469,18 @@ fn drawLoop(screen: *Screen) void {
 
     mouse.addClamp(screen.width, screen.height);
 
+    const texture = ui.get("POWER");
+    if (texture == null) {
+        std.log.scoped(.host).err("Power texture not found", .{});
+    }
+
     while (true) {
         screen.clear(Color.white());
         screen.drawRect(@min(mouse.x(), screen.width), @min(mouse.y(), screen.height), 10, 10, Color.black());
+
+        if (texture) |tex| {
+            screen.drawTexture(screen.width / 2, 0, tex);
+        }
 
         screen.swapBuffers();
 

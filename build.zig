@@ -33,6 +33,8 @@ pub fn build(b: *std.Build) void {
         .sanitize_thread = false,
         .pic = false,
         .strip = false,
+        .error_tracing = true,
+        .omit_frame_pointer = false,
     });
     const kernel = b.addExecutable(.{
         .name = "kernel",

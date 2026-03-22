@@ -117,7 +117,7 @@ pub const std_options: std.Options = .{
     .page_size_max = 4096,
 };
 
-pub fn panic(msg: []const u8, trace: ?*std.builtin.StackTrace, ret: ?usize) noreturn {
+pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, ret: ?usize) noreturn {
     @branchHint(.cold);
-    console.panic(msg, trace, ret);
+    @import("panic_handler.zig").panic(msg, ret);
 }

@@ -8,6 +8,7 @@ const TextureMap = std.StringHashMap(*const Texture);
 pub const Texture = struct {
     width: u32,
     height: u32,
+    rowstride: u32,
     bpp: u32, // bytes per pixel
 
     pub const Pixel = struct {
@@ -20,14 +21,13 @@ pub const Texture = struct {
     pub fn pixels(self: *const Texture) []const u8 {
         // texture is allocated behind data
         const bytes: [*]const u8 = @ptrCast(self);
-        return bytes[@sizeOf(Texture) .. self.width * self.height * self.bpp];
+        return bytes[@sizeOf(Texture)..][0 .. self.height * self.rowstride];
     }
 
     // Bottom up (doesn't ever use top down)
     pub fn getPixel(self: *const Texture, x: u32, y: u32) Pixel {
         const src_row = self.height - 1 - y;
-        const row_size = self.width * self.bpp;
-        const offset = src_row * row_size + x * self.bpp;
+        const offset = src_row * self.rowstride + x * self.bpp;
         const data = self.pixels();
 
         return switch (self.bpp) {
@@ -48,7 +48,7 @@ pub const Texture = struct {
     }
 
     pub fn len(self: *const Texture) u32 {
-        return self.width * self.height * self.bpp;
+        return self.height * self.rowstride;
     }
 };
 
@@ -86,11 +86,16 @@ pub fn init(fs: *FS, folder: []const u8, allocator: std.mem.Allocator) !void {
         const memory = try allocator.alignedAlloc(u8, .of(Texture), true_size); // make sure it aligned to Texture
         errdefer allocator.free(memory);
 
-        const name = try allocator.dupe(u8, entry.name);
+        const dot_index = std.mem.indexOf(u8, entry.name, ".") orelse entry.name.len;
+        const name = try allocator.dupe(u8, entry.name[0..dot_index]);
+
         const texture: *Texture = @ptrCast(@alignCast(memory.ptr));
-        texture.width = bitmap.width;
-        texture.height = bitmap.height;
-        texture.bpp = @divExact(bitmap.bits_per_pixel, 8);
+        texture.* = Texture{
+            .width = bitmap.width,
+            .height = bitmap.height,
+            .rowstride = bitmap.rowstride,
+            .bpp = (bitmap.bits_per_pixel) / 8,
+        };
 
         @memcpy(memory[@sizeOf(Texture)..][0..size], bitmap.data);
         try textures.put(name, texture);
@@ -109,4 +114,8 @@ pub fn deinit() void {
         allocator.free(memory[0..true_size]);
     }
     textures.deinit();
+}
+
+pub fn get(name: []const u8) ?*const Texture {
+    return textures.get(name);
 }

@@ -187,7 +187,7 @@ pub fn swapBuffers(self: *Self) void {
     }
 }
 
-pub fn drawTexture(self: *Self, x: u32, y: u32, texture: Texture) void {
+pub fn drawTexture(self: *Self, x: u32, y: u32, texture: *const Texture) void {
     const width = texture.width;
     const height = texture.height;
 

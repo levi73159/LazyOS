@@ -20,6 +20,11 @@ pub fn allocator() @import("std").mem.Allocator {
     return heap.allocator();
 }
 
+pub fn allocatorIfReady() ?@import("std").mem.Allocator {
+    if (!has_initialized) return null;
+    return heap.allocator();
+}
+
 pub fn get() *LinkedList {
     if (builtin.mode == .Debug and !has_initialized) @panic("heap not initialized");
     return &heap;
