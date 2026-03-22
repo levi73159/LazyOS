@@ -3,8 +3,8 @@ const vga = @import("vga.zig");
 const io = @import("arch.zig").io;
 const arch = @import("arch.zig");
 const kb = @import("keyboard.zig");
-const Screen = @import("Screen.zig");
-const Color = @import("Color.zig");
+const Screen = @import("graphics/Screen.zig");
+const Color = @import("graphics/Color.zig");
 const font = @import("fonts/Basic.zig");
 const SerialWriter = @import("arch/serial.zig").SerialWriter;
 

@@ -16,7 +16,7 @@ const pmem = @import("memory/pmem.zig");
 const Iso9660 = @import("fs/Iso9660.zig");
 const Disk = @import("Disk.zig");
 const FileSystem = @import("fs/FileSystem.zig");
-const ui = @import("ui.zig");
+const ui = @import("graphics/ui.zig");
 const Shell = @import("Shell.zig");
 
 const acpi_oslevel = @import("acpi/osl.zig"); // NOTE: MUST BE IMPORTED FIRST FOR ACPI TO WORK
@@ -26,8 +26,8 @@ comptime {
 
 const heap = @import("memory/heap.zig");
 
-const Screen = @import("Screen.zig");
-const Color = @import("Color.zig");
+const Screen = @import("graphics/Screen.zig");
+const Color = @import("graphics/Color.zig");
 
 const regs = arch.registers;
 
@@ -177,56 +177,4 @@ fn main(_: *Screen) !void {
     shell.inputLoop() catch |err| {
         std.log.scoped(.host).err("Shell failed: {s}", .{@errorName(err)});
     };
-}
-
-fn drawLoop(screen: *Screen) void {
-    screen.use_double_buffer = true;
-    defer screen.use_double_buffer = false;
-
-    defer kb.flush();
-
-    mouse.resetState();
-    mouse.addClamp(screen.width, screen.height);
-
-    const power_texture = ui.get("POWER");
-    if (power_texture == null) {
-        std.log.scoped(.host).err("Power texture not found", .{});
-    }
-
-    const cursor = ui.get("CURSOR") orelse @panic("Cursor texture not found");
-
-    var mouse_color = Color.black();
-    while (true) {
-        const mouse_x = mouse.x();
-        const mouse_y = mouse.y();
-        screen.clear(Color.white());
-
-        if (power_texture) |tex| {
-            const x = screen.width / 2;
-            const y = screen.height / 2;
-            screen.drawTexture(x, y, tex);
-
-            const tex_left = x;
-            const tex_right = x + tex.width;
-
-            const tex_top = y;
-            const tex_bottom = y + tex.height;
-
-            if (mouse_x >= tex_left and mouse_x <= tex_right and mouse_y >= tex_top and mouse_y <= tex_bottom) {
-                mouse_color = Color.green();
-                if (mouse.isButtonJustPressed(.left)) {
-                    acpi.shutdown();
-                }
-            } else {
-                mouse_color = Color.black();
-            }
-        }
-
-        screen.drawTexture(mouse_x, mouse_y, cursor);
-        screen.swapBuffers();
-        mouse.updateMouse();
-
-        if (kb.getKeyDown(.q))
-            break;
-    }
 }

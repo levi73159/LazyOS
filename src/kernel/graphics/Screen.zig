@@ -1,7 +1,7 @@
 const std = @import("std");
 const Color = @import("Color.zig");
-const font = @import("fonts/Basic.zig");
-const bootinfo = @import("arch/bootinfo.zig");
+const font = @import("../fonts/Basic.zig");
+const bootinfo = @import("../arch/bootinfo.zig");
 const Texture = @import("ui.zig").Texture;
 
 const Self = @This();
@@ -36,7 +36,7 @@ pub fn get() *Self {
 }
 
 pub fn createDoubleBuffer(self: *Self) !void {
-    const pmem = @import("memory/pmem.zig");
+    const pmem = @import("../memory/pmem.zig");
     const size = self.buffer.len * 4;
     const pages = (size + pmem.PAGE_SIZE - 1) / pmem.PAGE_SIZE;
     const phys = try pmem.kernel().allocPages(pages);

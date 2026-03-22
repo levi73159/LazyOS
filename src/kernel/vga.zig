@@ -2,7 +2,7 @@
 pub const VGA_WIDTH = 80;
 pub const VGA_HEIGHT = 25;
 
-const bit32Color = @import("Color.zig");
+const bit32Color = @import("graphics/Color.zig");
 
 const VGA_MEMORY = @as(*volatile [VGA_HEIGHT * VGA_WIDTH]u16, @ptrFromInt(0xB8000));
 

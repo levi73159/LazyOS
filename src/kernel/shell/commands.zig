@@ -4,53 +4,47 @@ const console = @import("../console.zig");
 const acpi = @import("../arch/acpi.zig");
 const Shell = @import("../Shell.zig");
 
-pub const commands = &[_]Command{
-    Command{
-        .name = "echo",
-        .help = "Prints to the screen",
-        .handler = echo,
-    },
-    Command{
-        .name = "clear",
-        .help = "Clears the screen",
-        .handler = clear,
-    },
-    Command{
-        .name = "help",
-        .help = "Prints this help message",
-        .handler = help,
-    },
-    Command{
-        .name = "restart",
-        .help = "Restarts the system",
-        .handler = restart,
-    },
-    Command{
-        .name = "shutdown",
-        .help = "Shuts down the system",
-        .handler = shutdown,
-    },
-    Command{
-        .name = "pwd",
-        .help = "Prints the current working directory",
-        .handler = pwd,
-    },
-    Command{
-        .name = "cd",
-        .help = "Changes the current working directory",
-        .handler = cd,
-    },
-    Command{
-        .name = "ls",
-        .help = "Lists the contents of the current working directory",
-        .handler = ls,
-    },
-    Command{
-        .name = "cat",
-        .help = "Prints the contents of a file",
-        .handler = cat,
-    },
-};
+pub const commands = &[_]Command{ Command{
+    .name = "echo",
+    .help = "Prints to the screen",
+    .handler = echo,
+}, Command{
+    .name = "clear",
+    .help = "Clears the screen",
+    .handler = clear,
+}, Command{
+    .name = "help",
+    .help = "Prints this help message",
+    .handler = help,
+}, Command{
+    .name = "restart",
+    .help = "Restarts the system",
+    .handler = restart,
+}, Command{
+    .name = "shutdown",
+    .help = "Shuts down the system",
+    .handler = shutdown,
+}, Command{
+    .name = "pwd",
+    .help = "Prints the current working directory",
+    .handler = pwd,
+}, Command{
+    .name = "cd",
+    .help = "Changes the current working directory",
+    .handler = cd,
+}, Command{
+    .name = "ls",
+    .help = "Lists the contents of the current working directory",
+    .handler = ls,
+}, Command{
+    .name = "cat",
+    .help = "Prints the contents of a file",
+    .handler = cat,
+}, Command{
+    .name = "gfx",
+    .help = "Open the graphical gui",
+    .handler = gfx,
+} };
 
 // *const fn (cwd: []const u8, args: []const []const u8) anyerror!void,
 
@@ -136,4 +130,9 @@ fn cat(s: *Shell, args: []const []const u8) anyerror!void {
     var buf: [4096]u8 = undefined;
     const data = try file.readAll(&buf);
     console.write(data);
+}
+
+fn gfx(_: *Shell, _: []const []const u8) anyerror!void {
+    const screen = @import("../graphics/Screen.zig").get();
+    @import("../graphics/renderer.zig").drawLoop(screen);
 }

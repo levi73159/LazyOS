@@ -22,7 +22,7 @@ pub fn build(b: *std.Build) void {
 
     const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .Debug });
     const debug_int = b.option(bool, "interrupt", "turn on interrupt logging for qemu using the -d int option") orelse false;
-    const display = b.option(enum { sdl, gtk, none }, "display", "choose display backend") orelse .gtk;
+    const display = b.option([]const u8, "display", "choose display backend") orelse "sdl";
 
     const kernel_mod = b.createModule(.{
         .root_source_file = b.path("src/kernel/boot.zig"),
@@ -76,7 +76,7 @@ pub fn build(b: *std.Build) void {
         "-serial",
         "stdio",
         "-display",
-        @tagName(display),
+        display,
     });
     if (debug_int) {
         run_qemu_cmd.addArgs(&.{ "-d", "int" });
