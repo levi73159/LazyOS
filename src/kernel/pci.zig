@@ -15,7 +15,7 @@ const MULTI_FUNC = 0x80;
 const SLOT_LIMIT = 32;
 const FUNC_LIMIT = 8;
 
-const ConfigAddress = packed struct(u32) {
+pub const ConfigAddress = packed struct(u32) {
     _zero: u2, // bits 1-0, always 0
     register_offset: u6, // bits 7-2
     function_number: u3, // bits 10-8
@@ -25,7 +25,7 @@ const ConfigAddress = packed struct(u32) {
     enabled: bool, // bit 31
 };
 
-const Device = struct {
+pub const Device = struct {
     vendor_id: u16,
     device_id: u16,
     status: u16,
@@ -40,7 +40,7 @@ const Device = struct {
     cache_line_size: u8,
 };
 
-const ClassCode = enum(u8) {
+pub const ClassCode = enum(u8) {
     unclassifed = 0,
     mass_storage = 0x01,
     network = 0x02,
@@ -68,7 +68,7 @@ const ClassCode = enum(u8) {
     unassigned = 0xff, // vendor specific
 };
 
-const FoundDevice = struct {
+pub const FoundDevice = struct {
     bus: u8,
     slot: u8,
     func: u8,
@@ -122,6 +122,44 @@ pub fn configRead(comptime T: type, bus: u8, slot: u8, func: u8, offset: u8) T {
         32 => data,
         else => @compileError("Only 8, 16 and 32 bit integers are supported"),
     };
+}
+
+fn configWrite32(bus: u8, slot: u8, func: u8, offset: u8, data: u32) void {
+    const config_address = ConfigAddress{
+        ._zero = 0,
+        .register_offset = @truncate(offset >> 2),
+        .function_number = @truncate(func),
+        .device_number = @truncate(slot),
+        .bus_number = @truncate(bus),
+        .__reserved = 0,
+        .enabled = true,
+    };
+
+    io.outl(CONFIG_ADDRESS, @bitCast(config_address));
+    io.outl(CONFIG_DATA, data);
+}
+
+pub fn configWrite(comptime T: type, bus: u8, slot: u8, func: u8, offset: u8, data: T) void {
+    if (@typeInfo(T) != .int) {
+        @compileError("Only integer types are supported");
+    }
+    const int_info = @typeInfo(T).int;
+    switch (int_info.bits) {
+        8 => {
+            const shift = @as(u5, @truncate(offset & 3)) * 8;
+            const mask = ~(@as(u32, 0xFF) << shift);
+            const current = configRead32(bus, slot, func, offset);
+            configWrite32(bus, slot, func, offset, (current & mask) | (@as(u32, data) << shift));
+        },
+        16 => {
+            const shift = @as(u5, @truncate(offset & 2)) * 8;
+            const mask = ~(@as(u32, 0xFFFF) << shift);
+            const current = configRead32(bus, slot, func, offset);
+            configWrite32(bus, slot, func, offset, (current & mask) | (@as(u32, data) << shift));
+        },
+        32 => configWrite32(bus, slot, func, offset, data),
+        else => @compileError("Only 8, 16 and 32 bit integers are supported"),
+    }
 }
 
 fn vendorRead(bus: u8, slot: u8, func: u8) u16 {

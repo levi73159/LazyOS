@@ -10,6 +10,7 @@ const pit = @import("../pit.zig");
 const InterruptFrame = arch.registers.InterruptFrame;
 const irq = arch.irq;
 const sync = @import("../sync.zig");
+const pci = @import("../pci.zig");
 
 const log = std.log.scoped(.acpi_osl);
 
@@ -63,46 +64,68 @@ export fn uacpi_kernel_initialize(_: c.uacpi_init_level) c.uacpi_status {
 
 export fn uacpi_kernel_deinitialize() void {}
 
+fn encodePciHandle(bus: u8, slot: u8, function: u8) c.uacpi_handle {
+    return @ptrFromInt(@as(usize, bus) << 16 | @as(usize, slot) << 8 | @as(usize, function));
+}
+
+fn getPciInfo(handle: c.uacpi_handle) struct { u8, u8, u8 } {
+    const data = @intFromPtr(handle);
+    const bus: u8 = @truncate(data >> 16);
+    const slot: u8 = @truncate(data >> 8);
+    const function: u8 = @truncate(data);
+
+    return .{ bus, slot, function };
+}
+
 export fn uacpi_kernel_pci_device_open(
     address: c.uacpi_pci_address,
     out_handle: *c.uacpi_handle,
 ) c.uacpi_status {
-    _ = .{ address, out_handle };
-    return c.UACPI_STATUS_COMPILED_OUT;
+    out_handle.* = encodePciHandle(address.bus, address.device, address.function);
+    return c.UACPI_STATUS_OK;
 }
 
 export fn uacpi_kernel_pci_device_close(handle: c.uacpi_handle) void {
     _ = handle;
 }
 
-export fn uacpi_kernel_pci_read8(handle: c.uacpi_handle, offset: usize, out: *u8) c.uacpi_status {
-    _ = .{ handle, offset, out };
-    return c.UACPI_STATUS_COMPILED_OUT;
+export fn uacpi_kernel_pci_read8(handle: c.uacpi_handle, offset: c.uacpi_size, out: *u8) c.uacpi_status {
+    const bus, const slot, const func = getPciInfo(handle);
+    const data = pci.configRead(u8, bus, slot, func, @intCast(offset));
+    out.* = data;
+    return c.UACPI_STATUS_OK;
 }
 
-export fn uacpi_kernel_pci_read16(handle: c.uacpi_handle, offset: usize, out: *u16) c.uacpi_status {
-    _ = .{ handle, offset, out };
-    return c.UACPI_STATUS_COMPILED_OUT;
+export fn uacpi_kernel_pci_read16(handle: c.uacpi_handle, offset: c.uacpi_size, out: *u16) c.uacpi_status {
+    const bus, const slot, const func = getPciInfo(handle);
+    const data = pci.configRead(u16, bus, slot, func, @intCast(offset));
+    out.* = data;
+    return c.UACPI_STATUS_OK;
 }
 
-export fn uacpi_kernel_pci_read32(handle: c.uacpi_handle, offset: usize, out: *u32) c.uacpi_status {
-    _ = .{ handle, offset, out };
-    return c.UACPI_STATUS_COMPILED_OUT;
+export fn uacpi_kernel_pci_read32(handle: c.uacpi_handle, offset: c.uacpi_size, out: *u32) c.uacpi_status {
+    const bus, const slot, const func = getPciInfo(handle);
+    const data = pci.configRead(u32, bus, slot, func, @intCast(offset));
+    out.* = data;
+    return c.UACPI_STATUS_OK;
 }
 
-export fn uacpi_kernel_pci_write8(handle: c.uacpi_handle, offset: usize, val: u8) c.uacpi_status {
-    _ = .{ handle, offset, val };
-    return c.UACPI_STATUS_COMPILED_OUT;
+export fn uacpi_kernel_pci_write8(handle: c.uacpi_handle, offset: c.uacpi_size, val: u8) c.uacpi_status {
+    const bus, const slot, const func = getPciInfo(handle);
+    pci.configWrite(u8, bus, slot, func, @intCast(offset), val);
+    return c.UACPI_STATUS_OK;
 }
 
-export fn uacpi_kernel_pci_write16(handle: c.uacpi_handle, offset: usize, val: u16) c.uacpi_status {
-    _ = .{ handle, offset, val };
-    return c.UACPI_STATUS_COMPILED_OUT;
+export fn uacpi_kernel_pci_write16(handle: c.uacpi_handle, offset: c.uacpi_size, val: u16) c.uacpi_status {
+    const bus, const slot, const func = getPciInfo(handle);
+    pci.configWrite(u16, bus, slot, func, @intCast(offset), val);
+    return c.UACPI_STATUS_OK;
 }
 
-export fn uacpi_kernel_pci_write32(handle: c.uacpi_handle, offset: usize, val: u32) c.uacpi_status {
-    _ = .{ handle, offset, val };
-    return c.UACPI_STATUS_COMPILED_OUT;
+export fn uacpi_kernel_pci_write32(handle: c.uacpi_handle, offset: c.uacpi_size, val: u32) c.uacpi_status {
+    const bus, const slot, const func = getPciInfo(handle);
+    pci.configWrite(u32, bus, slot, func, @intCast(offset), val);
+    return c.UACPI_STATUS_OK;
 }
 
 export fn uacpi_kernel_io_map(
@@ -346,7 +369,6 @@ export fn uacpi_kernel_schedule_work(
     ctx: c.uacpi_handle,
 ) c.uacpi_status {
     _ = work_type;
-    // call directly until we have a scheduler
     const h = handler orelse return c.UACPI_STATUS_INVALID_ARGUMENT;
     const id = scheduler.addTask(h, .{@intFromPtr(ctx)});
     work_ids.append(heap.acpi_allocator(), id) catch return c.UACPI_STATUS_OUT_OF_MEMORY;
@@ -361,5 +383,5 @@ export fn uacpi_kernel_wait_for_work_completion() c.uacpi_status {
     }
     work_ids.clearRetainingCapacity();
     log.debug("Completed work", .{});
-    return c.UACPI_STATUS_OK; // no-op, work runs synchronously above
+    return c.UACPI_STATUS_OK;
 }
