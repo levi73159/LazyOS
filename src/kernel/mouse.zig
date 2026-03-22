@@ -270,7 +270,7 @@ pub fn updateMouse() void {
     state.old_buttons = state.buttons;
 }
 
-pub fn mouseResetState() void {
+pub fn resetState() void {
     state = .{
         .pos = .{ .x = 0, .y = 0 },
         .clamp = .{ .x = std.math.maxInt(u32), .y = std.math.maxInt(u32) },
