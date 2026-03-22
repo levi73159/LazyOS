@@ -84,6 +84,8 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
 
     renderer.subscribeToUpdates(&update);
 
+    @import("pci.zig").emunerate();
+
     console.init(screen);
     console.clear();
     console.echoToHost(true); // echo all prints to the host
