@@ -1,6 +1,7 @@
 const std = @import("std");
 const FS = @import("fs/FileSystem.zig");
 const Bitmap = @import("image/Bitmap.zig");
+const TGA = @import("image/Tga.zig");
 
 const log = std.log.scoped(.ui);
 
@@ -10,6 +11,7 @@ pub const Texture = struct {
     height: u32,
     rowstride: u32,
     bpp: u32, // bytes per pixel
+    topdown: bool,
 
     pub const Pixel = struct {
         r: u8,
@@ -26,7 +28,7 @@ pub const Texture = struct {
 
     // Bottom up (doesn't ever use top down)
     pub fn getPixel(self: *const Texture, x: u32, y: u32) Pixel {
-        const src_row = self.height - 1 - y;
+        const src_row = if (self.topdown) y else self.height - 1 - y; // ← was always flipping
         const offset = src_row * self.rowstride + x * self.bpp;
         const data = self.pixels();
 
@@ -62,45 +64,13 @@ pub fn init(fs: *FS, folder: []const u8, allocator: std.mem.Allocator) !void {
     while (try it.next()) |entry| {
         log.debug("entry: {s}", .{entry.name});
         if (entry.info.type != .file) continue; // ignores directories
-        if (!std.mem.endsWith(u8, entry.name, ".BMP")) continue;
-
-        log.debug("loading texture: {s}", .{entry.name});
-
-        const path = try std.mem.join(allocator, "/", &[_][]const u8{ folder, entry.name });
-        defer allocator.free(path);
-
-        log.debug("path: {s}", .{path});
-        const file = try fs.open(path);
-        defer file.close();
-
-        log.debug("file opened", .{});
-        const data = try file.readAlloc(allocator);
-        defer allocator.free(data);
-
-        log.debug("data read", .{});
-        const bitmap = try Bitmap.initTmp(data);
-        const size = bitmap.data.len;
-
-        const true_size = @sizeOf(Texture) + size;
-
-        const memory = try allocator.alignedAlloc(u8, .of(Texture), true_size); // make sure it aligned to Texture
-        errdefer allocator.free(memory);
-
-        const dot_index = std.mem.indexOf(u8, entry.name, ".") orelse entry.name.len;
-        const name = try allocator.dupe(u8, entry.name[0..dot_index]);
-
-        const texture: *Texture = @ptrCast(@alignCast(memory.ptr));
-        texture.* = Texture{
-            .width = bitmap.width,
-            .height = bitmap.height,
-            .rowstride = bitmap.rowstride,
-            .bpp = (bitmap.bits_per_pixel) / 8,
-        };
-
-        @memcpy(memory[@sizeOf(Texture)..][0..size], bitmap.data);
-        try textures.put(name, texture);
-
-        log.info("Loaded texture: {s}", .{name});
+        if (std.mem.endsWith(u8, entry.name, ".BMP")) {
+            try loadBMP(allocator, fs, entry, folder);
+        } else if (std.mem.endsWith(u8, entry.name, ".TGA")) {
+            try loadTGA(allocator, fs, entry, folder);
+        } else {
+            log.warn("Unknown file type: {s}", .{entry.name});
+        }
     }
 }
 
@@ -118,4 +88,86 @@ pub fn deinit() void {
 
 pub fn get(name: []const u8) ?*const Texture {
     return textures.get(name);
+}
+
+fn loadBMP(allocator: std.mem.Allocator, fs: *FS, entry: FS.DirIterator.Entry, folder: []const u8) !void {
+    log.debug("loading texture: {s}", .{entry.name});
+
+    const path = try std.mem.join(allocator, "/", &[_][]const u8{ folder, entry.name });
+    defer allocator.free(path);
+
+    log.debug("path: {s}", .{path});
+    const file = try fs.open(path);
+    defer file.close();
+
+    log.debug("file opened", .{});
+    const data = try file.readAlloc(allocator);
+    defer allocator.free(data);
+
+    log.debug("data read", .{});
+    const bitmap = try Bitmap.initTmp(data);
+    const size = bitmap.data.len;
+
+    const true_size = @sizeOf(Texture) + size;
+
+    const memory = try allocator.alignedAlloc(u8, .of(Texture), true_size); // make sure it aligned to Texture
+    errdefer allocator.free(memory);
+
+    const dot_index = std.mem.indexOf(u8, entry.name, ".") orelse entry.name.len;
+    const name = try allocator.dupe(u8, entry.name[0..dot_index]);
+
+    const texture: *Texture = @ptrCast(@alignCast(memory.ptr));
+    texture.* = Texture{
+        .width = bitmap.width,
+        .height = bitmap.height,
+        .rowstride = bitmap.rowstride,
+        .bpp = (bitmap.bits_per_pixel) / 8,
+        .topdown = bitmap.topdown,
+    };
+
+    @memcpy(memory[@sizeOf(Texture)..][0..size], bitmap.data);
+    try textures.put(name, texture);
+
+    log.info("Loaded texture: {s}", .{name});
+}
+
+fn loadTGA(allocator: std.mem.Allocator, fs: *FS, entry: FS.DirIterator.Entry, folder: []const u8) !void {
+    log.debug("loading texture: {s}", .{entry.name});
+
+    const path = try std.mem.join(allocator, "/", &[_][]const u8{ folder, entry.name });
+    defer allocator.free(path);
+
+    log.debug("path: {s}", .{path});
+    const file = try fs.open(path);
+    defer file.close();
+
+    log.debug("file opened", .{});
+    const data = try file.readAlloc(allocator);
+    defer allocator.free(data);
+
+    log.debug("data read", .{});
+    const tga = try TGA.initTmp(data);
+    const size = tga.data.len;
+
+    const true_size = @sizeOf(Texture) + size;
+
+    const memory = try allocator.alignedAlloc(u8, .of(Texture), true_size); // make sure it aligned to Texture
+    errdefer allocator.free(memory);
+
+    const dot_index = std.mem.indexOf(u8, entry.name, ".") orelse entry.name.len;
+    const name = try allocator.dupe(u8, entry.name[0..dot_index]);
+
+    const texture: *Texture = @ptrCast(@alignCast(memory.ptr));
+    texture.* = Texture{
+        .width = tga.width,
+        .height = tga.height,
+        .rowstride = tga.rowstride,
+        .bpp = (tga.bits_per_pixel) / 8,
+        .topdown = tga.topdown,
+    };
+
+    @memcpy(memory[@sizeOf(Texture)..][0..size], tga.data);
+    try textures.put(name, texture);
+
+    log.info("Loaded texture: {s}", .{name});
 }

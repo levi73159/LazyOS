@@ -68,6 +68,14 @@ pub fn getPixelMut(self: *Self, x: u32, y: u32) *u32 {
     return &self.getBuffer()[y * self.stride + x];
 }
 
+pub fn getPixelColor(self: Self, x: u32, y: u32) Color {
+    const pixel = self.getPixel(x, y);
+    const r = (pixel >> 16) & 0xFF;
+    const g = (pixel >> 8) & 0xFF;
+    const b = pixel & 0xFF;
+    return Color.init(@truncate(r), @truncate(g), @truncate(b));
+}
+
 pub fn setPixel(self: *Self, x: u32, y: u32, color: Color) void {
     const index = y * self.stride + x;
     if (x >= self.width or y >= self.height) {
@@ -190,15 +198,32 @@ pub fn swapBuffers(self: *Self) void {
 pub fn drawTexture(self: *Self, x: u32, y: u32, texture: *const Texture) void {
     const width = texture.width;
     const height = texture.height;
-
     var row: u32 = 0;
     while (row < height) : (row += 1) {
         var col: u32 = 0;
         while (col < width) : (col += 1) {
             const pixel = texture.getPixel(col, row);
 
-            const color = Color.init(pixel.r, pixel.b, pixel.g);
-            self.setPixel(x + col, y + row, color);
+            // fully transparent — skip
+            if (pixel.a == 0) continue;
+
+            const dst_x = x + col;
+            const dst_y = y + row;
+
+            // fully opaque — fast path, no blending needed
+            if (pixel.a == 0xFF) {
+                self.setPixel(dst_x, dst_y, Color.init(pixel.r, pixel.g, pixel.b)); // ← r,g,b not r,b,g
+                continue;
+            }
+
+            // partial alpha — blend with whatever is already on screen
+            const src_a = @as(u32, pixel.a);
+            const inv_a = 255 - src_a;
+            const dst = self.getPixelColor(dst_x, dst_y); // read current framebuffer pixel
+            const r = @as(u8, @intCast((src_a * pixel.r + inv_a * dst.r) / 255));
+            const g = @as(u8, @intCast((src_a * pixel.g + inv_a * dst.g) / 255));
+            const b = @as(u8, @intCast((src_a * pixel.b + inv_a * dst.b) / 255));
+            self.setPixel(dst_x, dst_y, Color.init(r, g, b));
         }
     }
 }

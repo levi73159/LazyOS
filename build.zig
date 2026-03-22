@@ -40,6 +40,7 @@ pub fn build(b: *std.Build) void {
         .name = "kernel",
         .root_module = kernel_mod,
     });
+
     kernel.use_llvm = true;
     kernel.use_lld = true;
     kernel.setLinkerScript(b.path("linker.ld"));
@@ -98,42 +99,37 @@ pub fn makeImage(b: *std.Build, kernel: *std.Build.Step.Compile) Image {
     const img_root = "root";
     const out = b.getInstallPath(.bin, image_name);
 
+    // Convert all PNGs to TGA into a staging directory, no originals leak in
+    const convert = b.addSystemCommand(&.{
+        "sh", "-c",
+        "mkdir -p zig-out/ui && for f in assets/*.png; do " ++
+            "magick \"$f\" \"zig-out/ui/$(basename ${f%.png}).tga\"; done",
+    });
+
     const files = b.addWriteFiles();
+    files.step.dependOn(&convert.step); // staging dir must exist before copy
     _ = files.addCopyFile(kernel.getEmittedBin(), "boot/kernel");
     _ = files.addCopyFile(b.path("src/bootloader/limine.conf"), "boot/limine.conf");
     _ = files.addCopyFile(b.path("limine/BOOTX64.EFI"), "EFI/BOOT/BOOTX64.EFI");
     _ = files.addCopyFile(b.path("limine/limine-uefi-cd.bin"), "EFI/BOOT/limine-uefi-cd.bin");
-    // BIOS
     _ = files.addCopyFile(b.path("limine/limine-bios-cd.bin"), "boot/limine-bios-cd.bin");
     _ = files.addCopyFile(b.path("limine/limine-bios.sys"), "boot/limine-bios.sys");
     _ = files.addCopyDirectory(b.path(img_root), "", .{});
+    _ = files.addCopyDirectory(b.path("zig-out/ui"), "ui", .{}); // TGAs go in /ui
 
     const make_iso = b.addSystemCommand(&.{
-        "xorriso",
-        "-as",
-        "mkisofs",
-        "-o",
-        out,
-        "-b",
-        "boot/limine-bios-cd.bin",
-        "-no-emul-boot",
-        "-boot-load-size",
-        "4",
-        "-boot-info-table",
-        "--efi-boot",
-        "EFI/BOOT/limine-uefi-cd.bin",
-        "-efi-boot-part",
-        "--efi-boot-image",
+        "xorriso",                     "-as",              "mkisofs",
+        "-o",                          out,                "-b",
+        "boot/limine-bios-cd.bin",     "-no-emul-boot",    "-boot-load-size",
+        "4",                           "-boot-info-table", "--efi-boot",
+        "EFI/BOOT/limine-uefi-cd.bin", "-efi-boot-part",   "--efi-boot-image",
         "--protective-msdos-label",
     });
-
     make_iso.addDirectoryArg(files.getDirectory());
-
     make_iso.step.dependOn(&files.step);
 
     const step = b.step("make-image", "Build the ISO image");
     b.getInstallStep().dependOn(step);
-
     step.dependOn(&make_iso.step);
     return Image{ .path = out, .step = step };
 }
