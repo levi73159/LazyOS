@@ -467,10 +467,12 @@ fn drawLoop(screen: *Screen) void {
     mouse.resetState();
     mouse.addClamp(screen.width, screen.height);
 
-    const texture = ui.get("POWER");
-    if (texture == null) {
+    const power_texture = ui.get("POWER");
+    if (power_texture == null) {
         std.log.scoped(.host).err("Power texture not found", .{});
     }
+
+    const cursor = ui.get("CURSOR") orelse @panic("Cursor texture not found");
 
     var mouse_color = Color.black();
     while (true) {
@@ -478,7 +480,7 @@ fn drawLoop(screen: *Screen) void {
         const mouse_y = mouse.y();
         screen.clear(Color.white());
 
-        if (texture) |tex| {
+        if (power_texture) |tex| {
             const x = screen.width / 2;
             const y = screen.height / 2;
             screen.drawTexture(x, y, tex);
@@ -499,7 +501,7 @@ fn drawLoop(screen: *Screen) void {
             }
         }
 
-        screen.drawRect(@min(mouse_x, screen.width), @min(mouse_y, screen.height), 10, 10, mouse_color);
+        screen.drawTexture(mouse_x, mouse_y, cursor);
         screen.swapBuffers();
         mouse.updateMouse();
 
