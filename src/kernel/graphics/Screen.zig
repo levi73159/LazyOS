@@ -202,6 +202,9 @@ pub fn drawTexture(self: *Self, x: u32, y: u32, texture: *const Texture) void {
     while (row < height) : (row += 1) {
         var col: u32 = 0;
         while (col < width) : (col += 1) {
+            if (x + col >= self.width or y + row >= self.height) {
+                continue;
+            }
             const pixel = texture.getPixel(col, row);
 
             // fully transparent — skip

@@ -13,11 +13,11 @@ const acpi = arch.acpi;
 const scheduler = @import("scheduler.zig");
 const serial = @import("arch/serial.zig");
 const pmem = @import("memory/pmem.zig");
-const Iso9660 = @import("fs/Iso9660.zig");
 const Disk = @import("Disk.zig");
 const FileSystem = @import("fs/FileSystem.zig");
 const ui = @import("graphics/ui.zig");
 const Shell = @import("Shell.zig");
+const renderer = @import("graphics/renderer.zig");
 
 const acpi_oslevel = @import("acpi/osl.zig"); // NOTE: MUST BE IMPORTED FIRST FOR ACPI TO WORK
 comptime {
@@ -77,6 +77,15 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     ui.init(FileSystem.getGlobal(), "ui", heap.allocator()) catch |err| {
         log.err("Failed to init UI Components: {s}", .{@errorName(err)});
         io.hlt();
+    };
+
+    renderer.init(heap.allocator());
+    renderer.addElement(.initNamed(.{ .relative = .{
+        .x = -10,
+        .y = 10,
+        .anchor = .top_right,
+    } }, "POWER")) catch |err| {
+        log.err("Failed to add power button: {s}", .{@errorName(err)});
     };
 
     console.init(screen);
