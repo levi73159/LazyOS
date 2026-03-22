@@ -9,7 +9,6 @@ const mouse = @import("mouse.zig");
 const pit = @import("pit.zig");
 const BootInfo = @import("arch/bootinfo.zig").BootInfo;
 const paging = @import("arch/paging.zig");
-const acpi = arch.acpi;
 const scheduler = @import("scheduler.zig");
 const serial = @import("arch/serial.zig");
 const pmem = @import("memory/pmem.zig");
@@ -18,18 +17,13 @@ const FileSystem = @import("fs/FileSystem.zig");
 const ui = @import("graphics/ui.zig");
 const Shell = @import("Shell.zig");
 const renderer = @import("graphics/renderer.zig");
+const heap = @import("memory/heap.zig");
+const Screen = @import("graphics/Screen.zig");
 
 const acpi_oslevel = @import("acpi/osl.zig"); // NOTE: MUST BE IMPORTED FIRST FOR ACPI TO WORK
 comptime {
     _ = acpi_oslevel; // force import
 }
-
-const heap = @import("memory/heap.zig");
-
-const Screen = @import("graphics/Screen.zig");
-const Color = @import("graphics/Color.zig");
-
-const regs = arch.registers;
 
 const log = std.log.scoped(.kernel);
 
@@ -114,59 +108,12 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     io.hlt();
 }
 
-fn blinkTask() callconv(.c) void {
-    const screen = Screen.get();
-    var tick: u32 = 0;
-    while (true) {
-        const c = if (tick % 2 == 0) Color.red() else Color.blue();
-        screen.drawRect(0, 0, 20, 20, c);
-        screen.swapBuffers();
-        // busy wait ~100ms
-        var i: u32 = 0;
-        while (i < 1_000_000) : (i += 1) {
-            asm volatile ("pause");
-        }
-        tick += 1;
-    }
-}
-
-fn returnTask() callconv(.c) void {
-    const screen = Screen.get();
-    var tick: u32 = 0;
-    while (true) {
-        if (tick == 10) return;
-        const c = if (tick % 2 == 0) Color.red() else Color.blue();
-        screen.drawRect(100, 100, 20, 20, c);
-        screen.swapBuffers();
-        // busy wait ~100ms
-        var i: u32 = 0;
-        while (i < 1_000_000) : (i += 1) {
-            asm volatile ("pause");
-        }
-        tick += 1;
-    }
-}
-
-inline fn color(r: u32, g: u32, b: u32) u32 {
-    return (r << 16) | (g << 8) | b;
-}
-
-fn getFreeRegion(map: []arch.bootinfo.MemoryMapEntry) ?arch.bootinfo.MemoryMapEntry {
-    for (map) |entry| {
-        if (entry.type == .available and entry.addr != 0) {
-            return entry;
-        }
-    }
-
-    return null;
-}
-
 fn mainWrapper() callconv(.c) noreturn {
     const screen = Screen.get();
     main(screen) catch |err| {
         std.log.scoped(.host).err("Main failed: {s}", .{@errorName(err)});
     };
-    acpi.shutdown();
+    arch.acpi.shutdown();
     while (true) {
         asm volatile ("hlt");
     }
