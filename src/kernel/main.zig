@@ -82,6 +82,8 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
         log.err("Failed to add power button: {s}", .{@errorName(err)});
     };
 
+    renderer.subscribeToUpdates(&update);
+
     console.init(screen);
     console.clear();
     console.echoToHost(true); // echo all prints to the host
@@ -133,4 +135,17 @@ fn main(_: *Screen) !void {
     shell.inputLoop() catch |err| {
         std.log.scoped(.host).err("Shell failed: {s}", .{@errorName(err)});
     };
+}
+
+fn update(screen: *Screen, state: *renderer.State) anyerror!void {
+    if (state.elements.items.len > 0) {
+        const power_button = state.elements.items[0];
+
+        const mouse_state = power_button.getMouseState(screen);
+
+        if (mouse_state.left_clicked) {
+            arch.acpi.shutdown();
+            return error.ShutdownFailed;
+        }
+    }
 }

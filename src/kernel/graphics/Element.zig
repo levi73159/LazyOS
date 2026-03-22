@@ -1,23 +1,16 @@
 const std = @import("std");
 const ui = @import("ui.zig");
 const Screen = @import("Screen.zig");
+const Position = @import("../Position.zig");
 
-pub const Position = struct {
+pub const Rect = struct {
     x: u32,
     y: u32,
+    width: u32,
+    height: u32,
 
-    pub fn add(self: Position, other: Position) Position {
-        return Position{
-            .x = self.x + other.x,
-            .y = self.y + other.y,
-        };
-    }
-
-    pub fn sub(self: Position, other: Position) Position {
-        return Position{
-            .x = self.x - other.x,
-            .y = self.y - other.y,
-        };
+    pub fn isInRect(self: Rect, pos: Position) bool {
+        return pos.x >= self.x and pos.x < self.x + self.width and pos.y >= self.y and pos.y < self.y + self.height;
     }
 };
 
@@ -43,6 +36,7 @@ pub const ElementPosition = union(enum) {
 
 pos: ElementPosition,
 tex: *const ui.Texture,
+visible: bool = true,
 
 const Self = @This();
 
@@ -102,5 +96,49 @@ pub fn getAnchorPosition(self: Self, screen: *Screen, anchor: Anchor) Position {
             .x = screen.width / 2 - self.tex.width / 2,
             .y = screen.height / 2 - self.tex.height / 2,
         },
+    };
+}
+
+pub fn asRect(self: Self, screen: *Screen) Rect {
+    const abs = self.absolutePosition(screen);
+    return Rect{
+        .x = abs.x,
+        .y = abs.y,
+        .width = self.tex.width,
+        .height = self.tex.height,
+    };
+}
+
+pub const MouseState = struct {
+    left_clicked: bool = false,
+    right_clicked: bool = false,
+    middle_clicked: bool = false,
+    mouse_down: bool = false,
+    mouse_hover: bool = false,
+    rel_x: i32 = 0,
+    rel_y: i32 = 0,
+};
+
+/// Gets mouse state of the element
+/// get whether the mouse is hovering over the element,
+/// get whether the mouse is clicking on the element
+/// get the relative position of the mouse
+pub fn getMouseState(self: Self, screen: *Screen) MouseState {
+    const mouse = @import("../mouse.zig");
+
+    const pos = mouse.getPosition();
+
+    const rect = self.asRect(screen);
+
+    const is_hover = rect.isInRect(pos);
+
+    return MouseState{
+        .mouse_hover = is_hover,
+        .left_clicked = mouse.isButtonJustPressed(.left) and is_hover,
+        .right_clicked = mouse.isButtonJustPressed(.right) and is_hover,
+        .middle_clicked = mouse.isButtonJustPressed(.middle) and is_hover,
+        .mouse_down = mouse.isButtonPressed(.left) or mouse.isButtonPressed(.right) or mouse.isButtonPressed(.middle),
+        .rel_x = @intCast(@as(i64, @intCast(pos.x)) - rect.x),
+        .rel_y = @intCast(@as(i64, @intCast(pos.y)) - rect.y),
     };
 }

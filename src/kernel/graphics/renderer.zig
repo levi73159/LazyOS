@@ -83,7 +83,7 @@ pub fn drawLoop(screen: *Screen) void {
     }
 }
 
-pub fn subscribeToUpdates(listener: *const fn (*State) anyerror!void) void {
+pub fn subscribeToUpdates(listener: *const fn (*Screen, *State) anyerror!void) void {
     state.update_listerner = listener;
 }
 

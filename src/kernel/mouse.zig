@@ -1,13 +1,14 @@
 const std = @import("std");
 const arch = @import("arch.zig");
+const Position = @import("Position.zig");
 const irq = arch.irq;
 const io = arch.io;
 
 const log = std.log.scoped(._mouse);
 
 pub const MouseState = struct {
-    pos: MousePos,
-    clamp: MousePos,
+    pos: Position,
+    clamp: Position,
     buttons: u8,
     old_buttons: u8,
 
@@ -18,11 +19,6 @@ pub const MouseState = struct {
     pub fn getOldButton(self: MouseState, button: MouseButton) bool {
         return self.old_buttons & @intFromEnum(button) != 0;
     }
-};
-
-pub const MousePos = struct {
-    x: u32,
-    y: u32,
 };
 
 pub const MouseButton = enum(u8) {
@@ -238,7 +234,7 @@ pub fn addClamp(_x: u32, _y: u32) void {
     state.clamp = .{ .x = _x, .y = _y };
 }
 
-pub fn getPosition() MousePos {
+pub fn getPosition() Position {
     return state.pos;
 }
 
