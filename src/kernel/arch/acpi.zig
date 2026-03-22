@@ -33,6 +33,8 @@ pub fn shutdown() void {
     check(c.uacpi_enter_sleep_state(c.UACPI_SLEEP_STATE_S5)) catch {
         log.err("ACPI shutdown failed: enter_sleep_state", .{});
     };
+
+    log.warn("ACPI shutdown failed", .{});
 }
 
 pub fn reboot() void {

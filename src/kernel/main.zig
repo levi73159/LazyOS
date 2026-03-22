@@ -464,9 +464,7 @@ fn drawLoop(screen: *Screen) void {
 
     defer kb.flush();
 
-    var x: u32 = 0;
-    var y: u32 = 0;
-
+    mouse.resetState();
     mouse.addClamp(screen.width, screen.height);
 
     const texture = ui.get("POWER");
@@ -474,20 +472,37 @@ fn drawLoop(screen: *Screen) void {
         std.log.scoped(.host).err("Power texture not found", .{});
     }
 
+    var mouse_color = Color.black();
     while (true) {
+        const mouse_x = mouse.x();
+        const mouse_y = mouse.y();
         screen.clear(Color.white());
-        screen.drawRect(@min(mouse.x(), screen.width), @min(mouse.y(), screen.height), 10, 10, Color.black());
 
         if (texture) |tex| {
-            screen.drawTexture(screen.width / 2, 0, tex);
+            const x = screen.width / 2;
+            const y = screen.height / 2;
+            screen.drawTexture(x, y, tex);
+
+            const tex_left = x;
+            const tex_right = x + tex.width;
+
+            const tex_top = y;
+            const tex_bottom = y + tex.height;
+
+            if (mouse_x >= tex_left and mouse_x <= tex_right and mouse_y >= tex_top and mouse_y <= tex_bottom) {
+                mouse_color = Color.green();
+                if (mouse.isButtonJustPressed(.left)) {
+                    acpi.shutdown();
+                }
+            } else {
+                mouse_color = Color.black();
+            }
         }
 
+        screen.drawRect(@min(mouse_x, screen.width), @min(mouse_y, screen.height), 10, 10, mouse_color);
         screen.swapBuffers();
+        mouse.updateMouse();
 
-        if (kb.getKeyDown(.w)) y -|= 5;
-        if (kb.getKeyDown(.s)) y += 5;
-        if (kb.getKeyDown(.a)) x -|= 5;
-        if (kb.getKeyDown(.d)) x += 5;
         if (kb.getKeyDown(.q))
             break;
     }

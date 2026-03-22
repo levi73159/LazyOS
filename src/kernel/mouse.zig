@@ -5,15 +5,30 @@ const io = arch.io;
 
 const log = std.log.scoped(._mouse);
 
+pub const MouseState = struct {
+    pos: MousePos,
+    clamp: MousePos,
+    buttons: u8,
+    old_buttons: u8,
+
+    pub fn getButton(self: MouseState, button: MouseButton) bool {
+        return self.buttons & @intFromEnum(button) != 0;
+    }
+
+    pub fn getOldButton(self: MouseState, button: MouseButton) bool {
+        return self.old_buttons & @intFromEnum(button) != 0;
+    }
+};
+
 pub const MousePos = struct {
     x: u32,
     y: u32,
 };
 
-pub const MouseButton = enum {
-    left,
-    right,
-    middle,
+pub const MouseButton = enum(u8) {
+    left = 0b001,
+    right = 0b010,
+    middle = 0b100,
 };
 
 const DATA_PORT = 0x60;
@@ -90,8 +105,12 @@ pub fn flushBuffer() void {
     }
 }
 
-var mouse_pos: MousePos = .{ .x = 0, .y = 0 };
-var mouse_clamp: MousePos = .{ .x = std.math.maxInt(u32), .y = std.math.maxInt(u32) };
+var state: MouseState = .{
+    .pos = .{ .x = 0, .y = 0 },
+    .clamp = .{ .x = std.math.maxInt(u32), .y = std.math.maxInt(u32) },
+    .buttons = 0,
+    .old_buttons = 0,
+};
 var packet: [3]u8 = undefined;
 var packet_idx: u32 = 0;
 
@@ -204,25 +223,58 @@ fn processPacket() void {
     const xi8: i8 = @bitCast(xu8);
     const yi8: i8 = @bitCast(yu8);
 
-    const xi32: i32 = @intCast(mouse_pos.x);
-    const yi32: i32 = @intCast(mouse_pos.y);
+    const xi32: i32 = @intCast(state.pos.x);
+    const yi32: i32 = @intCast(state.pos.y);
 
-    mouse_pos.x = @intCast(std.math.clamp(xi32 + xi8, 0, mouse_clamp.x));
-    mouse_pos.y = @intCast(std.math.clamp(yi32 - yi8, 0, mouse_clamp.y));
+    state.pos.x = @intCast(std.math.clamp(xi32 + xi8, 0, state.clamp.x));
+    state.pos.y = @intCast(std.math.clamp(yi32 - yi8, 0, state.clamp.y));
+
+    const mask = 0b111;
+    state.old_buttons = state.buttons;
+    state.buttons = (mouse_status & mask);
 }
 
 pub fn addClamp(_x: u32, _y: u32) void {
-    mouse_clamp = .{ .x = _x, .y = _y };
+    state.clamp = .{ .x = _x, .y = _y };
 }
 
 pub fn getPosition() MousePos {
-    return mouse_pos;
+    return state.pos;
 }
 
 pub fn x() u32 {
-    return mouse_pos.x;
+    return state.pos.x;
 }
 
 pub fn y() u32 {
-    return mouse_pos.y;
+    return state.pos.y;
+}
+
+pub fn isButtonPressed(btn: MouseButton) bool {
+    return state.getButton(btn);
+}
+
+pub fn isButtonReleased(btn: MouseButton) bool {
+    return !state.getButton(btn);
+}
+
+pub fn isButtonJustPressed(btn: MouseButton) bool {
+    return state.getButton(btn) and !state.getOldButton(btn);
+}
+
+pub fn isButtonJustReleased(btn: MouseButton) bool {
+    return !state.getButton(btn) and state.getOldButton(btn);
+}
+
+pub fn updateMouse() void {
+    state.old_buttons = state.buttons;
+}
+
+pub fn mouseResetState() void {
+    state = .{
+        .pos = .{ .x = 0, .y = 0 },
+        .clamp = .{ .x = std.math.maxInt(u32), .y = std.math.maxInt(u32) },
+        .buttons = 0,
+        .old_buttons = 0,
+    };
 }
