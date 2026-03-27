@@ -298,7 +298,10 @@ pub fn readSectors(port: *const Port, lba: u48, buf: []Sector) DiskError!void {
     const headers: [*]CommandHeader = @ptrFromInt(cmd_list_virt);
     const header = &headers[slot];
 
-    const prdt_count: u16 = @intCast((buf.len - 1) / 16 + 1); // 16 sectors per PRDT
+    const MAX_MEM_PER_ENTRY = 4 * 1024 * 1024; // 4MB per PRDT entry
+
+    const total_bytes = buf.len * SECTOR_SIZE;
+    const prdt_count: u16 = @intCast((total_bytes + MAX_MEM_PER_ENTRY - 1) / MAX_MEM_PER_ENTRY);
     header.fis_len = @sizeOf(fis.RegH2D) / 4; // in DWRODS
     header.write = false;
     header.prdtl = prdt_count;
@@ -312,8 +315,6 @@ pub fn readSectors(port: *const Port, lba: u48, buf: []Sector) DiskError!void {
         @as([*]u8, @ptrCast(table))[0 .. @sizeOf(CommandTable) + prdt_count * @sizeOf(PrdtEntry)],
         0,
     );
-
-    const MAX_MEM_PER_ENTRY = 4 * 1024 * 1024; // 4MB per PRDT entry
 
     const prdt = table.prdtSlice(prdt_count);
     var remaining_bytes = buf.len * SECTOR_SIZE;
@@ -469,4 +470,8 @@ fn stopAllPorts(abar: *volatile hba.Mem) void {
 
         stopCmd(port);
     }
+}
+
+pub fn sectorSize(port: *const Port) u32 {
+    return if (port.type == .satapi) 2048 else 512;
 }

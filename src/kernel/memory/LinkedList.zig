@@ -5,9 +5,6 @@ const is_debug = @import("builtin").mode == .Debug;
 
 const Self = @This();
 
-// BUG: Int overflow
-// TODO: change offset pointer to u16 alligned(1) so we won't have to worry about alignment
-
 const log = std.log.scoped(._heap);
 
 const PAGE_SIZE = 4096;
@@ -299,8 +296,8 @@ fn findFreeBlock(self: *Self, size: usize, alignment: mem.Alignment) ?*Header {
 }
 
 pub fn allocate(self: *Self, size: usize, _alignment: mem.Alignment) ![*]u8 {
-    if (_alignment.toByteUnits() % 2 != 0) @panic("Alignment must be a multiple of 2");
     const alignment = mem.Alignment.max(_alignment, .@"2"); // at least 2 byte alignment
+    if (alignment.toByteUnits() % 2 != 0) @panic("Alignment must be a multiple of 2");
     const block = self.findFreeBlock(size, alignment) orelse blk: {
         const total_size = size + alignment.toByteUnits() + HEADER_SIZE + OFFSET_SIZE;
         const pages_needed = (total_size + PAGE_SIZE - 1) / PAGE_SIZE;
