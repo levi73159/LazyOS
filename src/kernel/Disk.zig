@@ -99,29 +99,38 @@ pub fn initLegacy(disk: u8) DiskError!Self {
 }
 
 // much faster if BUFFER_IS_ALIGNED
-pub fn read(self: Self, lba: u32, buf: []u8) DiskError!void {
-    if (buf.len == 0) return;
+pub fn read(self: Self, lba: u32, buf: []u8) DiskError!usize {
+    if (buf.len == 0) return 0;
 
     switch (self.drive_type) {
         .ata => {
             if (buf.len % ata.SECTOR_SIZE != 0) return self.unalignedRead(lba, buf);
             const sectors = std.mem.bytesAsSlice(ata.Sector, buf);
             try ata.readSectors(self.base.legacy_base, lba, sectors);
+            return buf.len;
         },
         .atapi => {
             if (buf.len % atapi.SECTOR_SIZE != 0) return self.unalignedRead(lba, buf);
             const sectors = std.mem.bytesAsSlice(atapi.Sector, buf);
             try atapi.readSectors(self.base.legacy_base, lba, sectors);
+            return buf.len;
         },
         .ahci => {
             if (buf.len % ahci.SECTOR_SIZE != 0) return self.unalignedRead(lba, buf);
             const sectors = std.mem.bytesAsSlice(ahci.Sector, buf);
-            try ahci.readSectors(self.base.port, lba, sectors);
+            return ahci.readSectors(self.base.port, lba, sectors);
         },
     }
 }
 
-fn unalignedRead(self: Self, lba: u32, buf: []u8) DiskError!void {
+pub fn readAll(self: Self, lba: u32, buf: []u8) DiskError!void {
+    var bytes_read: usize = 0;
+    while (bytes_read < buf.len) {
+        bytes_read += try self.read(lba, buf[bytes_read..]);
+    }
+}
+
+fn unalignedRead(self: Self, lba: u32, buf: []u8) DiskError!usize {
     switch (self.drive_type) {
         .ata => {
             var tmp_buf: [ata.SECTOR_SIZE]u8 = undefined;
@@ -132,13 +141,14 @@ fn unalignedRead(self: Self, lba: u32, buf: []u8) DiskError!void {
             return self.__inner_unalignedRead(lba, &tmp_buf, buf);
         },
         .ahci => {
-            var tmp_buf: [ahci.SECTOR_SIZE]u8 = undefined;
-            return self.__inner_unalignedRead(lba, &tmp_buf, buf);
+            var tmp_buf_max: [ahci.MAX_SECTOR_SIZE]u8 = undefined;
+            const tmp_buf = tmp_buf_max[0..ahci.sectorSize(self.base.port)];
+            return self.__inner_unalignedRead(lba, tmp_buf, buf);
         },
     }
 }
 
-fn __inner_unalignedRead(self: Self, lba: u32, tmp_buf: []u8, buf: []u8) DiskError!void {
+fn __inner_unalignedRead(self: Self, lba: u32, tmp_buf: []u8, buf: []u8) DiskError!usize {
     const sector_count = (buf.len + tmp_buf.len - 1) / tmp_buf.len; // round up to nearest sector
     for (0..sector_count) |i| {
         const sector_offset = i * tmp_buf.len;
@@ -155,12 +165,14 @@ fn __inner_unalignedRead(self: Self, lba: u32, tmp_buf: []u8, buf: []u8) DiskErr
             },
             .ahci => {
                 const sectors = std.mem.bytesAsSlice(ahci.Sector, tmp_buf);
-                try ahci.readSectors(self.base.port, actual_lba, sectors);
+                _ = try ahci.readSectors(self.base.port, actual_lba, sectors);
             },
         }
 
         @memcpy(tmp_buf[0..], buf[sector_offset..][0..tmp_buf.len]);
     }
+
+    return buf.len;
 }
 
 pub fn write(self: Self, lba: u32, data: []const u8) DiskError!void {

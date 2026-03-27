@@ -20,14 +20,14 @@ pub fn build(b: *std.Build) void {
         .ofmt = .elf,
     });
 
-    const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .Debug });
     const debug_int = b.option(bool, "interrupt", "turn on interrupt logging for qemu using the -d int option") orelse false;
     const display = b.option([]const u8, "display", "choose display backend") orelse "sdl";
+    const optimize_mode = b.standardOptimizeOption(.{});
 
     const kernel_mod = b.createModule(.{
         .root_source_file = b.path("src/kernel/boot.zig"),
         .target = kernel_target,
-        .optimize = optimize,
+        .optimize = optimize_mode,
         .code_model = .kernel,
         .red_zone = false,
         .sanitize_thread = false,

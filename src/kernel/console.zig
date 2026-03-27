@@ -220,7 +220,6 @@ pub fn printB(comptime fmt: []const u8, args: anytype) void {
     if (serial) |s| {
         s.print(fmt, args) catch {};
     }
-    dbgPrint(fmt, args);
 }
 
 pub fn dbgPrint(comptime fmt: []const u8, args: anytype) void {

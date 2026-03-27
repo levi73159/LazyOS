@@ -139,6 +139,8 @@ fn main(_: *Screen) !void {
     } else {
         console.print("Welcome to LazyOS 32-bit\n", .{});
     }
+
+    console.print("Optimize mode: {s}\n", .{@tagName(builtin.mode)});
     console.print("Initializing shell...\n", .{});
 
     var shell = Shell.init(heap.allocator(), FileSystem.getGlobal());

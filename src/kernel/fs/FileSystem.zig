@@ -163,13 +163,13 @@ pub fn it(self: *Self, path: []const u8) Error!DirIterator {
 // DETECTION FUNCTIONS
 fn detectIso9660(disk: *Disk) Disk.DiskError!bool {
     var buf: [2048]u8 = undefined;
-    try disk.read(16, &buf); // sector 16
+    try disk.readAll(16, &buf); // sector 16
     return std.mem.eql(u8, buf[1..6], "CD001");
 }
 
 fn detectFat32(disk: *Disk) !bool {
     var buf: [512]u8 = undefined;
-    try disk.read(0, &buf);
+    try disk.readAll(0, &buf);
     // check boot sector signature
     if (buf[510] != 0x55 or buf[511] != 0xAA) return false;
     // check FAT type string at offset 82

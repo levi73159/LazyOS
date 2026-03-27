@@ -244,7 +244,7 @@ pvd: PrimaryVolumeDescriptor,
 
 pub fn init(disk: *Disk) !Self {
     var buf: [2048]u8 align(@alignOf(PrimaryVolumeDescriptor)) = undefined;
-    try disk.read(16, &buf);
+    try disk.readAll(16, &buf);
 
     const generic: *const GenericVolumeDescriptor = @ptrCast(&buf);
     if (!generic.verify()) return error.NotISO9660;
@@ -265,7 +265,7 @@ pub fn readSector(self: *const Self, lba: u32, buf: *[2048]u8) !void {
         log.err("LBA {d} out of range (max {d})", .{ lba, self.pvd.volume_space_size.value() });
         return error.LBAOutOfRange;
     }
-    try self.disk.read(lba, buf);
+    try self.disk.readAll(lba, buf);
 }
 
 pub fn rootDir(self: *const Self) *const DirEntry {
@@ -419,7 +419,7 @@ fn vfsFindEntry(disk: *Disk, dir: *const DirEntry, name: []const u8) !?DirEntry 
     log.debug("find {s} in {x} - {x}", .{ name, lba, lba + sectors });
 
     while (s < sectors) : (s += 1) {
-        try disk.read(lba + s, &buf);
+        try disk.readAll(lba + s, &buf);
         var offset: usize = 0;
         while (offset < buf.len) {
             const entry: *const DirEntry = @ptrCast(@alignCast(&buf[offset]));
@@ -542,7 +542,7 @@ const VfsDirIterCtx = struct {
         ctx.bytes_read = 0;
         ctx.sector = 0;
         ctx.offset = 0;
-        disk.read(ctx.lba, &ctx.buf) catch {};
+        disk.readAll(ctx.lba, &ctx.buf) catch {};
         return ctx;
     }
 
@@ -557,7 +557,7 @@ const VfsDirIterCtx = struct {
                 ctx.sector += 1;
                 if (ctx.sector >= ctx.sectors) return null;
                 ctx.offset = 0;
-                try ctx.disk.read(ctx.lba + ctx.sector, &ctx.buf);
+                try ctx.disk.readAll(ctx.lba + ctx.sector, &ctx.buf);
             }
 
             const entry: *const DirEntry = @ptrCast(@alignCast(&ctx.buf[ctx.offset]));
@@ -583,7 +583,7 @@ const VfsDirIterCtx = struct {
         ctx.bytes_read = 0;
         ctx.sector = 0;
         ctx.offset = 0;
-        ctx.disk.read(ctx.lba, &ctx.buf) catch {};
+        ctx.disk.readAll(ctx.lba, &ctx.buf) catch {};
     }
 };
 

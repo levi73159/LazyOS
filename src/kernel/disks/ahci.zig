@@ -48,7 +48,7 @@ const SATA_SIG_PM = 0x96690101; // Port multiplier
 
 const ATA_DEV_BUSY = 0x80;
 const ATA_DEV_DRQ = 0x08;
-const MAX_MEMORY_READABLE = 16 * 1024 * 1024; // we can read up to 16MB
+const MAX_MEMORY_READABLE = 16 * 1024 * 1024; // we can read up to 16MB, 4 MB per PRDT entry
 
 const BUS_MASTER = 1 << 2;
 const MEMORY_SPACE = 1 << 1;
@@ -283,14 +283,17 @@ fn portRebase(port: *volatile hba.Port, nums_of_slots: u16, allocator: mem.Alloc
 }
 
 pub const SECTOR_SIZE = 512;
+pub const MAX_SECTOR_SIZE = 2048;
 pub const Sector = [SECTOR_SIZE]u8;
 
-pub fn readSectors(port: *const Port, lba: u48, buf: []Sector) DiskError!void {
-    if (buf.len == 0) return;
+pub fn readSectors(port: *const Port, lba: u48, buf: []Sector) DiskError!usize {
+    if (buf.len == 0) return 0;
     port.hba.int_status = @bitCast(@as(i32, -1)); // clear pending interrupts
 
-    const mem_reading = buf.len * SECTOR_SIZE;
-    if (mem_reading > MAX_MEMORY_READABLE) @panic("TODO: add chunked up memory reading"); // TODO
+    const total_bytes = blk: {
+        const mem_reading = buf.len * SECTOR_SIZE;
+        break :blk @min(mem_reading, MAX_MEMORY_READABLE);
+    };
 
     const slot = findCmdSlot(port.hba, port.num_of_slots) orelse return error.NoFreeCommandList;
 
@@ -300,7 +303,6 @@ pub fn readSectors(port: *const Port, lba: u48, buf: []Sector) DiskError!void {
 
     const MAX_MEM_PER_ENTRY = 4 * 1024 * 1024; // 4MB per PRDT entry
 
-    const total_bytes = buf.len * SECTOR_SIZE;
     const prdt_count: u16 = @intCast((total_bytes + MAX_MEM_PER_ENTRY - 1) / MAX_MEM_PER_ENTRY);
     header.fis_len = @sizeOf(fis.RegH2D) / 4; // in DWRODS
     header.write = false;
@@ -343,6 +345,8 @@ pub fn readSectors(port: *const Port, lba: u48, buf: []Sector) DiskError!void {
     }
 
     try issueCommand(port.hba, slot);
+
+    return total_bytes;
 }
 
 fn sendCommandATA(table: *CommandTable, lba: u48, buf: []Sector) void {
