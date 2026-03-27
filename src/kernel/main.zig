@@ -47,8 +47,15 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
 
     pit.init(100);
     hal.init();
+    kb.init();
+    mouse.init();
+    scheduler.init();
+
+    @import("pci.zig").emunerate();
 
     const framebuffer = mb.getFramebuffer(u32);
+
+    const allocator = heap.allocator();
 
     const screen = Screen.init(framebuffer, mb.framebuffer);
     screen.use_double_buffer = true;
@@ -56,24 +63,38 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
         log.err("Failed to create double buffer: {s}", .{@errorName(err)});
     };
 
-    var disk = Disk.init(1) catch |err| {
+    console.init(screen);
+    console.clear();
+    console.echoToHost(true); // echo all prints to the host
+
+    blk: {
+        const ahci = @import("disks/ahci.zig");
+        var ports_buf: [32]?ahci.Port = undefined;
+        const ports = ahci.init(allocator, &ports_buf) catch |err| {
+            log.warn("Failed to init ahci: {s}", .{@errorName(err)}); // on legacy systems we don't have ahci, but that's ok (somtimes)
+            break :blk;
+        };
+        Disk.loadAHCIPorts(&ports_buf, ports.len);
+    }
+
+    var disk = Disk.init(2) catch |err| {
         log.err("Failed to init disk: {s}", .{@errorName(err)});
-        io.hlt();
+        io.hltNoInt();
     };
 
     // init file system on disk 1 (boot disk)
     const fs = FileSystem.init(&disk) catch |err| {
         log.err("Failed to init file system: {s}", .{@errorName(err)});
-        io.hlt();
+        io.hltNoInt();
     };
     FileSystem.setGlobal(fs);
 
-    ui.init(FileSystem.getGlobal(), "ui", heap.allocator()) catch |err| {
+    ui.init(FileSystem.getGlobal(), "ui", allocator) catch |err| {
         log.err("Failed to init UI Components: {s}", .{@errorName(err)});
-        io.hlt();
+        io.hltNoInt();
     };
 
-    renderer.init(heap.allocator());
+    renderer.init(allocator);
     renderer.addElement(.initNamed(.{ .relative = .{
         .x = -10,
         .y = 10,
@@ -84,17 +105,6 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
 
     renderer.subscribeToUpdates(&update);
 
-    @import("pci.zig").emunerate();
-
-    console.init(screen);
-    console.clear();
-    console.echoToHost(true); // echo all prints to the host
-
-    // init hardware
-    // pit timer 100Hz
-    kb.init();
-    mouse.init();
-
     const cpu = arch.CPU.init() catch |err| blk: {
         log.err("Failed to get the CPU: {s}", .{@errorName(err)});
         break :blk arch.CPU.unknown;
@@ -102,8 +112,6 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     _ = cpu;
 
     console.echoToHost(false);
-
-    scheduler.init();
 
     io.sti();
     mainWrapper();

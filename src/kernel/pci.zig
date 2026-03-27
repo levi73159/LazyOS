@@ -38,6 +38,9 @@ pub const Device = struct {
     header_type: u8,
     latency_timer: u8,
     cache_line_size: u8,
+
+    bar: [6]u32, // BAR for header_type 0x0 and 0x1, for header_type 0x2 we will ignore
+    bar_count: u8,
 };
 
 pub const ClassCode = enum(u8) {
@@ -184,6 +187,19 @@ fn readDevice(bus: u8, slot: u8, func: u8) Device {
     const header_type = configRead(u8, bus, slot, func, 0xE);
     const bist = configRead(u8, bus, slot, func, 0xF);
 
+    const base_address_count: u8 = switch (header_type & ~@as(u8, MULTI_FUNC)) {
+        0x0 => 6,
+        0x1 => 2,
+        else => 0,
+    };
+    const base_address_start = 0x10;
+
+    var bars: [6]u32 = undefined;
+
+    for (0..base_address_count) |bar| {
+        bars[bar] = configRead(u32, bus, slot, func, @intCast(base_address_start + bar * 4));
+    }
+
     return .{
         .vendor_id = vendor_id,
         .device_id = device_id,
@@ -197,6 +213,8 @@ fn readDevice(bus: u8, slot: u8, func: u8) Device {
         .latency_timer = latency_timer,
         .header_type = header_type,
         .bist = bist,
+        .bar = bars,
+        .bar_count = base_address_count,
     };
 }
 

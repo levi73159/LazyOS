@@ -13,7 +13,7 @@ pub const Color = enum(u8) {
     cyan,
     red,
     magenta,
-    brown,
+    yellow,
     light_grey,
     dark_grey,
     light_blue,
@@ -21,8 +21,7 @@ pub const Color = enum(u8) {
     light_cyan,
     light_red,
     light_magenta,
-    /// Alias for light brown
-    yellow,
+    light_yellow,
     white,
 
     pub inline fn toEntry(fg: Color, bg: Color) u8 {
@@ -37,7 +36,7 @@ pub const Color = enum(u8) {
             .cyan => bit32Color.init(0, 255, 255),
             .red => bit32Color.init(255, 0, 0),
             .magenta => bit32Color.init(255, 0, 255),
-            .brown => bit32Color.init(165, 42, 42),
+            .yellow => bit32Color.init(255, 255, 0),
             .light_grey => bit32Color.init(192, 192, 192),
             .dark_grey => bit32Color.init(128, 128, 128),
             .light_blue => bit32Color.init(128, 128, 255),
@@ -45,7 +44,7 @@ pub const Color = enum(u8) {
             .light_cyan => bit32Color.init(128, 255, 255),
             .light_red => bit32Color.init(255, 128, 128),
             .light_magenta => bit32Color.init(255, 128, 255),
-            .yellow => bit32Color.init(255, 255, 128),
+            .light_yellow => bit32Color.init(255, 255, 128),
             .white => bit32Color.init(255, 255, 255),
         };
     }

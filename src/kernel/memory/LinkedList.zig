@@ -5,6 +5,9 @@ const is_debug = @import("builtin").mode == .Debug;
 
 const Self = @This();
 
+// BUG: Int overflow
+// TODO: change offset pointer to u16 alligned(1) so we won't have to worry about alignment
+
 const log = std.log.scoped(._heap);
 
 const PAGE_SIZE = 4096;
@@ -17,12 +20,17 @@ const HEAP_SIZE = PAGE_SIZE * HEAP_PAGES;
 // [Header] [padding] [offset] [data]
 // offset is how many bytes to offset ptr to end of header = padding
 // Header will contain info about size and next block prev block, magic number, padding, and free
+// A block is defined as
+// [Header][padding][offset][data]
+// every block contains a block_padding which is the padding between blocks
+// [Block0][block_padding][Block1]
+// in this situation block_padding will be contained in Block0
 
 const Fields = packed struct(usize) {
     is_free: bool = true,
-    padding: u8,
+    padding: u16,
     block_padding: u8 = 0,
-    size: u47,
+    size: u39,
 
     pub fn init(size: usize, is_free: bool) Fields {
         return .{
@@ -33,7 +41,7 @@ const Fields = packed struct(usize) {
     }
 };
 
-const MAGIC: u64 = @bitCast([8]u8{ 'B', 'L', 'O', 'K', 'H', 'E', 'A', 'D' });
+const MAGIC: u64 = 0xDEADBEEFCAFEBABE;
 const Header = struct {
     magic: if (is_debug) u64 else void = if (is_debug) MAGIC else {},
     flags: Fields, // does not include header of offset data header at start of data, only
@@ -52,7 +60,7 @@ const Header = struct {
         return self.flags.size;
     }
 
-    fn padding(self: *const Header) u8 {
+    fn padding(self: *const Header) u16 {
         return self.flags.padding;
     }
 
@@ -84,7 +92,8 @@ const Header = struct {
     }
 };
 const HEADER_SIZE = @sizeOf(Header);
-const OFFSET_SIZE = @sizeOf(u8);
+const OFFSET_SIZE = @sizeOf(u16);
+const offset_type = u16;
 
 const MIN_SPLIT = HEADER_SIZE + OFFSET_SIZE + 1;
 
@@ -201,7 +210,12 @@ fn mergeBlockFoward(self: *Self, block: *Header) void {
     // block consumes next block
     while (block.next) |next_block| {
         if (next_block.isFree() and isClose(block, next_block)) {
-            if (next_block == self.last_free) self.last_free = block;
+            // Only inherit last_free if block itself is free. When called from _resize
+            // block is still in-use, so fall through to next_block.next instead.
+            // IMPORTANT: use next_block.next here, NOT block.next — block.next still
+            // equals next_block at this point (the reassignment on line below hasn't run).
+            // Using block.next would set last_free to the block being consumed = dangling ptr.
+            if (next_block == self.last_free) self.last_free = if (block.isFree()) block else next_block.next;
             if (next_block == self.end) self.end = block;
 
             block.addSize(next_block.trueSize() + block.flags.block_padding);
@@ -284,7 +298,9 @@ fn findFreeBlock(self: *Self, size: usize, alignment: mem.Alignment) ?*Header {
     return null;
 }
 
-pub fn allocate(self: *Self, size: usize, alignment: mem.Alignment) ![*]u8 {
+pub fn allocate(self: *Self, size: usize, _alignment: mem.Alignment) ![*]u8 {
+    if (_alignment.toByteUnits() % 2 != 0) @panic("Alignment must be a multiple of 2");
+    const alignment = mem.Alignment.max(_alignment, .@"2"); // at least 2 byte alignment
     const block = self.findFreeBlock(size, alignment) orelse blk: {
         const total_size = size + alignment.toByteUnits() + HEADER_SIZE + OFFSET_SIZE;
         const pages_needed = (total_size + PAGE_SIZE - 1) / PAGE_SIZE;
@@ -302,20 +318,33 @@ pub fn allocate(self: *Self, size: usize, alignment: mem.Alignment) ![*]u8 {
     const padding = aligned_data_addr - block_addr - HEADER_SIZE - OFFSET_SIZE;
     block.setPadding(padding);
 
-    const offset_ptr: *u8 = @ptrFromInt(aligned_data_addr - OFFSET_SIZE);
+    const offset_ptr: *offset_type = @ptrFromInt(aligned_data_addr - OFFSET_SIZE);
     offset_ptr.* = @intCast(padding);
 
     if (!self.splitBlock(block, size)) {
         // can't shrink block so we act like we splitting it by setting the size and adding the block padding to compensate
-        block.flags.block_padding += @intCast(block.getSize() - size);
-        block.setSize(size);
+        // block_padding is u8 — if the excess exceeds 255 we cannot store it there, so leave
+        // the block slightly oversized rather than wrapping and corrupting the free-list geometry.
+        const excess = block.getSize() - size;
+        if (excess <= std.math.maxInt(u8)) {
+            block.flags.block_padding += @intCast(excess);
+            block.setSize(size);
+        }
+        // else: block stays oversized; wasteful but safe.
+
+        // splitBlock didn't run, so last_free was not updated. If it still points to
+        // this block (which is now in-use), advance it so findFreeBlock doesn't get
+        // stuck and grow the heap on every subsequent allocation.
+        if (self.last_free == block) self.last_free = block.next;
     }
 
+    // log.debug("alloc({d}) = {x}", .{ size, aligned_data_addr });
     return @ptrFromInt(aligned_data_addr);
 }
 
 pub fn free(self: *Self, ptr: [*]u8) void {
-    const offset: *u8 = @ptrFromInt(@intFromPtr(ptr) - OFFSET_SIZE);
+    // log.debug("free({x})", .{@intFromPtr(ptr)});
+    const offset: *offset_type = @ptrFromInt(@intFromPtr(ptr) - OFFSET_SIZE);
     const block: *Header = @ptrFromInt(@intFromPtr(ptr) - offset.* - HEADER_SIZE - OFFSET_SIZE);
 
     block.setFree(true);
@@ -323,29 +352,8 @@ pub fn free(self: *Self, ptr: [*]u8) void {
     self.last_free = updated_block;
 
     updated_block.addSize(updated_block.padding());
-    block.flags.block_padding -|= updated_block.padding();
     updated_block.setPadding(0);
-    // update block padding
     updated_block.verify();
-
-    if (self.pages_in_heap > HEAP_PAGES) {
-        var page_addr = @intFromPtr(block);
-        var how_much_pages = block.trueSize() / PAGE_SIZE;
-
-        if (HEAP_PAGES > self.pages_in_heap - how_much_pages) {
-            how_much_pages = self.pages_in_heap - HEAP_PAGES;
-            page_addr += how_much_pages * PAGE_SIZE;
-            if (page_addr <= @intFromPtr(ptr) + MIN_SPLIT) return;
-            updated_block.setSize(updated_block.getSize() - how_much_pages * PAGE_SIZE);
-            self.pages_in_heap -= @intCast(how_much_pages);
-            self.pmem.freePagesV(page_addr, how_much_pages);
-        } else {
-            const prev = self.findPrev(updated_block);
-            if (prev) |p| p.next = updated_block.next;
-            self.pages_in_heap -= @intCast(how_much_pages);
-            self.pmem.freePagesV(page_addr, how_much_pages);
-        }
-    }
 }
 
 fn _alloc(ctx: *anyopaque, size: usize, alignment: mem.Alignment, ret_addr: usize) ?[*]u8 {
@@ -372,7 +380,7 @@ fn _resize(ctx: *anyopaque, memory: []u8, _: mem.Alignment, new_size: usize, _: 
         return true;
     }
 
-    const offset: *u8 = @ptrFromInt(@intFromPtr(memory.ptr) - OFFSET_SIZE);
+    const offset: *offset_type = @ptrFromInt(@intFromPtr(memory.ptr) - OFFSET_SIZE);
     const block: *Header = @ptrFromInt(@intFromPtr(memory.ptr) - offset.* - HEADER_SIZE - OFFSET_SIZE);
 
     if (block.getSize() > new_size) {
@@ -441,7 +449,7 @@ pub fn dump(self: *Self, fliter: enum { free, used, all }, comptime print: fn (c
             // const data = @as([*]u8, @ptrFromInt(data_addr))[0..block.getSize()];
             // print("  DATA: {any}", .{data});
 
-            const offset_ptr: *u8 = @ptrFromInt(data_addr - OFFSET_SIZE);
+            const offset_ptr: *offset_type = @ptrFromInt(data_addr - OFFSET_SIZE);
             print("  Offset: {d}", .{offset_ptr.*});
         }
     }

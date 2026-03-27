@@ -1,3 +1,4 @@
+const std = @import("std");
 const builtin = @import("builtin");
 pub const LinkedList = @import("LinkedList.zig");
 const pmem = @import("pmem.zig");
@@ -42,7 +43,8 @@ pub fn acpi_allocator() @import("std").mem.Allocator {
 
 // C Abi wrappers
 pub export fn malloc(self: *LinkedList, size: usize) ?*anyopaque {
-    return self.allocate(size, .@"16") catch null;
+    const memory = self.allocate(size, .@"8") catch null;
+    return memory;
 }
 
 pub export fn free(self: *LinkedList, ptr: ?*anyopaque) void {

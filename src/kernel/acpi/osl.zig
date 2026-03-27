@@ -23,7 +23,7 @@ export var rsdp_address_request: limine.RSDPRequest linksection(".limine_request
 
 export fn uacpi_kernel_get_rsdp(phys_out: *c.uacpi_phys_addr) c.uacpi_status {
     if (rsdp_address_request.response) |response| {
-        phys_out.* = bootinfo.toPhysicalHHDM(response.address);
+        phys_out.* = bootinfo.toPhysical(response.address); // we don't know if it from the kernel (different mapping) or the HHDM
         return c.UACPI_STATUS_OK;
     }
 
@@ -32,7 +32,8 @@ export fn uacpi_kernel_get_rsdp(phys_out: *c.uacpi_phys_addr) c.uacpi_status {
 }
 
 export fn uacpi_kernel_map(addr: c.uacpi_phys_addr, _: c.uacpi_size) ?*anyopaque {
-    return @ptrFromInt(bootinfo.toVirtualHHDM(addr));
+    const virt = bootinfo.toVirtualHHDM(addr);
+    return @ptrFromInt(virt);
 }
 
 export fn uacpi_kernel_unmap(addr: ?*anyopaque, _: c.uacpi_size) c.uacpi_status {
@@ -179,7 +180,19 @@ export fn uacpi_kernel_io_write32(handle: c.uacpi_handle, offset: usize, val: u3
 }
 
 export fn uacpi_kernel_alloc(size: c.uacpi_size) ?*anyopaque {
-    return heap.malloc(heap.get_acpi(), size);
+    const data = heap.malloc(heap.get_acpi(), size);
+    if (data == null) {
+        log.err("Out of memory, alloc({d})", .{size});
+        return null;
+    }
+    const slice = @as([*]u8, @ptrCast(data))[0..size];
+    @memset(slice, 0);
+
+    const addr = @intFromPtr(data);
+    if (addr & 7 != 0) {
+        log.err("MISALIGNED alloc({d}) = 0x{x}", .{ size, addr });
+    }
+    return data;
 }
 
 export fn uacpi_kernel_free(ptr: ?*anyopaque) void {
@@ -232,25 +245,43 @@ export fn uacpi_kernel_release_mutex(handle: c.uacpi_handle) void {
 
 // ── Events (semaphore-like) ───────────────────────────────────────────────
 
+const Event = struct {
+    count: std.atomic.Value(u32),
+};
+
 export fn uacpi_kernel_create_event() c.uacpi_handle {
-    return @ptrFromInt(1); // stub
-}
-
-export fn uacpi_kernel_free_event(handle: c.uacpi_handle) void {
-    _ = handle;
-}
-
-export fn uacpi_kernel_wait_for_event(handle: c.uacpi_handle, timeout: c.uacpi_u16) c.uacpi_bool {
-    _ = .{ handle, timeout };
-    return true; // always succeed
+    const event = heap.acpi_allocator().create(Event) catch return null;
+    event.* = .{ .count = .init(0) };
+    return @ptrCast(@alignCast(event));
 }
 
 export fn uacpi_kernel_signal_event(handle: c.uacpi_handle) void {
-    _ = handle;
+    const event: *Event = @ptrCast(@alignCast(handle));
+    _ = event.count.fetchAdd(1, .release);
+}
+
+export fn uacpi_kernel_wait_for_event(handle: c.uacpi_handle, timeout: c.uacpi_u16) c.uacpi_bool {
+    const event: *Event = @ptrCast(@alignCast(handle));
+    var tries: u32 = 0;
+    const limit = if (timeout == 0xFFFF) std.math.maxInt(u32) else @as(u32, timeout) * 100;
+    while (tries < limit) : (tries += 1) {
+        if (event.count.load(.acquire) > 0) {
+            _ = event.count.fetchSub(1, .release);
+            return true;
+        }
+        pit.sleep(1);
+    }
+    return false;
 }
 
 export fn uacpi_kernel_reset_event(handle: c.uacpi_handle) void {
-    _ = handle;
+    const event: *Event = @ptrCast(@alignCast(handle));
+    event.count.store(0, .release);
+}
+
+export fn uacpi_kernel_free_event(handle: c.uacpi_handle) void {
+    const event: *Event = @ptrCast(@alignCast(handle));
+    heap.acpi_allocator().destroy(event);
 }
 
 // ── Spinlocks ─────────────────────────────────────────────────────────────

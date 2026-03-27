@@ -70,12 +70,10 @@ pub fn build(b: *std.Build) void {
     run_qemu_cmd.addArg("-cdrom");
     run_qemu_cmd.addArg(image.path);
     run_qemu_cmd.addArgs(&.{
-        "-cpu",
-        "qemu64",
-        "-s",
-        "-serial",
-        "stdio",
-        "-display",
+        "-machine", "q35", // closer to real hardware
+        "-cpu",     "qemu64",
+        "-s",       "-serial",
+        "stdio",    "-display",
         display,
     });
     if (debug_int) {

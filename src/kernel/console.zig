@@ -205,6 +205,10 @@ pub fn dbg(data: []const u8) void {
     for (data) |c| {
         io.outb(0xe9, c);
     }
+
+    if (serial) |s| {
+        s.writeAll(data) catch {};
+    }
 }
 
 pub fn print(comptime fmt: []const u8, args: anytype) void {
@@ -316,7 +320,7 @@ fn setAnsiColor(code: u8) void {
         30 => setFg(.black),
         31 => setFg(.red),
         32 => setFg(.green),
-        33 => setFg(.brown),
+        33 => setFg(.yellow),
         34 => setFg(.blue),
         35 => setFg(.magenta),
         36 => setFg(.cyan),
@@ -326,7 +330,7 @@ fn setAnsiColor(code: u8) void {
         90 => setFg(.dark_grey),
         91 => setFg(.light_red),
         92 => setFg(.light_green),
-        93 => setFg(.yellow),
+        93 => setFg(.light_yellow),
         94 => setFg(.light_blue),
         95 => setFg(.light_magenta),
         96 => setFg(.light_cyan),
@@ -336,7 +340,7 @@ fn setAnsiColor(code: u8) void {
         40 => setBg(.black),
         41 => setBg(.red),
         42 => setBg(.green),
-        43 => setBg(.brown),
+        43 => setBg(.yellow),
         44 => setBg(.blue),
         45 => setBg(.magenta),
         46 => setBg(.cyan),
@@ -346,7 +350,7 @@ fn setAnsiColor(code: u8) void {
         100 => setBg(.dark_grey),
         101 => setBg(.light_red),
         102 => setBg(.light_green),
-        103 => setBg(.yellow),
+        103 => setBg(.light_yellow),
         104 => setBg(.light_blue),
         105 => setBg(.light_magenta),
         106 => setBg(.light_cyan),

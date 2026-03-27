@@ -111,10 +111,7 @@ fn handleError(frame: *InterruptFrame) noreturn {
 
     console.printB("{f}\n", .{frame});
 
-    console.printB("!!! KERNEL PANIC !!!\n", .{});
-    console.printB("\x1b[0m", .{});
-
-    io.hltNoInt();
+    @panic("Unhandled exception");
 }
 
 pub fn register(interrupt: u8, handler: Handler) void {

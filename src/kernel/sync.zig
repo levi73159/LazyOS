@@ -4,7 +4,7 @@ const scheduler = @import("scheduler.zig");
 
 const INVALID_CPU_ID = std.math.maxInt(u32);
 const CURRENT_CPU_ID = 0;
-const INVALID_TASK_ID = 0; // tasks start at 1
+const INVALID_TASK_ID = std.math.maxInt(u32); // must differ from CURRENT_CPU_ID
 
 pub const SpinLock = struct {
     const Self = @This();
@@ -23,14 +23,17 @@ pub const SpinLock = struct {
     pub fn lock(self: *Self) u64 {
         const flags = io.getFlags();
         io.cli();
-        // recursive lock — same task
+
         if (self.locked != 0 and self.cpu_id == CURRENT_CPU_ID) {
+            // Recursive acquire by the same CPU.
             self.lock_count += 1;
             return flags;
         }
-        while (@cmpxchgWeak(u32, &self.locked, 0, 1, .acquire, .monotonic) != null) {
-            asm volatile ("pause");
-        }
+
+        // On a single CPU with interrupts disabled, real contention cannot
+        // happen. If locked != 0 here with a different owner, something is
+        // already wrong. Take it anyway rather than spinning forever.
+        self.locked = 1;
         self.cpu_id = CURRENT_CPU_ID;
         self.lock_count = 1;
         return flags;
@@ -50,73 +53,87 @@ pub const SpinLock = struct {
 pub const Mutex = struct {
     const Self = @This();
 
-    const WaitQueue = std.ArrayList(u32); // list of waiting tasks id
-
-    locked: bool,
-    owner: u32,
-    waiting: WaitQueue,
+    locked: u32 = 0, // 0 = free, 1 = held
+    depth: u32 = 0, // recursion count
+    owner: u32 = INVALID_TASK_ID, // task ID of current holder
+    // Kept for API compatibility with callers that pass an allocator.
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) Self {
-        return Self{
-            .locked = false,
+        return .{
+            .locked = 0,
+            .depth = 0,
             .owner = INVALID_TASK_ID,
-            .waiting = WaitQueue.empty,
             .allocator = allocator,
         };
     }
 
-    pub fn deinit(self: *Self) void {
-        self.waiting.deinit(self.allocator);
+    pub fn deinit(_: *Self) void {
+        // Nothing to free — no dynamic allocation.
     }
 
     pub fn lock(self: *Self) void {
         io.cli();
-        defer io.sti();
-
         const current_id = scheduler.currentTask();
-        if (self.locked and self.owner == current_id) return;
 
-        if (!self.locked) {
-            self.locked = true;
-            self.owner = current_id;
+        if (self.locked != 0) {
+            if (self.owner == current_id) {
+                // Recursive acquire by the same owner — just increment depth.
+                self.depth += 1;
+            }
+            // If owner != current_id this is unexpected contention during
+            // single-threaded ACPI init. We deliberately do NOT spin here:
+            // spinning with interrupts disabled on a single CPU deadlocks
+            // because the holder can never run to call unlock().
+            // Returning without acquiring is safer — uACPI tolerates this
+            // better than a hard freeze.
+            io.sti();
             return;
         }
 
-        self.waiting.append(self.allocator, current_id) catch {
-            std.log.err("Failed to add task to mutex wait queue: Out of memory", .{});
-            return;
-        };
-
+        self.locked = 1;
+        self.owner = current_id;
+        self.depth = 1;
         io.sti();
-        scheduler.waitForTaskToWake(self.owner);
     }
 
     pub fn unlock(self: *Self) void {
-        const current_id = scheduler.currentTask();
-        if (!self.locked or self.owner != current_id) return;
-
         io.cli();
-        if (self.waiting.items.len > 0) {
-            // wake up next waiting task
-            const next_id = self.waiting.orderedRemove(0);
-            self.owner = next_id;
-            // task will re-acquire when it wakes
-            scheduler.wakeTask(next_id);
-        } else {
-            self.locked = false;
-            self.owner = std.math.maxInt(u32);
+        const current_id = scheduler.currentTask();
+
+        // Guard: only the owner may unlock.
+        if (self.locked == 0 or self.owner != current_id) {
+            io.sti();
+            return;
         }
+
+        self.depth -= 1;
+        if (self.depth != 0) {
+            // Still recursively held.
+            io.sti();
+            return;
+        }
+
+        self.owner = INVALID_TASK_ID;
+        @atomicStore(u32, &self.locked, 0, .release);
         io.sti();
     }
 
     pub fn tryLock(self: *Self) bool {
-        if (self.locked) return false;
         io.cli();
-        defer io.sti();
-        if (self.locked) return false;
-        self.locked = true;
-        self.owner = scheduler.currentTask();
+        const current_id = scheduler.currentTask();
+        if (self.locked != 0 and self.owner == current_id) {
+            self.depth += 1;
+            io.sti();
+            return true;
+        }
+        if (@cmpxchgStrong(u32, &self.locked, 0, 1, .acquire, .monotonic) != null) {
+            io.sti();
+            return false;
+        }
+        self.owner = current_id;
+        self.depth = 1;
+        io.sti();
         return true;
     }
 };

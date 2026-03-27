@@ -54,3 +54,16 @@ pub inline fn kernelToPhysical(virt: u64) u64 {
     const info = getBootInfo();
     return virt - info.kernel.virt_addr + info.kernel.phys_addr;
 }
+
+// checks if virt is in the HHDM or kernel
+pub fn toPhysical(virt: u64) u64 {
+    const info = getBootInfo();
+
+    // check if in kernel virtual range
+    if (virt >= info.kernel.virt_addr and virt < info.kernel.virt_addr + info.kernel.size) {
+        return kernelToPhysical(virt);
+    }
+
+    // assume HHDM
+    return toPhysicalHHDM(virt);
+}
