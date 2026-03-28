@@ -88,6 +88,12 @@ pub inline fn sti() void {
     asm volatile ("sti");
 }
 
+pub fn disableInterrupts() usize {
+    const flags = getFlags();
+    cli();
+    return flags;
+}
+
 pub fn setCursor(x: u16, y: u16, width: u16) void {
     const pos = @as(u16, y) * width + x;
 

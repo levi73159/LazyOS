@@ -21,8 +21,14 @@ pub fn build(b: *std.Build) void {
     });
 
     const debug_int = b.option(bool, "interrupt", "turn on interrupt logging for qemu using the -d int option") orelse false;
-    const display = b.option([]const u8, "display", "choose display backend") orelse "sdl";
-    const optimize_mode = b.standardOptimizeOption(.{});
+    const display = b.option([]const u8, "display", "choose display backend") orelse "sdl,gl=on";
+    const optimize_mode: std.builtin.OptimizeMode = switch (b.release_mode) {
+        .off => std.builtin.OptimizeMode.ReleaseSafe,
+        .any => std.builtin.OptimizeMode.ReleaseSafe,
+        .fast => std.builtin.OptimizeMode.ReleaseFast,
+        .safe => std.builtin.OptimizeMode.ReleaseSafe,
+        .small => std.builtin.OptimizeMode.ReleaseSmall,
+    };
 
     const kernel_mod = b.createModule(.{
         .root_source_file = b.path("src/kernel/boot.zig"),
@@ -71,10 +77,10 @@ pub fn build(b: *std.Build) void {
     run_qemu_cmd.addArg(image.path);
     run_qemu_cmd.addArgs(&.{
         "-machine", "q35", // closer to real hardware
+        "-device",  "virtio-vga", // modern GPU
+        "-display", display,
         "-cpu",     "qemu64",
-        "-s",       "-serial",
-        "stdio",    "-display",
-        display,
+        "-serial",  "stdio",
     });
     if (debug_int) {
         run_qemu_cmd.addArgs(&.{ "-d", "int" });

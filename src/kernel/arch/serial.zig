@@ -54,7 +54,7 @@ pub const SerialWriter = struct {
     writer: std.Io.Writer,
     pub const SerialError = error{};
     const Self = @This();
-    pub fn init(comptime port: Port) SerialWriter {
+    pub fn init(comptime port: Port) ?SerialWriter {
         const port_num = @intFromEnum(port);
         io.outb(port_num + @intFromEnum(Offset.IntEnable), 0);
         io.outb(port_num + @intFromEnum(Offset.LineCtrl), @bitCast(LineCtrlReg{ .dlab = 1 }));
@@ -65,9 +65,7 @@ pub const SerialWriter = struct {
         io.outb(port_num + @intFromEnum(Offset.ModemCtrl), @bitCast(ModemCtrlReg{ .out1 = 0, .loop = true }));
         io.outb(port_num + @intFromEnum(Offset.RxTxBuffer), 0xAA);
 
-        if (io.inb(port_num) != 0xAA) {
-            unreachable;
-        }
+        if (io.inb(port_num) != 0xAA) {}
 
         io.outb(port_num + @intFromEnum(Offset.ModemCtrl), @bitCast(ModemCtrlReg{}));
 

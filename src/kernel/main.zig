@@ -1,26 +1,28 @@
 const std = @import("std");
 const builtin = @import("builtin");
+
+const acpi_oslevel = @import("acpi/osl.zig");
 const arch = @import("arch.zig");
-const io = @import("arch.zig").io;
-const console = @import("console.zig");
-const hal = @import("hal.zig");
-const kb = @import("keyboard.zig");
-const mouse = @import("mouse.zig");
-const pit = @import("pit.zig");
 const BootInfo = @import("arch/bootinfo.zig").BootInfo;
 const paging = @import("arch/paging.zig");
-const scheduler = @import("scheduler.zig");
 const serial = @import("arch/serial.zig");
-const pmem = @import("memory/pmem.zig");
+const console = @import("console.zig");
 const Disk = @import("Disk.zig");
 const FileSystem = @import("fs/FileSystem.zig");
-const ui = @import("graphics/ui.zig");
-const Shell = @import("Shell.zig");
 const renderer = @import("graphics/renderer.zig");
-const heap = @import("memory/heap.zig");
 const Screen = @import("graphics/Screen.zig");
+const ui = @import("graphics/ui.zig");
+const hal = @import("hal.zig");
+const io = @import("arch.zig").io;
+const kb = @import("keyboard.zig");
+const heap = @import("memory/heap.zig");
+const pmem = @import("memory/pmem.zig");
+const mouse = @import("mouse.zig");
+const pit = @import("pit.zig");
+const scheduler = @import("scheduler.zig");
+const Shell = @import("Shell.zig");
 
-const acpi_oslevel = @import("acpi/osl.zig"); // NOTE: MUST BE IMPORTED FIRST FOR ACPI TO WORK
+// NOTE: MUST BE IMPORTED FIRST FOR ACPI TO WORK
 comptime {
     _ = acpi_oslevel; // force import
 }
@@ -32,8 +34,10 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     // const kernel_end: usize = @intFromPtr(&__kernel_end);
     // arch.paging.init(kernel_start, kernel_end);
     var serial_writer = serial.SerialWriter.init(.COM1);
-    const writer = &serial_writer.writer;
-    console.initSerial(writer);
+    if (serial_writer != null) {
+        const writer = &serial_writer.?.writer;
+        console.initSerial(writer);
+    }
 
     console.dbg("Init Kernel\n");
     log.debug("Initializing kernel components...\n", .{});
@@ -66,6 +70,10 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     console.init(screen);
     console.clear();
     console.echoToHost(true); // echo all prints to the host
+
+    if (serial_writer == null) {
+        console.write("No serial port found\n");
+    }
 
     blk: {
         const ahci = @import("disks/ahci.zig");

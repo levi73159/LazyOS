@@ -3,6 +3,7 @@ const Color = @import("Color.zig");
 const font = @import("../fonts/Basic.zig");
 const bootinfo = @import("../arch/bootinfo.zig");
 const Texture = @import("ui.zig").Texture;
+const io = @import("../arch.zig").io;
 
 const Self = @This();
 
@@ -183,6 +184,9 @@ pub fn drawText(self: *Self, x: u32, y: u32, text: []const u8, scale: u32, color
 }
 
 pub fn clear(self: *Self, color: Color) void {
+    const flags = io.disableInterrupts();
+    defer io.restoreFlags(flags);
+
     const buffer = self.getBuffer();
     for (buffer) |*pixel| {
         pixel.* = color.get();
@@ -190,6 +194,9 @@ pub fn clear(self: *Self, color: Color) void {
 }
 
 pub fn swapBuffers(self: *Self) void {
+    const flags = io.disableInterrupts();
+    defer io.restoreFlags(flags);
+
     if (self.use_double_buffer) {
         @memcpy(self.buffer, self.double_buffer.?);
     }
