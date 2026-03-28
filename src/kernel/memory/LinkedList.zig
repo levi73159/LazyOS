@@ -1,7 +1,7 @@
 const std = @import("std");
 const mem = std.mem;
 const BitmapAllocator = @import("BitmapAllocator.zig");
-const is_debug = @import("builtin").mode == .Debug;
+const is_debug = true;
 
 const Self = @This();
 
@@ -296,11 +296,14 @@ fn findFreeBlock(self: *Self, size: usize, alignment: mem.Alignment) ?*Header {
 }
 
 pub fn allocate(self: *Self, size: usize, _alignment: mem.Alignment) ![*]u8 {
-    const alignment = mem.Alignment.max(_alignment, .@"2"); // at least 2 byte alignment
+    const alignment = mem.Alignment.max(_alignment, .@"16"); // at least 2 byte alignment
     if (alignment.toByteUnits() % 2 != 0) @panic("Alignment must be a multiple of 2");
     const block = self.findFreeBlock(size, alignment) orelse blk: {
+        log.debug("Size: {d}: alignment: {d}", .{ size, alignment });
         const total_size = size + alignment.toByteUnits() + HEADER_SIZE + OFFSET_SIZE;
+        log.debug("Total size: {d}", .{total_size});
         const pages_needed = (total_size + PAGE_SIZE - 1) / PAGE_SIZE;
+        log.debug("Allocating {d} pages", .{pages_needed});
         const block = try self.growHeap(pages_needed);
         break :blk block;
     };

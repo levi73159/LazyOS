@@ -1,7 +1,7 @@
 const std = @import("std");
 
 // 64 bit register frame
-pub const InterruptFrame = packed struct {
+pub const InterruptFrame = extern struct {
     ds: u64,
     rbp: u64,
     rsi: u64,

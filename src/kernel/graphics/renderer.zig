@@ -3,6 +3,7 @@ const Screen = @import("Screen.zig");
 const kb = @import("../keyboard.zig");
 const acpi = @import("../arch/acpi.zig");
 const console = @import("../console.zig");
+const io = @import("../arch.zig").io;
 
 const mouse = @import("../mouse.zig");
 const ui = @import("ui.zig");
@@ -60,7 +61,9 @@ pub fn drawLoop(screen: *Screen) void {
     while (true) {
         const mouse_x = mouse.x();
         const mouse_y = mouse.y();
+        io.cli();
         screen.clear(Color.white());
+        io.sti();
 
         if (state.update_listerner) |update| {
             update(screen, &state) catch |err| {
@@ -75,8 +78,10 @@ pub fn drawLoop(screen: *Screen) void {
         }
 
         screen.drawTexture(mouse_x, mouse_y, cursor);
+        io.cli();
         screen.swapBuffers();
         mouse.updateMouse();
+        io.sti();
 
         if (kb.getKeyDown(.q))
             break;

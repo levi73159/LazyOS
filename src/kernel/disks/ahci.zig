@@ -64,7 +64,6 @@ fn findAHCI() ?*const pci.FoundDevice {
 pub fn init(allocator: mem.Allocator, port_buf: *[32]?Port) ![]?Port {
     const device = findAHCI() orelse return error.NoAHCI;
     std.debug.assert(device.info.class_code == .mass_storage and device.info.subclass == 0x06);
-    std.debug.assert(device.info.vendor_id == 0x8086); // 0x8086 is Intel Vendor ID
 
     if (device.info.bar_count < 5) {
         log.warn("Not enough BARs for AHCI: bar count: {d}", .{device.info.bar_count});

@@ -242,7 +242,7 @@ var buf: [40]Key = undefined;
 var end_index: usize = 0;
 var start_index: usize = 0;
 
-var wait_key: bool = false;
+var wait_key: std.atomic.Value(bool) = .init(false);
 var prev: ?Key = null;
 
 var modifiers: Modifiers = .{};
@@ -330,7 +330,7 @@ pub fn handler(_: *InterruptFrame) void {
     if (!bufferFull())
         end_index = (end_index + 1) % buf.len;
 
-    wait_key = false;
+    wait_key.store(false, .release);
 
     io.sti();
 }
@@ -367,8 +367,10 @@ pub fn flush() void {
 }
 
 pub fn waitForKey() void {
-    wait_key = true;
-    while (wait_key) {}
+    wait_key.store(true, .release);
+    while (wait_key.load(.acquire)) {
+        io.pause();
+    }
 }
 
 pub fn getKeyDown(scancode: Scancode) bool {

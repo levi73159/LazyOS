@@ -43,7 +43,7 @@ pub fn acpi_allocator() @import("std").mem.Allocator {
 
 // C Abi wrappers
 pub export fn malloc(self: *LinkedList, size: usize) ?*anyopaque {
-    const memory = self.allocate(size, .@"8") catch null;
+    const memory = self.allocate(size, .@"16") catch null;
     return memory;
 }
 
