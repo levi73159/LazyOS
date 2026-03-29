@@ -1,5 +1,8 @@
+const std = @import("std");
 const builtin = @import("builtin");
 const log = @import("std").log.scoped(.gdt);
+
+const boot = @import("../boot.zig");
 
 pub const Descriptor = @import("descriptors.zig").Descriptor;
 pub const Access = @import("descriptors.zig").GDTAccess;
@@ -42,19 +45,61 @@ pub const Entry = packed struct(u64) {
     }
 };
 
-pub const Selector = enum(u16) {
-    null = 0,
-    kernel_code = 0x08,
-    kernel_data = 0x10,
-    user_code = 0x18,
-    user_data = 0x20,
+// A entry with a 64 bit base address (used for TSS)
+pub const Entry64 = packed struct(u128) {
+    limit_low: u16,
+    base_low: u16,
+    base_mid: u8,
+    access: Access,
+    limit_high: u4,
+    flags: Flags,
+    base_high: u8,
+    base_upper: u32, // bits: 63:32
+    __reserved: u32 = 0,
+
+    pub fn init(limit: u20, base: u64, access: Access, flags: Flags) Entry64 {
+        return Entry64{
+            .limit_low = @truncate(limit & 0xFFFF),
+            .base_low = @truncate(base & 0xFFFF),
+            .base_mid = @truncate((base >> 16) & 0xFF),
+            .base_high = @truncate((base >> 24) & 0xFF),
+            .base_upper = @truncate((base >> 32) & 0xFFFFFFFF),
+            .access = access,
+            .limit_high = @truncate((limit >> 16) & 0xF),
+            .flags = flags,
+        };
+    }
 };
 
+pub const TSS = packed struct {
+    __reserved: u32 = 0,
+    rsp0: u64,
+    rsp1: u64,
+    rsp2: u64,
+    __reserved2: u64 = 0,
+    ist1: u64,
+    ist2: u64,
+    ist3: u64,
+    ist4: u64,
+    ist5: u64,
+    ist6: u64,
+    ist7: u64,
+    __reserved3: u64 = 0,
+    __reserved4: u16 = 0,
+    iopb_offset: u16,
+};
+
+comptime {
+    std.debug.assert(@offsetOf(TSS, "rsp0") == 0x04);
+    std.debug.assert(@offsetOf(TSS, "ist1") == 0x24);
+    std.debug.assert(@offsetOf(TSS, "iopb_offset") == 0x66);
+}
+
 pub const Segment = enum(u8) {
-    kernel_code = 0x08,
-    kernel_data = 0x10,
-    user_code = 0x18 | 3,
-    user_data = 0x20 | 3,
+    kernel_code = @intFromEnum(Selector.kernel_code),
+    kernel_data = @intFromEnum(Selector.kernel_data),
+    user_code = @intFromEnum(Selector.user_code) | 3,
+    user_data = @intFromEnum(Selector.user_data) | 3, // or 3 for ring 3
 };
 
 pub const GDT = packed struct {
@@ -63,6 +108,16 @@ pub const GDT = packed struct {
     kerenl_data: Entry,
     user_code: Entry,
     user_data: Entry,
+    tss_desc: Entry64,
+};
+
+pub const Selector = enum(u16) {
+    null = @offsetOf(GDT, "null_desc"),
+    kernel_code = @offsetOf(GDT, "kerenl_code"),
+    kernel_data = @offsetOf(GDT, "kerenl_data"),
+    user_code = @offsetOf(GDT, "user_code"),
+    user_data = @offsetOf(GDT, "user_data"),
+    tss = @offsetOf(GDT, "tss_desc"),
 };
 
 var gdt = GDT{
@@ -107,7 +162,11 @@ var gdt = GDT{
         .present = true,
         .privilage_level = 3,
     }, .{ .bit64 = false, .granularity = 1 }),
+
+    .tss_desc = undefined, // loaded at runtime
 };
+
+var tss = std.mem.zeroes(TSS);
 
 var descriptor = Descriptor{
     .limit = @sizeOf(@TypeOf(gdt)) - 1,
@@ -118,7 +177,22 @@ pub fn init() !void {
     log.debug("Initializing GDT (64 bit)", .{});
     descriptor.base = @intFromPtr(&gdt);
 
+    tss.rsp0 = @intFromPtr(&boot.kernel_stack) + boot.KERNEL_STACK_SIZE;
+    gdt.tss_desc = Entry64.init(@sizeOf(TSS) - 1, @intFromPtr(&tss), .{
+        .accessed = true,
+        .read_write = 0,
+        .direction_conforming = 0,
+        .executable = true,
+        .descriptor_type = 0,
+        .present = true,
+    }, .{});
+
     try loadGDT();
+
+    asm volatile ("ltr %[sel]"
+        :
+        : [sel] "r" (@intFromEnum(Selector.tss)),
+    );
 }
 
 pub extern fn asm_loadGDT(desc: *const Descriptor) void;

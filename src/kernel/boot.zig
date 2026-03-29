@@ -49,8 +49,8 @@ export var kernel_addr_request: limine.KernelAddressRequest linksection(".limine
 // Boot stack
 // ─────────────────────────────────────────────────────────────────────────────
 
-const KERNEL_STACK_SIZE: usize = 1024 * 1024; // 1 MiB
-export var kernel_stack: [KERNEL_STACK_SIZE]u8 align(16) linksection(".bss") = undefined;
+pub const KERNEL_STACK_SIZE: usize = 1024 * 1024; // 1 MiB
+pub export var kernel_stack: [KERNEL_STACK_SIZE]u8 align(16) linksection(".bss") = undefined;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Linker script variables
