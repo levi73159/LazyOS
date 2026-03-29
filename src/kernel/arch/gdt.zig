@@ -42,39 +42,33 @@ pub const Entry = packed struct(u64) {
     }
 };
 
-const TSS = packed struct {
-    _reserved0: u32 = 0,
-    rsp0: u64 = 0,
-    rsp1: u64 = 0,
-    rsp2: u64 = 0,
-    _reserved1: u64 = 0,
-    ist1: u64 = 0,
-    ist2: u64 = 0,
-    ist3: u64 = 0,
-    ist4: u64 = 0,
-    ist5: u64 = 0,
-    ist6: u64 = 0,
-    ist7: u64 = 0,
-    _reserved2: u64 = 0,
-    _reserved3: u16 = 0,
-    iopb_offset: u16 = 0,
-};
-
-var tss: TSS align(16) = TSS{};
-const tss_limit: u32 = @sizeOf(TSS) - 1;
-
 pub const Selector = enum(u16) {
     null = 0,
     kernel_code = 0x08,
     kernel_data = 0x10,
-    tss = 0x18,
+    user_code = 0x18,
+    user_data = 0x20,
 };
 
-var gdt = [_]Entry{
-    Entry.nullDescriptor(),
+pub const Segment = enum(u8) {
+    kernel_code = 0x08,
+    kernel_data = 0x10,
+    user_code = 0x18 | 3,
+    user_data = 0x20 | 3,
+};
 
-    // kernel 64 bit code segment
-    Entry.init(0xFFFFF, 0, .{
+pub const GDT = packed struct {
+    null_desc: Entry,
+    kerenl_code: Entry,
+    kerenl_data: Entry,
+    user_code: Entry,
+    user_data: Entry,
+};
+
+var gdt = GDT{
+    .null_desc = Entry.nullDescriptor(),
+
+    .kerenl_code = Entry.init(0xFFFFF, 0, .{
         .accessed = false,
         .read_write = 1,
         .direction_conforming = 0,
@@ -84,8 +78,7 @@ var gdt = [_]Entry{
         .present = true,
     }, .{ .bit64 = true, .granularity = 1 }),
 
-    // kernel 64 bit data segment
-    Entry.init(0xFFFFF, 0, .{
+    .kerenl_data = Entry.init(0xFFFFF, 0, .{
         .accessed = false,
         .read_write = 1,
         .direction_conforming = 0,
@@ -93,6 +86,26 @@ var gdt = [_]Entry{
         .descriptor_type = 1,
         .privilage_level = 0,
         .present = true,
+    }, .{ .bit64 = false, .granularity = 1 }),
+
+    .user_code = Entry.init(0xFFFFF, 0, .{
+        .accessed = false,
+        .read_write = 1,
+        .direction_conforming = 0,
+        .executable = true,
+        .descriptor_type = 1,
+        .present = true,
+        .privilage_level = 3,
+    }, .{ .bit64 = true, .granularity = 1 }),
+
+    .user_data = Entry.init(0xFFFFF, 0, .{
+        .accessed = false,
+        .read_write = 1,
+        .direction_conforming = 0,
+        .executable = false,
+        .descriptor_type = 1,
+        .present = true,
+        .privilage_level = 3,
     }, .{ .bit64 = false, .granularity = 1 }),
 };
 
@@ -103,7 +116,7 @@ var descriptor = Descriptor{
 
 pub fn init() !void {
     log.debug("Initializing GDT (64 bit)", .{});
-    descriptor.base = @intFromPtr(&gdt[0]);
+    descriptor.base = @intFromPtr(&gdt);
 
     try loadGDT();
 }
@@ -113,7 +126,6 @@ pub extern fn asm_loadGDT(desc: *const Descriptor) void;
 fn loadGDT() !void {
     @import("std").log.debug("Loading GDT", .{});
     asm_loadGDT(&descriptor);
-    @import("std").log.debug("Loading GDT", .{});
 
     asm volatile (
         \\pushq $0x08
@@ -122,7 +134,6 @@ fn loadGDT() !void {
         \\lretq
         \\1:
         ::: .{ .rax = true });
-    @import("std").log.debug("Loading GDT", .{});
 
     // reload data segment
     asm volatile (
@@ -133,7 +144,6 @@ fn loadGDT() !void {
         \\mov %%ax, %%gs
         \\mov %%ax, %%ss
     );
-    @import("std").log.debug("Loading GDT", .{});
 
     if (builtin.mode == .Debug) {
         // quick sanity check on ds and es
