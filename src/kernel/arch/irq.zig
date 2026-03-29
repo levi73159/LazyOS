@@ -28,10 +28,10 @@ fn irqHandler(frame: *InterruptFrame) void {
         std.debug.panic("IRQ {d} out of range, 0-{d}", .{ irq, handlers.len - 1 });
     }
     // Spurious IRQ from master (IRQ 7)
-    if (irq == 7 and !pic.isSpurious(false)) return;
+    if (irq == 7 and pic.isSpurious(false)) return;
 
     // Spurious IRQ from slave (IRQ 15) — still need to EOI master
-    if (irq == 15 and !pic.isSpurious(true)) {
+    if (irq == 15 and pic.isSpurious(true)) {
         pic.sendEndOfInterrupt(7); // EOI to master only
         return;
     }

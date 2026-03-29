@@ -33,14 +33,26 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     // const kernel_start: usize = @intFromPtr(&__kernel_start);
     // const kernel_end: usize = @intFromPtr(&__kernel_end);
     // arch.paging.init(kernel_start, kernel_end);
+    const framebuffer = mb.getFramebuffer(u32);
+    const screen = Screen.init(framebuffer, mb.framebuffer);
+
     var serial_writer = serial.SerialWriter.init(.COM1);
     if (serial_writer != null) {
         const writer = &serial_writer.?.writer;
         console.initSerial(writer);
     }
+    console.init(screen);
+    console.clear();
+    console.logDebug(true);
+    console.echoToHost(true); // echo all prints to the host
+
+    if (serial_writer == null) {
+        console.write("No serial port found\n");
+    }
 
     console.dbg("Init Kernel\n");
     log.debug("Initializing kernel components...\n", .{});
+
     hal.earlyInit();
 
     log.debug("Kerenl location: physical 0x{x} virtual 0x{x}", .{ mb.kernel.phys_addr, mb.kernel.virt_addr });
@@ -49,6 +61,7 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     paging.init(mb);
     heap.init();
 
+    console.logDebug(false);
     pit.init(100);
     hal.init();
     kb.init();
@@ -57,23 +70,15 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
 
     @import("pci.zig").emunerate();
 
-    const framebuffer = mb.getFramebuffer(u32);
-
     const allocator = heap.allocator();
 
-    const screen = Screen.init(framebuffer, mb.framebuffer);
     screen.use_double_buffer = true;
     screen.createDoubleBuffer() catch |err| {
         log.err("Failed to create double buffer: {s}", .{@errorName(err)});
+        screen.use_double_buffer = false; // fall back to dirrect rendering
     };
-
-    console.init(screen);
+    console.logDebug(false);
     console.clear();
-    console.echoToHost(true); // echo all prints to the host
-
-    if (serial_writer == null) {
-        console.write("No serial port found\n");
-    }
 
     blk: {
         const ahci = @import("disks/ahci.zig");
@@ -85,7 +90,7 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
         Disk.loadAHCIPorts(&ports_buf, ports.len);
     }
 
-    var disk = Disk.init(2) catch |err| {
+    var disk = Disk.init(0) catch |err| {
         log.err("Failed to init disk: {s}", .{@errorName(err)});
         io.hltNoInt();
     };

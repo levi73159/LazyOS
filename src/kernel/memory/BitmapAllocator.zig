@@ -35,8 +35,6 @@ usable_memory: u64,
 start: u64,
 
 pub fn init(mmap: []*bootinfo.MemoryMapEntry, hddm_offset: u64, range: PhysRange) Self {
-    log.debug("Initializing PMEM", .{});
-
     // find the highest address in memory to size the bitmap
     var highest: u64 = 0;
     for (mmap) |entry| {
@@ -51,18 +49,6 @@ pub fn init(mmap: []*bootinfo.MemoryMapEntry, hddm_offset: u64, range: PhysRange
 
     log.debug("Total pages: {d}", .{total_pages});
     var bitmap: []u8 = undefined;
-    // find usable memory large enough to hold bitmap itself
-    for (mmap) |entry| {
-        log.debug("Entry base: 0x{x}, length: 0x{x}, type: {s}", .{ entry.base, entry.length, @tagName(entry.type) });
-        // find usable memory large enough to hold bitmap itself inside the range
-        if (entry.type == .usable and entry.length >= bitmap_size and range.inside(entry.base)) {
-            bitmap = @as([*]u8, @ptrFromInt(entry.base + hddm_offset))[0..bitmap_size];
-            @memset(bitmap, 0xFF);
-            break;
-        }
-    } else {
-        @panic("Couldn't find usable memory large enough to hold the bitmap");
-    }
     var usable_memory: u64 = 0;
 
     // bitmap placement — find usable entry that overlaps range and is large enough

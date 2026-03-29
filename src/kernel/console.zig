@@ -24,6 +24,8 @@ var initialized: bool = false;
 var echo_to_host: bool = false;
 var no_swap: bool = false;
 
+var log_debug: bool = false; // set true if we want to print debug messages to CON
+
 const pixels_per_scanline = 32;
 
 pub var serial: ?*std.Io.Writer = null;
@@ -32,6 +34,10 @@ pub fn init(_screen: *Screen) void {
     std.log.debug("Initializing console", .{});
     screen = _screen;
     initialized = true;
+}
+
+pub fn isInitialized() bool {
+    return initialized;
 }
 
 pub fn initSerial(serial_writer: *std.Io.Writer) void {
@@ -289,7 +295,7 @@ const DbgVtable = getVTable(dbg);
 var con_writer = std.Io.Writer{ .buffer = &.{}, .vtable = &ConVtable };
 var dbg_writer = std.Io.Writer{ .buffer = &.{}, .vtable = &DbgVtable };
 
-fn writer() *std.Io.Writer {
+pub fn writer() *std.Io.Writer {
     return &con_writer;
 }
 
@@ -442,6 +448,12 @@ pub fn logFn(
     w.writeAll(prefix) catch unreachable;
     w.print(format, args) catch unreachable;
     w.writeAll(reset ++ "\r\n") catch unreachable;
+
+    if (log_debug and (level == .debug or scope == .host)) {
+        con_writer.writeAll(prefix) catch unreachable;
+        con_writer.print(format, args) catch unreachable;
+        con_writer.writeAll(reset ++ "\r\n") catch unreachable;
+    }
 }
 
 pub fn noSwap() void {
@@ -457,4 +469,8 @@ fn swapBuffers() void {
     if (!no_swap) {
         screen.swapBuffers();
     }
+}
+
+pub fn logDebug(enabled: bool) void {
+    log_debug = enabled;
 }

@@ -99,6 +99,16 @@ export fn boot_init_stage2() callconv(.c) noreturn {
         .size = @intFromPtr(&kernel_size),
     } });
 
+    // Draw a red stripe directly — no abstraction, no page tables, no heap
+    // If you see this, framebuffer works
+    const pixels: [*]u32 = @ptrCast(@alignCast(fb.address));
+    const stride = fb.pitch / 4;
+    for (0..50) |y| {
+        for (0..fb.width) |x| {
+            pixels[y * stride + x] = 0x00FF0000; // red
+        }
+    }
+
     main._start(mb);
 
     while (true) {

@@ -384,7 +384,7 @@ fn sendCommandATAPI(table: *CommandTable, lba: u48, buf: []Sector) void {
 
     // 12-byte scsi READ(12) command
     const lba32: u32 = @intCast(lba);
-    const count32: u32 = @intCast(buf.len);
+    const count32: u32 = @intCast(buf.len / 4);
 
     const packet: *scsi.Read12Packet = @ptrCast(@alignCast(&table.atapi_cmd));
     packet.* = .init(lba32, count32);

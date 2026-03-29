@@ -56,8 +56,6 @@ pub const DiskInitError = error{
 } || DiskError;
 
 pub fn init(disk: u8) DiskInitError!Self {
-    if (disk < 2) return initLegacy(disk);
-
     if (disk >= ports.len) return DiskInitError.PortNotFound;
     if (ports.get(disk)) |port| {
         var drive_info: [256]u16 = undefined;

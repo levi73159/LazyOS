@@ -128,13 +128,17 @@ pub fn sendEndOfInterrupt(irq: u8) void {
 
 pub fn readIRQRequestRegister() u16 {
     io.outb(pic1_command_port, cmd_read_irr);
+    io.wait();
     io.outb(pic2_command_port, cmd_read_irr);
+    io.wait();
     return io.inb(pic1_data_port) | (@as(u16, io.inb(pic2_data_port)) << 8);
 }
 
 pub fn readInServiceRegister() u16 {
     io.outb(pic1_command_port, cmd_read_isr);
+    io.wait();
     io.outb(pic2_command_port, cmd_read_isr);
+    io.wait();
     return io.inb(pic1_data_port) | (@as(u16, io.inb(pic2_data_port)) << 8);
 }
 
