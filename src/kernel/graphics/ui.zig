@@ -57,21 +57,11 @@ pub const Texture = struct {
 var textures: TextureMap = undefined;
 
 /// Loads textures from a folder (bmp only rn) and stores them in memroy (heap) for later use
-pub fn init(fs: *FS, folder: []const u8, allocator: std.mem.Allocator) !void {
+pub fn init(allocator: std.mem.Allocator) !void {
     textures = TextureMap.init(allocator);
 
-    var it = try fs.it(folder);
-    while (try it.next()) |entry| {
-        log.debug("entry: {s}", .{entry.name});
-        if (entry.info.type != .file) continue; // ignores directories
-        if (std.mem.endsWith(u8, entry.name, ".BMP")) {
-            try loadBMP(allocator, fs, entry, folder);
-        } else if (std.mem.endsWith(u8, entry.name, ".TGA")) {
-            try loadTGA(allocator, fs, entry, folder);
-        } else {
-            log.warn("Unknown file type: {s}", .{entry.name});
-        }
-    }
+    try loadTGAData(allocator, "CURSOR.TGA", @embedFile("textures/cursor.tga"));
+    try loadTGAData(allocator, "POWER.TGA", @embedFile("textures/power.tga"));
 }
 
 pub fn deinit() void {
@@ -146,6 +136,10 @@ fn loadTGA(allocator: std.mem.Allocator, fs: *FS, entry: FS.DirIterator.Entry, f
     defer allocator.free(data);
 
     log.debug("data read", .{});
+    try loadTGAData(allocator, entry.name, data);
+}
+
+fn loadTGAData(allocator: std.mem.Allocator, file_name: []const u8, data: []const u8) !void {
     const tga = try TGA.initTmp(data);
     const size = tga.data.len;
 
@@ -154,8 +148,8 @@ fn loadTGA(allocator: std.mem.Allocator, fs: *FS, entry: FS.DirIterator.Entry, f
     const memory = try allocator.alignedAlloc(u8, .of(Texture), true_size); // make sure it aligned to Texture
     errdefer allocator.free(memory);
 
-    const dot_index = std.mem.indexOf(u8, entry.name, ".") orelse entry.name.len;
-    const name = try allocator.dupe(u8, entry.name[0..dot_index]);
+    const dot_index = std.mem.indexOf(u8, file_name, ".") orelse file_name.len;
+    const name = try allocator.dupe(u8, file_name[0..dot_index]);
 
     const texture: *Texture = @ptrCast(@alignCast(memory.ptr));
     texture.* = Texture{

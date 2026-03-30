@@ -34,6 +34,10 @@ pub fn init(allocator: std.mem.Allocator) void {
     initialized = true;
 }
 
+pub inline fn isInitialized() bool {
+    return initialized;
+}
+
 pub fn drawLoop(screen: *Screen) void {
     if (!initialized) {
         @panic("Renderer not initialized");
@@ -67,6 +71,12 @@ pub fn drawLoop(screen: *Screen) void {
 
         if (state.update_listerner) |update| {
             update(screen, &state) catch |err| {
+                if (err == error.OutOfMemory) {
+                    @panic("Out of memory");
+                }
+                if (err == error.Exit) {
+                    return;
+                }
                 log.err("Failed to update: {}", .{err});
                 continue;
             };

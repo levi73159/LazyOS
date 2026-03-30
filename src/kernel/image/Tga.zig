@@ -14,7 +14,7 @@ const Header = extern struct {
     image_descriptor: u8, // bit 5 = top-down flag
 };
 
-data: []u8,
+data: []const u8,
 width: u32,
 height: u32,
 bits_per_pixel: u16,
@@ -30,7 +30,7 @@ pub fn init(file_data: []u8, allocator: std.mem.Allocator) !Self {
 }
 
 // NOTE: the buffer passed to it must stay alive as long as the image is alive
-pub fn initTmp(file_data: []u8) !Self {
+pub fn initTmp(file_data: []const u8) !Self {
     std.log.debug("Initializing TGA", .{});
     if (file_data.len < @sizeOf(Header)) return error.TooSmall;
 

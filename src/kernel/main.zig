@@ -97,17 +97,10 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
         break :blk null;
     };
 
-    // init file system on disk
-    if (disk) |*d| {
-        const fs = FileSystem.init(d) catch |err| {
-            log.err("Failed to init file system: {s}", .{@errorName(err)});
-            io.hltNoInt();
-        };
-        FileSystem.setGlobal(fs);
-
-        ui.init(FileSystem.getGlobal(), "ui", allocator) catch |err| {
-            log.err("Failed to init UI Components: {s}", .{@errorName(err)});
-            io.hltNoInt();
+    blk: {
+        ui.init(allocator) catch |err| {
+            log.err("Failed to init UI: {s}", .{@errorName(err)});
+            break :blk;
         };
 
         renderer.init(allocator);
@@ -121,6 +114,15 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
 
         renderer.subscribeToUpdates(&update);
     }
+
+    // init file system on disk
+    if (disk) |*d| {
+        const fs = FileSystem.init(d) catch |err| {
+            log.err("Failed to init file system: {s}", .{@errorName(err)});
+            io.hltNoInt();
+        };
+        FileSystem.setGlobal(fs);
+    } else {}
 
     const cpu = arch.CPU.init() catch |err| blk: {
         log.err("Failed to get the CPU: {s}", .{@errorName(err)});
@@ -177,5 +179,9 @@ fn update(screen: *Screen, state: *renderer.State) anyerror!void {
             arch.acpi.shutdown();
             return error.ShutdownFailed;
         }
+    }
+
+    if (kb.getKeyDown(.esc)) {
+        return error.Exit;
     }
 }

@@ -135,8 +135,9 @@ fn cat(s: *Shell, args: []const []const u8) anyerror!void {
     console.write(data);
 }
 
-fn gfx(s: *Shell, _: []const []const u8) anyerror!void {
-    if (s.fs == null) return error.UnableToFetchFileSystem;
-    const screen = @import("../graphics/Screen.zig").get();
-    @import("../graphics/renderer.zig").drawLoop(screen);
+fn gfx(_: *Shell, _: []const []const u8) anyerror!void {
+    const Screen = @import("../graphics/Screen.zig");
+    const renderer = @import("../graphics/renderer.zig");
+    if (!renderer.isInitialized()) return error.RendererNotInitialized;
+    renderer.drawLoop(Screen.get());
 }
