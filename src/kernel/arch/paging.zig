@@ -36,6 +36,8 @@ const PageFlags = struct {
     cache_disabled: bool = false,
     page_size: bool = false,
     execute_disable: bool = false,
+    global: bool = false,
+    pat: bool = false,
 
     pub const rw = PageFlags{ .present = true, .writeable = true };
 };
@@ -49,7 +51,9 @@ const PageEntry = packed struct(u64) {
     accessed: bool = false,
     dirty: bool = false, // reserved in non-page-sized entries
     page_size: bool = false,
-    avl: u4 = 0, // available to software, not reserved
+    global: bool = false,
+    avl: u2 = 0,
+    pat: bool = false,
     address: u40 = 0,
     __reserved2: u11 = 0,
     execute_disable: bool = false,
@@ -65,6 +69,8 @@ const PageEntry = packed struct(u64) {
             .page_size = flags.page_size,
             .execute_disable = flags.execute_disable,
             .address = @truncate(address >> 12),
+            .global = flags.global,
+            .pat = flags.pat,
         };
     }
 
@@ -145,7 +151,9 @@ fn mapFramebuffer(fb: bootinfo.Framebuffer) void {
     while (offset < size) : (offset += PAGE_SIZE) {
         mapPage(virt + offset, phys + offset, .{
             .present = true,
-            .write_through = true,
+            .write_through = false,
+            .cache_disabled = false,
+            .pat = true,
             .writeable = true,
             .execute_disable = true,
         });

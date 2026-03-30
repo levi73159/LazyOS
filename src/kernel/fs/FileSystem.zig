@@ -98,6 +98,10 @@ pub fn getGlobal() *Self {
     return &global.?;
 }
 
+pub fn isInitialized() bool {
+    return global != null;
+}
+
 fn convertToError(err: anyerror) Error {
     inline for (@typeInfo(Error).error_set.?) |f| {
         if (err == @field(Error, f.name)) return @field(Error, f.name);

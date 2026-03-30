@@ -3,8 +3,13 @@ const io = @import("io.zig");
 
 const c = @cImport({
     @cInclude("uacpi/uacpi.h");
+    @cInclude("uacpi/acpi.h");
     @cInclude("uacpi/sleep.h");
     @cInclude("uacpi/event.h");
+    @cInclude("uacpi/namespace.h");
+    @cInclude("uacpi/sleep.h");
+    @cInclude("uacpi/tables.h");
+    @cInclude("uacpi/types.h");
 });
 
 const log = std.log.scoped(._acpi);
@@ -22,6 +27,10 @@ pub fn init() !void {
     try check(c.uacpi_namespace_load());
     try check(c.uacpi_namespace_initialize());
     try check(c.uacpi_finalize_gpe_initialization());
+
+    check(c.uacpi_install_fixed_event_handler(c.UACPI_FIXED_EVENT_POWER_BUTTON, &onShutdown, null)) catch {
+        log.err("ACPI failed: power button event install error", .{});
+    };
 }
 
 pub fn shutdown() void {
@@ -39,7 +48,14 @@ pub fn shutdown() void {
 
 pub fn reboot() void {
     io.cli();
+    defer io.sti();
     check(c.uacpi_reboot()) catch {
         io.outb(0x64, 0xfe); // fallback on keyboard controller reset
     };
+}
+
+fn onShutdown(_: ?*anyopaque) callconv(.c) c.uacpi_interrupt_ret {
+    // TODO: clean up of resources and safe stuff or cancel shutdown is needed
+    shutdown();
+    return c.UACPI_INTERRUPT_HANDLED;
 }

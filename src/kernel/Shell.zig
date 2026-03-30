@@ -10,14 +10,14 @@ const Self = @This();
 const global_commands = @import("shell/commands.zig").commands;
 
 cwd: []const u8,
-fs: *FS,
+fs: ?*FS,
 prompt: []const u8 = "> ",
 internal_cmd_buffer: [1024]u8 = undefined,
 
 allocator: std.mem.Allocator,
 commands: []Command = &[_]Command{},
 
-pub fn init(allocator: std.mem.Allocator, fs: *FS) Self {
+pub fn init(allocator: std.mem.Allocator, fs: ?*FS) Self {
     return Self{
         .allocator = allocator,
         .cwd = "/",

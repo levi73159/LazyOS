@@ -67,6 +67,7 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     kb.init();
     mouse.init();
     scheduler.init();
+    console.logDebug(true);
 
     @import("pci.zig").emunerate();
 
@@ -77,8 +78,9 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
         log.err("Failed to create double buffer: {s}", .{@errorName(err)});
         screen.use_double_buffer = false; // fall back to dirrect rendering
     };
-    console.logDebug(false);
-    console.clear();
+    if (screen.use_double_buffer) {
+        console.clear();
+    }
 
     blk: {
         const ahci = @import("disks/ahci.zig");
@@ -90,33 +92,35 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
         Disk.loadAHCIPorts(&ports_buf, ports.len);
     }
 
-    var disk = Disk.init(0) catch |err| {
+    var disk: ?Disk = Disk.init(2) catch |err| blk: {
         log.err("Failed to init disk: {s}", .{@errorName(err)});
-        @panic("Failed to init disk");
+        break :blk null;
     };
 
-    // init file system on disk 1 (boot disk)
-    const fs = FileSystem.init(&disk) catch |err| {
-        log.err("Failed to init file system: {s}", .{@errorName(err)});
-        io.hltNoInt();
-    };
-    FileSystem.setGlobal(fs);
+    // init file system on disk
+    if (disk) |*d| {
+        const fs = FileSystem.init(d) catch |err| {
+            log.err("Failed to init file system: {s}", .{@errorName(err)});
+            io.hltNoInt();
+        };
+        FileSystem.setGlobal(fs);
 
-    ui.init(FileSystem.getGlobal(), "ui", allocator) catch |err| {
-        log.err("Failed to init UI Components: {s}", .{@errorName(err)});
-        io.hltNoInt();
-    };
+        ui.init(FileSystem.getGlobal(), "ui", allocator) catch |err| {
+            log.err("Failed to init UI Components: {s}", .{@errorName(err)});
+            io.hltNoInt();
+        };
 
-    renderer.init(allocator);
-    renderer.addElement(.initNamed(.{ .relative = .{
-        .x = -10,
-        .y = 10,
-        .anchor = .top_right,
-    } }, "POWER")) catch |err| {
-        log.err("Failed to add power button: {s}", .{@errorName(err)});
-    };
+        renderer.init(allocator);
+        renderer.addElement(.initNamed(.{ .relative = .{
+            .x = -10,
+            .y = 10,
+            .anchor = .top_right,
+        } }, "POWER")) catch |err| {
+            log.err("Failed to add power button: {s}", .{@errorName(err)});
+        };
 
-    renderer.subscribeToUpdates(&update);
+        renderer.subscribeToUpdates(&update);
+    }
 
     const cpu = arch.CPU.init() catch |err| blk: {
         log.err("Failed to get the CPU: {s}", .{@errorName(err)});
@@ -125,6 +129,7 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     _ = cpu;
 
     console.echoToHost(false);
+    console.logDebug(false);
 
     io.sti();
     mainWrapper();
@@ -156,7 +161,7 @@ fn main(_: *Screen) !void {
     console.print("Optimize mode: {s}\n", .{@tagName(builtin.mode)});
     console.print("Initializing shell...\n", .{});
 
-    var shell = Shell.init(heap.allocator(), FileSystem.getGlobal());
+    var shell = Shell.init(heap.allocator(), if (FileSystem.isInitialized()) FileSystem.getGlobal() else null);
     shell.inputLoop() catch |err| {
         std.log.scoped(.host).err("Shell failed: {s}", .{@errorName(err)});
     };

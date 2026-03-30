@@ -82,6 +82,7 @@ pub fn pwd(s: *Shell, _: []const []const u8) anyerror!void {
 }
 
 pub fn cd(s: *Shell, args: []const []const u8) anyerror!void {
+    if (s.fs == null) return error.UnableToFetchFileSystem;
     const old = s.cwd;
     errdefer s.cwd = old;
     if (args.len == 0) {
@@ -92,7 +93,7 @@ pub fn cd(s: *Shell, args: []const []const u8) anyerror!void {
         s.cwd = cwd;
     }
 
-    _ = s.fs.stat(s.cwd) catch |err| {
+    _ = s.fs.?.stat(s.cwd) catch |err| {
         if (err == error.FileNotFound) {
             console.print("No such directory: {s}\n", .{s.cwd});
             s.cwd = old;
@@ -107,9 +108,10 @@ pub fn cd(s: *Shell, args: []const []const u8) anyerror!void {
 }
 
 fn ls(s: *Shell, args: []const []const u8) anyerror!void {
+    if (s.fs == null) return error.UnableToFetchFileSystem;
     const path = if (args.len == 0) s.cwd else try s.combinePath(args[0]);
 
-    const fs = s.fs;
+    const fs = s.fs.?;
     var it = try fs.it(path);
     while (try it.next()) |entry| {
         console.print("{s}\n", .{entry.name});
@@ -117,13 +119,14 @@ fn ls(s: *Shell, args: []const []const u8) anyerror!void {
 }
 
 fn cat(s: *Shell, args: []const []const u8) anyerror!void {
+    if (s.fs == null) return error.UnableToFetchFileSystem;
     if (args.len == 0) {
         console.print("Usage: cat <file>\n", .{});
         return;
     }
     const path = try s.combinePath(args[0]);
 
-    const fs = s.fs;
+    const fs = s.fs.?;
     const file = try fs.open(path);
     defer file.close();
 
@@ -132,7 +135,8 @@ fn cat(s: *Shell, args: []const []const u8) anyerror!void {
     console.write(data);
 }
 
-fn gfx(_: *Shell, _: []const []const u8) anyerror!void {
+fn gfx(s: *Shell, _: []const []const u8) anyerror!void {
+    if (s.fs == null) return error.UnableToFetchFileSystem;
     const screen = @import("../graphics/Screen.zig").get();
     @import("../graphics/renderer.zig").drawLoop(screen);
 }

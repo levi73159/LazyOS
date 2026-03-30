@@ -22,9 +22,10 @@ pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, ret_addr: ?usize) nor
 
     if (console.isInitialized()) {
         console.setFgBg(.white, .red);
-        console.print("!!! KERNEL PANIC !!!\n{s}\n", .{msg});
-        console.print("return address: {?x}\n", .{ret_addr});
-        symbols.printStackTrace(rbp, console.writer()) catch {};
+        const writer = console.writer();
+        writer.print("!!! KERNEL PANIC !!!\n{s}\n", .{msg}) catch {};
+        writer.print("return address: {?x}\n", .{ret_addr}) catch {};
+        symbols.printStackTrace(rbp, writer) catch {};
     }
 
     io.hltNoInt();

@@ -112,8 +112,9 @@ fn probeAndRebase(abar: *volatile hba.Mem, allocator: std.mem.Allocator, port_bu
         pi >>= 1;
         i += 1;
     }) {
-        if (pi & 1 == 0) continue;
         port_buf[i] = null;
+        if (pi & 1 == 0)
+            continue;
 
         if (!waitForLinkUp(&abar.ports[i])) {
             log.info("No drive found at port {d}", .{i});
