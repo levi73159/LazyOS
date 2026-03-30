@@ -28,6 +28,12 @@ var log_debug: bool = false; // set true if we want to print debug messages to C
 
 const pixels_per_scanline = 32;
 
+var dirty_min_x: u16 = 0;
+var dirty_min_y: u16 = 0;
+var dirty_max_x: u16 = 0;
+var dirty_max_y: u16 = 0;
+var dirty_valid: bool = false;
+
 pub var serial: ?*std.Io.Writer = null;
 
 pub fn init(_screen: *Screen) void {
@@ -53,6 +59,7 @@ pub fn clear() void {
     terminal_row = 0;
     terminal_column = 0;
     drawCursor();
+    screen.swapBuffers();
 }
 
 pub fn drawChar(char_index: u8, x: u16, y: u16) void {
@@ -65,17 +72,40 @@ pub fn drawChar(char_index: u8, x: u16, y: u16) void {
 
     const base_x: u16 = x * width;
     const base_y: u16 = y * height;
+    const x0 = base_x;
+    const y0 = base_y;
+    const x1 = base_x + width;
+    const y1 = base_y + height;
+
+    if (!dirty_valid) {
+        dirty_min_x = x0;
+        dirty_min_y = y0;
+        dirty_max_x = x1;
+        dirty_max_y = y1;
+        dirty_valid = true;
+    } else {
+        dirty_min_x = @min(dirty_min_x, x0);
+        dirty_min_y = @min(dirty_min_y, y0);
+        dirty_max_x = @max(dirty_max_x, x1);
+        dirty_max_y = @max(dirty_max_y, y1);
+    }
     var col: u4 = 0;
     var row: u8 = 0;
+
+    var buf = screen.getBuffer();
+    const stride = screen.stride;
     while (row < height) : ({
         row += 1;
         col = 0;
     }) {
+        const row_bits = font.font_data[char_start + row];
         while (col < width) : (col += 1) {
             const x_pos: u16 = base_x + col;
             const y_pos: u16 = base_y + row;
-            const value = font.font_data[char_start + row] & @as(u16, 1) << (width - col);
-            screen.setPixel(x_pos, y_pos, if (value == 0) terminal_background else terminal_foreground);
+            const index = y_pos * stride + x_pos;
+            const value = row_bits & @as(u16, 1) << (width - col);
+            const color = if (value == 0) terminal_background else terminal_foreground;
+            buf[index] = color.get();
         }
     }
 }
@@ -154,6 +184,7 @@ pub fn complete() void {
 }
 
 pub fn write(data: []const u8) void {
+    noSwap();
     var i: usize = 0;
     var buf: [4]u8 = undefined;
     var ib: usize = 0;
@@ -204,7 +235,7 @@ pub fn write(data: []const u8) void {
         i += 1;
     }
 
-    complete();
+    swap();
 }
 
 pub fn dbg(data: []const u8) void {
@@ -423,6 +454,10 @@ fn scroll() void {
     const last_row_start = total - pixels_to_scroll;
     @memset(buf[last_row_start..total], terminal_background.get());
 
+    dirty_min_x = 0;
+    dirty_min_y = 0;
+    dirty_max_x = @intCast(screen.width);
+    dirty_max_y = @intCast(screen.height);
     swapBuffers();
 }
 
@@ -465,12 +500,28 @@ pub fn noSwap() void {
 
 pub fn swap() void {
     no_swap = false;
-    screen.swapBuffers();
+    if (dirty_valid) {
+        const width = dirty_max_x - dirty_min_x;
+        const height = dirty_max_y - dirty_min_y;
+
+        screen.swapBuffersRegion(dirty_min_x, dirty_min_y, width, height);
+
+        dirty_valid = false;
+    } else {
+        screen.swapBuffers();
+    }
 }
 
 fn swapBuffers() void {
     if (!no_swap) {
-        screen.swapBuffers();
+        if (dirty_valid) {
+            const width = dirty_max_x - dirty_min_x;
+            const height = dirty_max_y - dirty_min_y;
+
+            screen.swapBuffersRegion(dirty_min_x, dirty_min_y, width, height);
+
+            dirty_valid = false;
+        }
     }
 }
 

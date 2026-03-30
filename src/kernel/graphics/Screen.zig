@@ -93,6 +93,16 @@ pub fn setPixel32(self: *Self, x: u32, y: u32, color: u32) void {
     self.getBuffer()[index] = color;
 }
 
+pub inline fn setPixelFast(self: *Self, x: u32, y: u32, color: Color) void {
+    const index = y * self.stride + x;
+    self.getBuffer()[index] = color.get();
+}
+
+pub inline fn setPixelFast32(self: *Self, x: u32, y: u32, color: u32) void {
+    const index = y * self.stride + x;
+    self.getBuffer()[index] = color;
+}
+
 pub fn drawRect(self: *Self, x: u32, y: u32, width: u32, height: u32, color: Color) void {
     var i: u32 = 0;
     while (i < height) : (i += 1) {
@@ -199,6 +209,28 @@ pub fn swapBuffers(self: *Self) void {
 
     if (self.use_double_buffer) {
         @memcpy(self.buffer, self.double_buffer.?);
+    }
+}
+
+pub fn swapBuffersRegion(self: *Self, x: u32, y: u32, width: u32, height: u32) void {
+    const flags = io.disableInterrupts();
+    defer io.restoreFlags(flags);
+
+    if (!self.use_double_buffer) return;
+
+    const stride = self.stride;
+    const front = self.buffer;
+    const back = self.double_buffer.?;
+
+    var row: u32 = 0;
+    while (row < height) : (row += 1) {
+        const src_start = (y + row) * stride + x;
+        const dst_start = src_start;
+
+        const src = back[src_start .. src_start + width];
+        const dst = front[dst_start .. dst_start + width];
+
+        @memcpy(dst, src);
     }
 }
 
