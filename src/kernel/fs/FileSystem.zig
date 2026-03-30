@@ -17,7 +17,7 @@ pub const Handle = struct {
     opened: bool = false,
 };
 
-pub const FileSysetmType = enum { iso9660 }; // TODO: add fat32
+pub const FileSysetmType = enum { iso9660 }; // TODO: add fat32/fat16
 pub const FsVtable = struct {
     read_file: *const fn (fs: *AnyFs, handle: *Handle, buf: []u8) anyerror!usize,
     open_file: *const fn (fs: *AnyFs, path: []const u8) anyerror!Handle,

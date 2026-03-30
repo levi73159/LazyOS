@@ -4,9 +4,11 @@ const console = @import("console.zig");
 const acpi = @import("arch/acpi.zig");
 const heap = @import("memory/heap.zig");
 const bootinfo = @import("arch/bootinfo.zig");
+const symbols = @import("debug/symbols.zig");
 
 pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
     // display blue square in the bottom right corner
+    const rbp = @frameAddress();
 
     // white on red
     if (console.serial) |s| {
@@ -15,22 +17,16 @@ pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, ret_addr: ?usize) nor
 
         s.print("return address: {?x}\n", .{ret_addr}) catch {};
 
-        walkStack(s);
-
-        s.writeAll("\x1b[0m") catch {};
+        symbols.printStackTrace(rbp, s) catch {};
     }
 
     if (console.isInitialized()) {
         console.setFgBg(.white, .red);
         console.print("!!! KERNEL PANIC !!!\n{s}\n", .{msg});
         console.print("return address: {?x}\n", .{ret_addr});
-        walkStack(console.writer());
+        symbols.printStackTrace(rbp, console.writer()) catch {};
     }
 
-    console.dbg("\x1b[97;41m");
-    console.dbgPrint("!!! KERNEL PANIC !!!\n{s}\n", .{msg});
-
-    console.dbgPrint("return address: {?x}\n", .{ret_addr});
     io.hltNoInt();
 }
 

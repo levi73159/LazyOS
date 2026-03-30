@@ -92,7 +92,7 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
 
     var disk = Disk.init(0) catch |err| {
         log.err("Failed to init disk: {s}", .{@errorName(err)});
-        io.hltNoInt();
+        @panic("Failed to init disk");
     };
 
     // init file system on disk 1 (boot disk)

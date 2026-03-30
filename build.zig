@@ -22,7 +22,7 @@ pub fn build(b: *std.Build) void {
 
     const debug_int = b.option(bool, "interrupt", "turn on interrupt logging for qemu using the -d int option") orelse false;
     const display = b.option([]const u8, "display", "choose display backend") orelse "sdl,gl=on";
-    const optimize_mode: std.builtin.OptimizeMode = switch (b.release_mode) {
+    const optimize_mode: std.builtin.OptimizeMode = b.option(std.builtin.OptimizeMode, "optimize", "set the optimization mode") orelse switch (b.release_mode) {
         .off => std.builtin.OptimizeMode.ReleaseSafe,
         .any => std.builtin.OptimizeMode.ReleaseSafe,
         .fast => std.builtin.OptimizeMode.ReleaseFast,
@@ -37,6 +37,7 @@ pub fn build(b: *std.Build) void {
         .code_model = .kernel,
         .red_zone = false,
         .sanitize_thread = false,
+        .dwarf_format = .@"64",
         .pic = false,
         .strip = false,
         .error_tracing = true,

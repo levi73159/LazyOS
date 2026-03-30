@@ -226,7 +226,7 @@ pub fn getPageEntry(virt: u64) *const PageEntry {
     return &pt_table[va.pt_index];
 }
 
-pub fn getPageEntryMut(virt: u64) *PageEntry {
+fn getPageEntryMut(virt: u64) *PageEntry {
     const va = VirtualAddress.from(virt);
     const pdpt_table = getOrCreatePageTable(&pml4, va.pml4_index);
     const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index);

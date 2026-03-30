@@ -249,3 +249,24 @@ pub const FirmwareTypeRequest = extern struct {
     revision: u64 = 0,
     response: ?*FirmwareTypeResponse = null,
 };
+
+pub const KernelFile = extern struct {
+    revision: u64,
+    address: [*]u8,
+    size: u64,
+    // path, string, media_type, uuids … (not needed here)
+};
+
+pub const ExecutableFileResponse = extern struct {
+    revision: u64,
+    executable_file: *KernelFile,
+};
+
+pub const ExecutableFileRequest = extern struct {
+    id: [4]u64 = .{
+        COMMON_MAGIC[0],    COMMON_MAGIC[1],
+        0xad97e90e83f1ed67, 0x31eb5d1c5ff23b69,
+    },
+    revision: u64 = 0,
+    response: ?*ExecutableFileResponse = null,
+};

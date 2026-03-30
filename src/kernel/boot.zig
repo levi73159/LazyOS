@@ -45,9 +45,7 @@ export var hhdm_request: limine.HhdmRequest linksection(".limine_requests") = .{
 
 export var kernel_addr_request: limine.KernelAddressRequest linksection(".limine_requests") = .{};
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Boot stack
-// ─────────────────────────────────────────────────────────────────────────────
+export var kernel_file_request: limine.ExecutableFileRequest linksection(".limine_requests") = .{};
 
 pub const KERNEL_STACK_SIZE: usize = 1024 * 1024; // 1 MiB
 pub export var kernel_stack: [KERNEL_STACK_SIZE]u8 align(16) linksection(".bss") = undefined;
@@ -98,6 +96,11 @@ export fn boot_init_stage2() callconv(.c) noreturn {
         .virt_addr = kernel_addr_request.response.?.virtual_base,
         .size = @intFromPtr(&kernel_size),
     } });
+
+    if (kernel_file_request.response) |response| {
+        const file = response.executable_file;
+        @import("debug/symbols.zig").init(file.address[0..file.size]);
+    }
 
     // Draw a red stripe directly — no abstraction, no page tables, no heap
     // If you see this, framebuffer works

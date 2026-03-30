@@ -5,7 +5,7 @@ PHDRS
     text PT_LOAD;
     rodata PT_LOAD;
     data PT_LOAD;
-    debug PT_LOAD;
+    debug PT_NULL;
 }
 VIRT_START = 0xffffffff80000000;
 SECTIONS

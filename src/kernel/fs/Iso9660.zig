@@ -373,7 +373,6 @@ pub fn walk(self: *const Self, dir: *const DirEntry, ctx: anytype, callback: *co
 }
 
 // memory used here will be freed
-// TODO: add . and .. in paths
 pub fn find(self: *const Self, path: []const u8) !?DirEntry {
     return vfsFind(self.disk, &self.pvd, path);
 }

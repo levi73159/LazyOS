@@ -26,8 +26,7 @@ const HEAP_SIZE = PAGE_SIZE * HEAP_PAGES;
 const Fields = packed struct(usize) {
     is_free: bool = true,
     padding: u16,
-    block_padding: u8 = 0,
-    size: u39,
+    size: u47,
 
     pub fn init(size: usize, is_free: bool) Fields {
         return .{
@@ -38,16 +37,10 @@ const Fields = packed struct(usize) {
     }
 };
 
-const MAGIC: u64 = 0xDEADBEEFCAFEBABE;
 const Header = struct {
-    magic: if (is_debug) u64 else void = if (is_debug) MAGIC else {},
     flags: Fields, // does not include header of offset data header at start of data, only
     next: ?*Header,
-
-    fn verify(self: *const Header) void {
-        if (!is_debug) return;
-        if (self.magic != MAGIC) std.debug.panic("Header Corrupted at address {x}, magic: {x}, header: {f}", .{ @intFromPtr(self), self.magic, self });
-    }
+    block_padding: u16 = 0,
 
     fn trueSize(self: *const Header) usize {
         return self.flags.size + HEADER_SIZE + OFFSET_SIZE + self.padding();
@@ -165,7 +158,7 @@ fn growHeap(self: *Self, pages: usize) !*Header {
 }
 
 fn isClose(a: *const Header, b: *const Header) bool {
-    return @intFromPtr(a) + a.trueSize() + a.flags.block_padding == @intFromPtr(b);
+    return @intFromPtr(a) + a.trueSize() + a.block_padding == @intFromPtr(b);
 }
 
 fn splitBlock(self: *Self, block: *Header, size: usize) bool {
@@ -180,7 +173,7 @@ fn splitBlock(self: *Self, block: *Header, size: usize) bool {
     if (block.getSize() < required + MIN_SPLIT)
         return false;
 
-    block.flags.block_padding = @intCast(block_padding);
+    block.block_padding = @intCast(block_padding);
     const header: *Header = @ptrFromInt(aligned_addr);
 
     header.* = .{
@@ -192,9 +185,6 @@ fn splitBlock(self: *Self, block: *Header, size: usize) bool {
     block.setSize(size);
 
     self.last_free = header;
-
-    header.verify();
-    block.verify();
 
     return true;
 }
@@ -215,15 +205,13 @@ fn mergeBlockFoward(self: *Self, block: *Header) void {
             if (next_block == self.last_free) self.last_free = if (block.isFree()) block else next_block.next;
             if (next_block == self.end) self.end = block;
 
-            block.addSize(next_block.trueSize() + block.flags.block_padding);
-            block.flags.block_padding = next_block.flags.block_padding;
+            block.addSize(next_block.trueSize() + block.block_padding);
+            block.block_padding = next_block.block_padding;
             block.next = next_block.next;
         } else {
             break;
         }
     }
-
-    block.verify();
 }
 
 /// after calling this, block may be merged and will not be valid, therfore this functions returns the updated block header pointer
@@ -235,15 +223,14 @@ fn mergeBlockBackward(self: *Self, block: *Header) *Header {
             if (current == self.last_free) self.last_free = prev_block;
             if (current == self.end) self.end = prev_block;
 
-            prev_block.addSize(current.trueSize() + prev_block.flags.block_padding);
-            prev_block.flags.block_padding = current.flags.block_padding;
+            prev_block.addSize(current.trueSize() + prev_block.block_padding);
+            prev_block.block_padding = current.block_padding;
             prev_block.next = current.next;
             current = prev_block;
         } else {
             break;
         }
     }
-    current.verify();
 
     return current;
 }
@@ -308,8 +295,6 @@ pub fn allocate(self: *Self, size: usize, _alignment: mem.Alignment) ![*]u8 {
         break :blk block;
     };
 
-    block.verify();
-
     block.setFree(false);
 
     const block_addr = @intFromPtr(block);
@@ -327,7 +312,7 @@ pub fn allocate(self: *Self, size: usize, _alignment: mem.Alignment) ![*]u8 {
         // the block slightly oversized rather than wrapping and corrupting the free-list geometry.
         const excess = block.getSize() - size;
         if (excess <= std.math.maxInt(u8)) {
-            block.flags.block_padding += @intCast(excess);
+            block.block_padding += @intCast(excess);
             block.setSize(size);
         }
         // else: block stays oversized; wasteful but safe.
@@ -353,7 +338,6 @@ pub fn free(self: *Self, ptr: [*]u8) void {
 
     updated_block.addSize(updated_block.padding());
     updated_block.setPadding(0);
-    updated_block.verify();
 }
 
 fn _alloc(ctx: *anyopaque, size: usize, alignment: mem.Alignment, ret_addr: usize) ?[*]u8 {
@@ -438,7 +422,7 @@ pub fn dump(self: *Self, fliter: enum { free, used, all }, comptime print: fn (c
         print("Block {x} - {x}", .{ @intFromPtr(block), @intFromPtr(block) + block.trueSize() });
         print("  Size: {d}", .{block.getSize()});
         print("  True Size: {d}", .{block.trueSize()});
-        print("  Block Padding: {d}", .{block.flags.block_padding});
+        print("  Block Padding: {d}", .{block.block_padding});
         print("  Padding: {d}", .{block.padding()});
         print("  USER DATA ADDR: {x}", .{@intFromPtr(block) + HEADER_SIZE + OFFSET_SIZE + block.padding()});
         print("  Free: {}", .{block.isFree()});
