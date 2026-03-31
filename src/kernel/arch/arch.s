@@ -13,6 +13,11 @@ asm_loadGDT:
 
 .global interruptCommon
 interruptCommon:
+    testb $3, 24(%rsp)
+    jz .Lno_swapgs_entry
+    swapgs
+
+.Lno_swapgs_entry:
     push %rax
     push %rbx
     push %rcx
@@ -66,4 +71,10 @@ interruptCommon:
     pop %rbx
     pop %rax
     add $16, %rsp
+
+
+    testb $3, 8(%rsp)
+    jz .Lno_swapgs_exit
+    swapgs
+.Lno_swapgs_exit:
     iretq

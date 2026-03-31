@@ -3,48 +3,65 @@ const Command = @import("Command.zig");
 const console = @import("../console.zig");
 const acpi = @import("../arch/acpi.zig");
 const Shell = @import("../Shell.zig");
+const bootinfo = @import("../arch/bootinfo.zig");
 
-pub const commands = &[_]Command{ Command{
-    .name = "echo",
-    .help = "Prints to the screen",
-    .handler = echo,
-}, Command{
-    .name = "clear",
-    .help = "Clears the screen",
-    .handler = clear,
-}, Command{
-    .name = "help",
-    .help = "Prints this help message",
-    .handler = help,
-}, Command{
-    .name = "restart",
-    .help = "Restarts the system",
-    .handler = restart,
-}, Command{
-    .name = "shutdown",
-    .help = "Shuts down the system",
-    .handler = shutdown,
-}, Command{
-    .name = "pwd",
-    .help = "Prints the current working directory",
-    .handler = pwd,
-}, Command{
-    .name = "cd",
-    .help = "Changes the current working directory",
-    .handler = cd,
-}, Command{
-    .name = "ls",
-    .help = "Lists the contents of the current working directory",
-    .handler = ls,
-}, Command{
-    .name = "cat",
-    .help = "Prints the contents of a file",
-    .handler = cat,
-}, Command{
-    .name = "gfx",
-    .help = "Open the graphical gui",
-    .handler = gfx,
-} };
+pub const commands = &[_]Command{
+    Command{
+        .name = "echo",
+        .help = "Prints to the screen",
+        .handler = echo,
+    },
+    Command{
+        .name = "clear",
+        .help = "Clears the screen",
+        .handler = clear,
+    },
+    Command{
+        .name = "help",
+        .help = "Prints this help message",
+        .handler = help,
+    },
+    Command{
+        .name = "restart",
+        .help = "Restarts the system",
+        .handler = restart,
+    },
+    Command{
+        .name = "shutdown",
+        .help = "Shuts down the system",
+        .handler = shutdown,
+    },
+    Command{
+        .name = "pwd",
+        .help = "Prints the current working directory",
+        .handler = pwd,
+    },
+    Command{
+        .name = "cd",
+        .help = "Changes the current working directory",
+        .handler = cd,
+    },
+    Command{
+        .name = "ls",
+        .help = "Lists the contents of the current working directory",
+        .handler = ls,
+    },
+    Command{
+        .name = "cat",
+        .help = "Prints the contents of a file",
+        .handler = cat,
+    },
+    Command{
+        .name = "gfx",
+        .help = "Open the graphical gui",
+        .handler = gfx,
+    },
+    Command{
+        .name = "run",
+        .help = "Run a program",
+        .handler = run,
+    },
+};
 
 // *const fn (cwd: []const u8, args: []const []const u8) anyerror!void,
 
@@ -140,4 +157,30 @@ fn gfx(_: *Shell, _: []const []const u8) anyerror!void {
     const renderer = @import("../graphics/renderer.zig");
     if (!renderer.isInitialized()) return error.RendererNotInitialized;
     renderer.drawLoop(Screen.get());
+}
+
+fn run(s: *Shell, args: []const []const u8) anyerror!void {
+    if (s.fs == null) return error.UnableToFetchFileSystem;
+    const fs = s.fs.?;
+    const name = args[0];
+
+    const path = try std.mem.join(s.allocator, "/", &[_][]const u8{ "/bin", name });
+    defer s.allocator.free(path);
+
+    const file = try fs.open(path);
+    defer file.close();
+
+    const data = try file.readAlloc(s.allocator);
+    defer s.allocator.free(data);
+
+    const user = @import("../usermode.zig");
+    const stack = try s.allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(16), user.USER_STACK_SIZE);
+    defer s.allocator.free(stack);
+
+    const stack_phys = bootinfo.toPhysicalHHDM(@intFromPtr(stack.ptr));
+    const code_phys = bootinfo.toPhysicalHHDM(@intFromPtr(data.ptr));
+    const code_map = user.mapCode(code_phys, data.len);
+
+    const stack_top = user.mapStack(stack_phys, user.USER_STACK_SIZE);
+    user.run(code_map, stack_top);
 }

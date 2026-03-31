@@ -15,7 +15,7 @@ extern const __data_end: u8;
 extern const __bss_start: u8;
 extern const __bss_end: u8;
 
-const VirtualAddress = packed struct(u64) {
+pub const VirtualAddress = packed struct(u64) {
     offset: u12 = 0,
     pt_index: u9 = 0,
     pd_index: u9 = 0,
@@ -40,6 +40,10 @@ const PageFlags = struct {
     pat: bool = false,
 
     pub const rw = PageFlags{ .present = true, .writeable = true };
+    pub const ro = PageFlags{ .present = true, .writeable = false };
+
+    pub const user_rw = PageFlags{ .present = true, .writeable = true, .user = true };
+    pub const user_ro = PageFlags{ .present = true, .writeable = false, .user = true };
 };
 
 const PageEntry = packed struct(u64) {
@@ -96,13 +100,16 @@ pub fn createPageTable() *PageTable {
     return table;
 }
 
-fn getOrCreatePageTable(table: *PageTable, index: u9) *PageTable {
-    const entry = table[index];
+fn getOrCreatePageTable(table: *PageTable, index: u9, user: bool) *PageTable {
+    const entry = &table[index];
     if (entry.present) {
+        if (user and !entry.user) {
+            entry.user = true;
+        }
         return @ptrFromInt(bootinfo.toVirtualHHDM(entry.getAddress()));
     } else {
         const new_table = createPageTable();
-        table[index] = PageEntry.init(bootinfo.toPhysicalHHDM(@intFromPtr(new_table)), .rw);
+        entry.* = PageEntry.init(bootinfo.toPhysicalHHDM(@intFromPtr(new_table)), if (user) .user_rw else .rw);
         return new_table;
     }
 }
@@ -114,11 +121,20 @@ pub fn mapPage(virt: u64, phys: u64, flags: PageFlags) void {
     std.debug.assert(phys & 0xFFF == 0);
     std.debug.assert(virt & 0xFFF == 0);
 
-    const pdpt_table = getOrCreatePageTable(&pml4, va.pml4_index);
-    const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index);
-    const pt_table = getOrCreatePageTable(pd_table, va.pd_index);
+    const pdpt_table = getOrCreatePageTable(&pml4, va.pml4_index, flags.user);
+    const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index, flags.user);
+    const pt_table = getOrCreatePageTable(pd_table, va.pd_index, flags.user);
 
     pt_table[va.pt_index] = PageEntry.init(phys, flags);
+}
+
+/// NOTE: virt and phys must be page aligned
+pub fn mapRange(virt: u64, phys: u64, size: u64, flags: PageFlags) void {
+    var offset: u64 = 0;
+    const size_aligned = std.mem.alignForward(u64, size, PAGE_SIZE);
+    while (offset < size_aligned) : (offset += PAGE_SIZE) {
+        mapPage(virt + offset, phys + offset, flags);
+    }
 }
 
 const HUGE_PAGE_SIZE = 2 * 1024 * 1024; // 2MB
@@ -127,8 +143,8 @@ pub fn mapHugePage(virt: u64, phys: u64, flags: PageFlags) void {
     const va = VirtualAddress.from(virt);
     std.debug.assert(phys & (HUGE_PAGE_SIZE - 1) == 0);
     std.debug.assert(virt & (HUGE_PAGE_SIZE - 1) == 0);
-    const pdpt_table = getOrCreatePageTable(&pml4, va.pml4_index);
-    const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index);
+    const pdpt_table = getOrCreatePageTable(&pml4, va.pml4_index, flags.user);
+    const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index, flags.user);
     const entry = pd_table[va.pd_index];
     if (entry.present and entry.page_size) {
         log.debug("HUGE PAGE CONFLICT at {x}", .{virt});
@@ -185,7 +201,7 @@ pub fn init(mb: *const bootinfo.BootInfo) void {
     while (offset < mb.kernel.size) : (offset += PAGE_SIZE) {
         const virt = mb.kernel.virt_addr + offset;
         const physical = mb.kernel.phys_addr + offset;
-        const flags = getFlags(virt);
+        const flags = getKernelFlags(virt);
         mapPage(virt, physical, flags);
     }
 
@@ -203,7 +219,7 @@ pub fn init(mb: *const bootinfo.BootInfo) void {
     log.debug("Paging initialized", .{});
 }
 
-fn getFlags(virt: u64) PageFlags {
+fn getKernelFlags(virt: u64) PageFlags {
     const text_start = @intFromPtr(&__text_start);
     const text_end = @intFromPtr(&__text_end);
     const data_start = @intFromPtr(&__data_start);
@@ -225,20 +241,31 @@ fn getFlags(virt: u64) PageFlags {
         return .rw;
 }
 
-pub fn getPageEntry(virt: u64) *const PageEntry {
-    const va = VirtualAddress.from(virt);
-    const pdpt_table = getOrCreatePageTable(&pml4, va.pml4_index);
-    const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index);
-    const pt_table = getOrCreatePageTable(pd_table, va.pd_index);
+fn getPageTable(table: *PageTable, index: u9) ?*PageTable {
+    const entry = &table[index];
+    if (!entry.present) return null;
 
-    return &pt_table[va.pt_index];
+    return @ptrFromInt(bootinfo.toVirtualHHDM(entry.getAddress()));
 }
 
-fn getPageEntryMut(virt: u64) *PageEntry {
+pub fn getPageEntry(virt: u64) ?*const PageEntry {
     const va = VirtualAddress.from(virt);
-    const pdpt_table = getOrCreatePageTable(&pml4, va.pml4_index);
-    const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index);
-    const pt_table = getOrCreatePageTable(pd_table, va.pd_index);
+    const pdpt_table = getOrCreatePageTable(&pml4, va.pml4_index) orelse return null;
+    const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index) orelse return null;
+    const pt_table = getOrCreatePageTable(pd_table, va.pd_index) orelse return null;
 
-    return &pt_table[va.pt_index];
+    const entry = &pt_table[va.pt_index];
+    if (!entry.present) return null;
+    return entry;
+}
+
+fn getPageEntryMut(virt: u64) ?*PageEntry {
+    const va = VirtualAddress.from(virt);
+    const pdpt_table = getOrCreatePageTable(&pml4, va.pml4_index) orelse return null;
+    const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index) orelse return null;
+    const pt_table = getOrCreatePageTable(pd_table, va.pd_index) orelse return null;
+
+    const entry = &pt_table[va.pt_index];
+    if (!entry.present) return null;
+    return entry;
 }

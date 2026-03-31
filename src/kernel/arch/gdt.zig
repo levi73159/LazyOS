@@ -103,12 +103,12 @@ pub const Segment = enum(u8) {
 };
 
 pub const GDT = packed struct {
-    null_desc: Entry,
-    kerenl_code: Entry,
-    kerenl_data: Entry,
-    user_code: Entry,
-    user_data: Entry,
-    tss_desc: Entry64,
+    null_desc: Entry, // 0x0
+    kerenl_code: Entry, // 0x8
+    kerenl_data: Entry, // 0x10
+    user_code: Entry, // 0x18
+    user_data: Entry, // 0x20
+    tss_desc: Entry64, // 0x28
 };
 
 pub const Selector = enum(u16) {
