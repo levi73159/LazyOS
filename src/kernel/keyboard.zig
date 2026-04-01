@@ -333,7 +333,9 @@ pub fn handler(_: *InterruptFrame) void {
     wait_key.store(false, .release);
 
     if (code == .f1) {
-        log.debug("f1 pressed", .{});
+        if (console.serial) |s| {
+            s.writeAll("hello world\n") catch {};
+        }
     }
     io.sti();
 }

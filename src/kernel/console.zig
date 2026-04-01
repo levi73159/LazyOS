@@ -34,6 +34,7 @@ var dirty_max_x: u16 = 0;
 var dirty_max_y: u16 = 0;
 var dirty_valid: bool = false;
 
+var serial_writer: ?SerialWriter = null;
 pub var serial: ?*std.Io.Writer = null;
 
 pub fn init(_screen: *Screen) void {
@@ -46,8 +47,9 @@ pub fn isInitialized() bool {
     return initialized;
 }
 
-pub fn initSerial(serial_writer: *std.Io.Writer) void {
-    serial = serial_writer;
+pub fn initSerial(s: SerialWriter) void {
+    serial_writer = s;
+    serial = &serial_writer.?.writer;
 }
 
 pub fn echoToHost(enabled: bool) void {
@@ -184,6 +186,9 @@ pub fn complete() void {
 }
 
 pub fn write(data: []const u8) void {
+    const flags = io.disableInterrupts();
+    defer io.restoreFlags(flags);
+
     noSwap();
     var i: usize = 0;
     var buf: [4]u8 = undefined;
@@ -227,6 +232,7 @@ pub fn write(data: []const u8) void {
                     setAnsiColor(code);
                 }
             }
+            ib = 0;
             i += 1;
             continue;
         }
@@ -249,11 +255,16 @@ pub fn dbg(data: []const u8) void {
 }
 
 pub fn print(comptime fmt: []const u8, args: anytype) void {
+    const flags = io.disableInterrupts();
+    defer io.restoreFlags(flags);
+
     writer().print(fmt, args) catch {};
 }
 
 // print to both the terminal and the dbg port
 pub fn printB(comptime fmt: []const u8, args: anytype) void {
+    const flags = io.disableInterrupts();
+    defer io.restoreFlags(flags);
     if (serial) |s| {
         s.print(fmt, args) catch {};
     }
@@ -290,16 +301,21 @@ pub fn writeFn(comptime func: fn ([]const u8) void) fn (
     const Inner = struct {
         fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
             _ = w;
-            var total: usize = 0;
 
-            // write non-splat chunks
-            for (data[0 .. data.len - splat]) |chunk| {
+            if (splat > data.len) {
+                @panic("writer splat > data.len");
+            }
+
+            var total: usize = 0;
+            const non_splat_len = data.len - splat;
+
+            for (data[0..non_splat_len]) |chunk| {
                 func(chunk);
                 total += chunk.len;
             }
 
-            // write splat chunk splat times
             if (splat > 0) {
+                if (data.len == 0) @panic("writer splat with empty data");
                 const repeated = data[data.len - 1];
                 var i: usize = 0;
                 while (i < splat) : (i += 1) {
@@ -467,6 +483,9 @@ pub fn logFn(
     comptime format: []const u8,
     args: anytype,
 ) void {
+    const flags = io.disableInterrupts();
+    defer io.restoreFlags(flags);
+
     const color = comptime switch (level) {
         .debug => "\x1b[32m",
         .info => "\x1b[36m",

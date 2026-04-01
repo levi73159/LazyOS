@@ -36,10 +36,9 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     const framebuffer = mb.getFramebuffer(u32);
     const screen = Screen.init(framebuffer, mb.framebuffer);
 
-    var serial_writer = serial.SerialWriter.init(.COM1);
+    const serial_writer = serial.SerialWriter.init(.COM1);
     if (serial_writer != null) {
-        const writer = &serial_writer.?.writer;
-        console.initSerial(writer);
+        console.initSerial(serial_writer.?);
     }
     console.init(screen);
     console.clear();
@@ -92,10 +91,9 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
         Disk.loadAHCIPorts(&ports_buf, ports.len);
     }
 
-    var disk: ?Disk = Disk.init(2) catch |err| blk: {
-        log.err("Failed to init disk: {s}", .{@errorName(err)});
-        break :blk null;
-    };
+    Disk.loadDisks();
+
+    const disk = Disk.get(2);
 
     blk: {
         ui.init(allocator) catch |err| {
@@ -116,7 +114,7 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     }
 
     // init file system on disk
-    if (disk) |*d| {
+    if (disk) |d| {
         const fs = FileSystem.init(d) catch |err| {
             log.err("Failed to init file system: {s}", .{@errorName(err)});
             io.hltNoInt();

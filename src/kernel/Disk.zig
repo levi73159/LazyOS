@@ -40,6 +40,8 @@ const AHCIPortArray = struct {
     }
 };
 
+var disks: [32]?Self = .{null} ** 32;
+
 base: BaseUnion,
 drive_info: [256]u16,
 drive_type: DriveType,
@@ -54,6 +56,23 @@ pub const DiskInitError = error{
     PortNotFound,
     UnusedPort,
 } || DiskError;
+
+pub fn loadDisks() void {
+    for (0..ports.len) |i| {
+        if (ports.get(i) != null) {
+            disks[i] = Self.init(@intCast(i)) catch |err| {
+                log.err("Failed to init disk {d}: {s}", .{ i, @errorName(err) });
+                continue;
+            };
+        }
+    }
+}
+
+pub fn get(disk: u8) ?*Self {
+    if (disk >= disks.len) return null;
+    if (disks[disk] == null) return null;
+    return &disks[disk].?;
+}
 
 pub fn init(disk: u8) DiskInitError!Self {
     if (disk >= ports.len) return DiskInitError.PortNotFound;
