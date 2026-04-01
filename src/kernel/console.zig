@@ -56,6 +56,14 @@ pub fn echoToHost(enabled: bool) void {
     echo_to_host = enabled;
 }
 
+pub fn getBackground() Color {
+    return terminal_background;
+}
+
+pub fn getForeground() Color {
+    return terminal_foreground;
+}
+
 pub fn clear() void {
     screen.clear(terminal_background);
     terminal_row = 0;

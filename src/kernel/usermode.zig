@@ -20,7 +20,6 @@ pub fn run(code_addr: u64, stack_top: u64) void {
         \\ push %[data_seg]
         \\ push %[stack_top]
         \\ pushfq 
-        \\ orq $0x200, (%%rsp)
         \\ push %[code_seg]
         \\ push %[code_addr]
         \\ iretq

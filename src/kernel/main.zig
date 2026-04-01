@@ -128,6 +128,9 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     };
     _ = cpu;
 
+    // enable syscalls
+    arch.syscall.init();
+
     console.echoToHost(false);
     console.logDebug(false);
 

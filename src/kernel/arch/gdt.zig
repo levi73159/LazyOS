@@ -106,8 +106,8 @@ pub const GDT = packed struct {
     null_desc: Entry, // 0x0
     kerenl_code: Entry, // 0x8
     kerenl_data: Entry, // 0x10
-    user_code: Entry, // 0x18
-    user_data: Entry, // 0x20
+    user_data: Entry, // 0x18
+    user_code: Entry, // 0x20
     tss_desc: Entry64, // 0x28
 };
 

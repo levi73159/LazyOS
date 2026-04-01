@@ -12,3 +12,4 @@ pub const bootinfo = @import("arch/bootinfo.zig");
 pub const limine = @import("arch/limine.zig");
 pub const paging = @import("arch/paging.zig");
 pub const acpi = @import("arch/acpi.zig");
+pub const syscall = @import("arch/syscall.zig");
