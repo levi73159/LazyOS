@@ -401,7 +401,7 @@ export fn uacpi_kernel_schedule_work(
 ) c.uacpi_status {
     _ = work_type;
     const h = handler orelse return c.UACPI_STATUS_INVALID_ARGUMENT;
-    const id = scheduler.addTask(h, .{@intFromPtr(ctx)});
+    const id = scheduler.addTaskFunc(h, .{@intFromPtr(ctx)});
     work_ids.append(heap.acpi_allocator(), id) catch return c.UACPI_STATUS_OUT_OF_MEMORY;
     log.debug("Spawned task: {d}", .{id});
     return c.UACPI_STATUS_OK;

@@ -1,6 +1,7 @@
 const std = @import("std");
 const msr = @import("msr.zig");
 const gdt = @import("gdt.zig");
+const scheduler = @import("../scheduler.zig");
 const console = @import("../console.zig");
 
 const log = std.log.scoped(._syscall);
@@ -51,6 +52,7 @@ export fn syscallHandler(frame: *SyscallFrame) callconv(.c) void {
     frame.rax = switch (frame.rax) {
         0 => sys_test(frame),
         1 => sys_write(frame),
+        60 => sys_exit(frame),
         else => ENOSYS,
     };
 }
@@ -87,6 +89,13 @@ fn sys_write(frame: *SyscallFrame) u64 {
             return EBADF;
         },
     }
+}
+
+fn sys_exit(frame: *SyscallFrame) u64 {
+    const code = frame.rdi;
+
+    scheduler.taskExit();
+    return code;
 }
 
 pub fn init() void {

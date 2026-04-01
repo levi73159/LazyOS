@@ -4,6 +4,7 @@ const console = @import("../console.zig");
 const acpi = @import("../arch/acpi.zig");
 const Shell = @import("../Shell.zig");
 const bootinfo = @import("../arch/bootinfo.zig");
+const scheduler = @import("../scheduler.zig");
 
 pub const commands = &[_]Command{
     Command{
@@ -171,16 +172,19 @@ fn run(s: *Shell, args: []const []const u8) anyerror!void {
     defer file.close();
 
     const data = try file.readAlloc(s.allocator);
-    defer s.allocator.free(data);
 
     const user = @import("../usermode.zig");
-    const stack = try s.allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(16), user.USER_STACK_SIZE);
-    defer s.allocator.free(stack);
+    const stack = try s.allocator.alignedAlloc(u8, .@"16", user.USER_STACK_SIZE);
 
     const stack_phys = bootinfo.toPhysicalHHDM(@intFromPtr(stack.ptr));
     const code_phys = bootinfo.toPhysicalHHDM(@intFromPtr(data.ptr));
     const code_map = user.mapCode(code_phys, data.len);
+    const stack_info = user.mapStack(stack_phys, user.USER_STACK_SIZE);
 
-    const stack_top = user.mapStack(stack_phys, user.USER_STACK_SIZE);
-    user.run(code_map, stack_top);
+    std.log.debug("Running {s}", .{name});
+    std.log.debug("Code: {x}", .{code_map});
+    std.log.debug("User stack: {x} - {x}", .{ stack_info.bottom, stack_info.top });
+
+    const id = scheduler.createTask(code_map, stack_info.top, data, stack, true, .{});
+    scheduler.waitForTaskToExit(id);
 }

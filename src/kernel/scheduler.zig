@@ -2,6 +2,7 @@ const std = @import("std");
 const arch = @import("arch.zig");
 const heap = @import("memory/heap.zig");
 const io = arch.io;
+const gdt = arch.descriptors.gdt;
 const pit = @import("pit.zig");
 
 const PAGE_SIZE = heap.PAGE_SIZE;
@@ -31,7 +32,9 @@ pub const WaitingState = struct {
 
 pub const Task = struct {
     registers: arch.registers.InterruptFrame,
-    stack: []u8,
+    stack: []u8, // required to be free
+    data: []u8, // file data, code, etc required to be free
+
     next: ?*Task,
 
     id: u32,
@@ -59,6 +62,7 @@ pub fn init() void {
         .state = .running,
         .registers = undefined, // set in the first schedule
         .stack = &.{}, // not own by us
+        .data = &.{}, // not own by us, always in memory
     };
 
     task_list = task;
@@ -89,6 +93,9 @@ pub fn schedule(frame: *arch.registers.InterruptFrame) void {
         next = next.?.next orelse task_list;
 
         if (next == current) {
+            if (current.?.state == .dead) {
+                log.warn("Current task {d} is dead", .{current.?.id});
+            }
             current.?.state = .running;
             return; // continue execution
         }
@@ -112,6 +119,7 @@ fn checkWaitingTasks(task: *Task) void {
                 },
                 .exit => {
                     if (task.state == .dead) {
+                        log.debug("Waking task {d} because task {d} exited", .{ node.id, task.id });
                         node.state = .ready;
                     }
                 },
@@ -155,7 +163,7 @@ fn taskReturn() noreturn {
 //    (so context pointer points into the task's own stack)
 // 4. add task to linked list
 // 5. set state = .ready
-pub fn addTask(entry_point: anytype, args: anytype) u32 {
+pub fn addTaskFunc(entry_point: anytype, args: anytype) u32 {
     const entry_info = @typeInfo(@TypeOf(entry_point));
     if (entry_info != .pointer) {
         @compileError("entry_point must be a function");
@@ -182,15 +190,18 @@ pub fn addTask(entry_point: anytype, args: anytype) u32 {
     // leave 128 bytes of space before taskExit
     // so the function prologue doesn't overwrite it
     const rsp = stack_top - 48 - 8;
+    return createTask(@intFromPtr(&taskReturn), rsp, &.{}, stack, false, args);
+}
 
-    const ret_addr: *usize = @ptrFromInt(rsp);
-    ret_addr.* = @intFromPtr(&taskReturn);
-
-    const task = allocator.create(Task) catch {
-        log.err("Failed to allocate task", .{});
-        return 0;
-    };
-
+/// Creates a task with a specific entry point and meta data, and appends it to the task list as ready
+/// Args:
+/// - *rip*: the start address of the task (what will be executed when the task is scheduled)
+/// - *rsp*: the stack pointer of the task (what the stack pointer will be when the task is scheduled)
+/// - *code*: the code data of the stack (to be freed when the task is removed)
+/// - *stack*: the stack data of the stack (to be freed when the task is removed, stack is always mapped in HHDM while rsp can be mapped in any)
+/// - *user*: whether the task is executed in user mode or kernel mode
+/// - *args*: the arguments to be passed to the task (starting in rip ending in r9)
+pub fn createTask(rip: u64, rsp: u64, code: []u8, stack: []u8, user: bool, args: anytype) u32 {
     const helper = struct {
         pub fn getArg(_args: anytype, comptime index: comptime_int) usize {
             const info = @typeInfo(@TypeOf(_args));
@@ -211,15 +222,19 @@ pub fn addTask(entry_point: anytype, args: anytype) u32 {
         }
     };
 
-    log.debug("Adding task with entry_point: {x}", .{@intFromPtr(entry_point)});
+    log.debug("Adding task with entry_point: {x}", .{rip});
+
+    // assumes stack is already aligned
+    const cs: usize = if (user) @intFromEnum(gdt.Segment.user_code) else @intFromEnum(gdt.Segment.kernel_code);
+    const ds: usize = if (user) @intFromEnum(gdt.Segment.user_data) else @intFromEnum(gdt.Segment.kernel_data);
     const frame = arch.registers.InterruptFrame{
-        .cs = 0x08,
+        .cs = cs,
         .rflags = 0x202,
         .rsp = rsp,
         .rbp = 0,
-        .ss = 0x10,
-        .ds = 0x10,
-        .rip = @intFromPtr(entry_point),
+        .ss = ds,
+        .ds = ds,
+        .rip = rip,
 
         // args
         .rdi = helper.getArg(args, 0),
@@ -241,10 +256,18 @@ pub fn addTask(entry_point: anytype, args: anytype) u32 {
         .rbx = 0,
     };
 
+    const allocator = heap.allocator();
+
+    const task = allocator.create(Task) catch {
+        log.err("Failed to allocate task", .{});
+        return @bitCast(@as(i32, -1));
+    };
+
     task.* = .{
         .state = .ready,
         .id = @bitCast(@as(i32, -1)), // id not set here, will be set in appendTask(task: *Task)
         .stack = stack,
+        .data = code,
         .registers = frame,
         .next = null,
     };
@@ -308,6 +331,9 @@ fn removeTask(task: *Task) void {
     if (task.stack.len != 0) {
         allocator.free(task.stack);
     }
+    if (task.data.len != 0) {
+        allocator.free(task.data);
+    }
 
     allocator.destroy(task);
 }
@@ -344,6 +370,7 @@ pub fn waitForTaskToExit(id: u32) void {
         } };
     }
     while (true) {
+        io.sti();
         asm volatile ("hlt");
         if (current) |task| {
             if (task.state == .ready or task.state == .running) break;
@@ -359,6 +386,7 @@ pub fn waitForTaskToWake(id: u32) void {
         } };
     }
     while (true) {
+        io.sti();
         asm volatile ("hlt");
         if (getTask(id)) |task| {
             if (task.state == .ready or task.state == .running) break;

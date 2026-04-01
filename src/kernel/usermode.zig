@@ -9,28 +9,6 @@ pub const USER_CODE_BASE = 0x400000;
 pub const USER_STACK_TOP = 0x00007FFFFFFFE000;
 pub const USER_STACK_SIZE = 12 * 1024; // 12kb
 
-pub fn run(code_addr: u64, stack_top: u64) void {
-    asm volatile (
-        \\ cli
-        \\ mov %[data_seg], %%ax
-        \\ mov %%ax, %%ds
-        \\ mov %%ax, %%es
-        \\ mov %%ax, %%fs
-        \\ mov %%ax, %%gs
-        \\ push %[data_seg]
-        \\ push %[stack_top]
-        \\ pushfq 
-        \\ push %[code_seg]
-        \\ push %[code_addr]
-        \\ iretq
-        :
-        : [data_seg] "i" (gdt.Segment.user_data),
-          [stack_top] "r" (stack_top),
-          [code_seg] "i" (gdt.Segment.user_code),
-          [code_addr] "r" (code_addr),
-    );
-}
-
 pub fn mapCode(phys: u64, len: u64) u64 {
     const phys_aligned = std.mem.alignBackward(u64, phys, paging.PAGE_SIZE);
     paging.mapRange(USER_CODE_BASE, phys_aligned, len, .{ .present = true, .writeable = false, .execute_disable = false, .user = true });
@@ -41,11 +19,14 @@ pub fn mapCode(phys: u64, len: u64) u64 {
 }
 
 /// returns STACK TOP
-pub fn mapStack(phys: u64, len: u64) u64 {
+pub fn mapStack(phys: u64, len: u64) struct { top: u64, bottom: u64 } {
     const phys_aligned = std.mem.alignBackward(u64, phys, paging.PAGE_SIZE);
     const bottom = USER_STACK_TOP - len;
     const bottom_aligned = std.mem.alignBackward(u64, bottom, paging.PAGE_SIZE);
     paging.mapRange(bottom_aligned, phys_aligned, len, .{ .present = true, .writeable = true, .execute_disable = true, .user = true });
     // get offset from user_code
-    return USER_STACK_TOP;
+    return .{
+        .top = USER_STACK_TOP,
+        .bottom = bottom,
+    };
 }
