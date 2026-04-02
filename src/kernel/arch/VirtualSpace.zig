@@ -1,6 +1,7 @@
 const std = @import("std");
 const bootinfo = @import("bootinfo.zig");
 const pmem = @import("../memory/pmem.zig");
+const paging = @import("paging.zig");
 
 const log = std.log.scoped(.vmem);
 
@@ -78,7 +79,30 @@ pub const PAGE_SIZE = 4096;
 pub const HUGE_PAGE_SIZE = 2 * 1024 * 1024; // 2MB
 pub const PageTable = [512]PageEntry;
 
-pml4: PageTable align(PAGE_SIZE) = .{PageEntry{}} ** 512,
+pml4: *PageTable,
+
+pub fn init() Self {
+    const pml4 = createPageTable();
+    return .{ .pml4 = pml4 };
+}
+
+pub fn deinit(self: *const Self) void {
+    pmem.kernel().freePageV(@intFromPtr(self.pml4));
+}
+
+pub fn safeDeinit(self: *const Self) void {
+    const cr3 = asm volatile ("mov %%cr3, %[out]"
+        : [out] "=r" (-> u64),
+    );
+
+    const phys = bootinfo.toPhysical(@intFromPtr(self.pml4));
+    if (cr3 == phys) {
+        log.err("PML4 still in use: {x}", .{phys});
+        paging.getKernelVmem().switchTo(); // switch to kernel virtual memory so we don't crash
+    }
+
+    self.deinit();
+}
 
 fn createPageTable() *PageTable {
     const phys = pmem.kernel().allocPage() catch {
@@ -104,13 +128,13 @@ fn getOrCreatePageTable(table: *PageTable, index: u9, user: bool) *PageTable {
 }
 
 // NOTE: virt and phys must be page aligned
-pub fn mapPage(self: *Self, virt: u64, phys: u64, flags: PageFlags) void {
+pub fn mapPage(self: *const Self, virt: u64, phys: u64, flags: PageFlags) void {
     const va = VirtualAddress.from(virt);
 
     std.debug.assert(phys & 0xFFF == 0);
     std.debug.assert(virt & 0xFFF == 0);
 
-    const pdpt_table = getOrCreatePageTable(&self.pml4, va.pml4_index, flags.user);
+    const pdpt_table = getOrCreatePageTable(self.pml4, va.pml4_index, flags.user);
     const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index, flags.user);
     const pt_table = getOrCreatePageTable(pd_table, va.pd_index, flags.user);
 
@@ -118,7 +142,7 @@ pub fn mapPage(self: *Self, virt: u64, phys: u64, flags: PageFlags) void {
 }
 
 /// NOTE: virt and phys must be page aligned
-pub fn mapRange(self: *Self, virt: u64, phys: u64, size: u64, flags: PageFlags) void {
+pub fn mapRange(self: *const Self, virt: u64, phys: u64, size: u64, flags: PageFlags) void {
     var offset: u64 = 0;
     const size_aligned = std.mem.alignForward(u64, size, PAGE_SIZE);
     while (offset < size_aligned) : (offset += PAGE_SIZE) {
@@ -126,11 +150,11 @@ pub fn mapRange(self: *Self, virt: u64, phys: u64, size: u64, flags: PageFlags) 
     }
 }
 
-pub fn mapHugePage(self: *Self, virt: u64, phys: u64, flags: PageFlags) void {
+pub fn mapHugePage(self: *const Self, virt: u64, phys: u64, flags: PageFlags) void {
     const va = VirtualAddress.from(virt);
     std.debug.assert(phys & (HUGE_PAGE_SIZE - 1) == 0);
     std.debug.assert(virt & (HUGE_PAGE_SIZE - 1) == 0);
-    const pdpt_table = getOrCreatePageTable(&self.pml4, va.pml4_index, flags.user);
+    const pdpt_table = getOrCreatePageTable(self.pml4, va.pml4_index, flags.user);
     const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index, flags.user);
     const entry = pd_table[va.pd_index];
     if (entry.present and entry.page_size) {
@@ -145,12 +169,11 @@ pub fn mapHugePage(self: *Self, virt: u64, phys: u64, flags: PageFlags) void {
     });
 }
 
-pub fn switchTo(self: *Self) void {
-    const phys = bootinfo.toPhysical(@intFromPtr(self));
+pub fn switchTo(self: *const Self) void {
+    const phys = bootinfo.toPhysical(@intFromPtr(self.pml4));
     asm volatile (
         \\ mov %[pml4], %%cr3
         :
         : [pml4] "r" (phys),
     );
-    log.debug("Switched to pml4 at {x}", .{phys});
 }

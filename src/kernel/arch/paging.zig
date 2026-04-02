@@ -18,7 +18,7 @@ extern const __data_end: u8;
 extern const __bss_start: u8;
 extern const __bss_end: u8;
 
-var kernel_vmem: VirtualSpace = std.mem.zeroes(VirtualSpace);
+var kernel_vmem: VirtualSpace = undefined;
 
 fn mapFramebuffer(vmem: *VirtualSpace, fb: bootinfo.Framebuffer) void {
     const size = fb.width * fb.height * fb.bpp / 8;
@@ -40,6 +40,8 @@ fn mapFramebuffer(vmem: *VirtualSpace, fb: bootinfo.Framebuffer) void {
 
 pub fn init(mb: *const bootinfo.BootInfo) *VirtualSpace {
     log.debug("Initializing paging", .{});
+
+    kernel_vmem = .init();
 
     // map all physical memory at HHDM offset (so toVirtual keeps working and this code still works)
     var highest_address: u64 = 0;
@@ -105,6 +107,17 @@ pub fn getPageTable(table: *VirtualSpace.PageTable, index: u9) ?*VirtualSpace.Pa
     return @ptrFromInt(bootinfo.toVirtualHHDM(entry.getAddress()));
 }
 
-pub fn getKernelVmem() *VirtualSpace {
+pub fn getKernelVmem() *const VirtualSpace {
     return &kernel_vmem;
+}
+
+pub fn createUserVmem() VirtualSpace {
+    const vmem = VirtualSpace.init();
+
+    // copy kernel mappnig into user vmem
+    for (256..512) |i| {
+        vmem.pml4[i] = kernel_vmem.pml4[i];
+    }
+
+    return vmem;
 }

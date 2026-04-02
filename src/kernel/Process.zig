@@ -3,6 +3,7 @@ const elf = std.elf;
 const paging = @import("arch/paging.zig");
 const pmem = @import("memory/pmem.zig");
 const bootinfo = @import("arch/bootinfo.zig");
+const VirtualSpace = @import("arch/VirtualSpace.zig");
 
 const log = std.log.scoped(.process);
 
@@ -18,7 +19,7 @@ const MemoryRegion = struct {
 
 entry: u64,
 stack_top: u64,
-// TODO: cr3 coming soon
+vmem: VirtualSpace,
 
 regions: std.ArrayList(MemoryRegion),
 
@@ -36,7 +37,7 @@ pub fn loadElf(data: []const u8, allocator: std.mem.Allocator) !Self {
 
     if (!header.is_64) return error.Not64Bit;
 
-    const vmem = paging.getKernelVmem();
+    const vmem = paging.createUserVmem();
 
     var ph_iter = header.iterateProgramHeadersBuffer(data);
     while (try ph_iter.next()) |ph| {
@@ -97,6 +98,7 @@ pub fn loadElf(data: []const u8, allocator: std.mem.Allocator) !Self {
         .entry = header.entry,
         .stack_top = USER_STACK_TOP,
         .regions = regions,
+        .vmem = vmem,
     };
 }
 
@@ -105,4 +107,6 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
         pmem.kernel().freePages(region.phys, region.page_count);
     }
     self.regions.deinit(allocator);
+
+    self.vmem.safeDeinit();
 }

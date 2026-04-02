@@ -108,10 +108,14 @@ pub fn schedule(frame: *arch.registers.InterruptFrame) void {
     current.?.state = .running;
     frame.* = current.?.registers; // copy saved register state
 
-    if (current.?.process != null) {
+    if (current.?.process) |process| {
         const kstack_top = @intFromPtr(current.?.stack.ptr) + current.?.stack.len;
         gdt.tss.rsp0 = kstack_top;
         arch.syscall.kernel_rsp = kstack_top;
+
+        process.vmem.switchTo();
+    } else {
+        arch.paging.getKernelVmem().switchTo();
     }
 }
 
