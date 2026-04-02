@@ -1,6 +1,9 @@
 const std = @import("std");
 const bootinfo = @import("bootinfo.zig");
 const pmem = @import("../memory/pmem.zig");
+const VirtualSpace = @import("VirtualSpace.zig");
+
+pub const PageFlags = VirtualSpace.PageFlags;
 
 const log = std.log.scoped(.paging);
 
@@ -15,157 +18,16 @@ extern const __data_end: u8;
 extern const __bss_start: u8;
 extern const __bss_end: u8;
 
-pub const VirtualAddress = packed struct(u64) {
-    offset: u12 = 0,
-    pt_index: u9 = 0,
-    pd_index: u9 = 0,
-    pdpt_index: u9 = 0,
-    pml4_index: u9 = 0,
-    sign_extension: u16 = 0,
+var kernel_vmem: VirtualSpace = std.mem.zeroes(VirtualSpace);
 
-    pub fn from(address: u64) VirtualAddress {
-        return @bitCast(address);
-    }
-};
-
-pub const PageFlags = struct {
-    present: bool = false,
-    writeable: bool = false,
-    user: bool = false,
-    write_through: bool = false,
-    cache_disabled: bool = false,
-    page_size: bool = false,
-    execute_disable: bool = false,
-    global: bool = false,
-    pat: bool = false,
-
-    pub const rw = PageFlags{ .present = true, .writeable = true };
-    pub const ro = PageFlags{ .present = true, .writeable = false };
-
-    pub const user_rw = PageFlags{ .present = true, .writeable = true, .user = true };
-    pub const user_ro = PageFlags{ .present = true, .writeable = false, .user = true };
-};
-
-const PageEntry = packed struct(u64) {
-    present: bool = false,
-    writeable: bool = false,
-    user: bool = false,
-    write_through: bool = false,
-    cache_disabled: bool = false,
-    accessed: bool = false,
-    dirty: bool = false, // reserved in non-page-sized entries
-    page_size: bool = false,
-    global: bool = false,
-    avl: u2 = 0,
-    pat: bool = false,
-    address: u40 = 0,
-    __reserved2: u11 = 0,
-    execute_disable: bool = false,
-
-    pub fn init(address: u64, flags: PageFlags) PageEntry {
-        std.debug.assert(address & 0xFFF == 0); // address must be page aligned
-        return .{
-            .present = flags.present,
-            .writeable = flags.writeable,
-            .user = flags.user,
-            .write_through = flags.write_through,
-            .cache_disabled = flags.cache_disabled,
-            .page_size = flags.page_size,
-            .execute_disable = flags.execute_disable,
-            .address = @truncate(address >> 12),
-            .global = flags.global,
-            .pat = flags.pat,
-        };
-    }
-
-    pub fn getAddress(self: PageEntry) u64 {
-        return @as(u64, self.address) << 12;
-    }
-};
-
-pub const PageTable = [512]PageEntry;
-
-var pml4: PageTable align(PAGE_SIZE) = .{PageEntry{}} ** 512;
-
-pub fn createPageTable() *PageTable {
-    const phys = pmem.kernel().allocPage() catch {
-        @panic("Failed to allocate page: Out of memory");
-    };
-    std.debug.assert(phys % PAGE_SIZE == 0); // should always hold
-
-    const virt = bootinfo.toVirtualHHDM(phys);
-    const table: *PageTable align(PAGE_SIZE) = @ptrFromInt(virt);
-    @memset(table, .{});
-
-    return table;
-}
-
-fn getOrCreatePageTable(table: *PageTable, index: u9, user: bool) *PageTable {
-    const entry = &table[index];
-    if (entry.present) {
-        if (user and !entry.user) {
-            entry.user = true;
-        }
-        return @ptrFromInt(bootinfo.toVirtualHHDM(entry.getAddress()));
-    } else {
-        const new_table = createPageTable();
-        entry.* = PageEntry.init(bootinfo.toPhysicalHHDM(@intFromPtr(new_table)), if (user) .user_rw else .rw);
-        return new_table;
-    }
-}
-
-// NOTE: virt and phys must be page aligned
-pub fn mapPage(virt: u64, phys: u64, flags: PageFlags) void {
-    const va = VirtualAddress.from(virt);
-
-    std.debug.assert(phys & 0xFFF == 0);
-    std.debug.assert(virt & 0xFFF == 0);
-
-    const pdpt_table = getOrCreatePageTable(&pml4, va.pml4_index, flags.user);
-    const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index, flags.user);
-    const pt_table = getOrCreatePageTable(pd_table, va.pd_index, flags.user);
-
-    pt_table[va.pt_index] = PageEntry.init(phys, flags);
-}
-
-/// NOTE: virt and phys must be page aligned
-pub fn mapRange(virt: u64, phys: u64, size: u64, flags: PageFlags) void {
-    var offset: u64 = 0;
-    const size_aligned = std.mem.alignForward(u64, size, PAGE_SIZE);
-    while (offset < size_aligned) : (offset += PAGE_SIZE) {
-        mapPage(virt + offset, phys + offset, flags);
-    }
-}
-
-const HUGE_PAGE_SIZE = 2 * 1024 * 1024; // 2MB
-
-pub fn mapHugePage(virt: u64, phys: u64, flags: PageFlags) void {
-    const va = VirtualAddress.from(virt);
-    std.debug.assert(phys & (HUGE_PAGE_SIZE - 1) == 0);
-    std.debug.assert(virt & (HUGE_PAGE_SIZE - 1) == 0);
-    const pdpt_table = getOrCreatePageTable(&pml4, va.pml4_index, flags.user);
-    const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index, flags.user);
-    const entry = pd_table[va.pd_index];
-    if (entry.present and entry.page_size) {
-        log.debug("HUGE PAGE CONFLICT at {x}", .{virt});
-    }
-    // set huge page bit directly in PD, no PT needed
-    pd_table[va.pd_index] = PageEntry.init(phys, .{
-        .present = flags.present,
-        .writeable = flags.writeable,
-        .page_size = true, // this makes it a 2MB page
-        .execute_disable = flags.execute_disable,
-    });
-}
-
-fn mapFramebuffer(fb: bootinfo.Framebuffer) void {
+fn mapFramebuffer(vmem: *VirtualSpace, fb: bootinfo.Framebuffer) void {
     const size = fb.width * fb.height * fb.bpp / 8;
     const phys = bootinfo.toPhysicalHHDM(fb.address);
     const virt = fb.address;
 
     var offset: u64 = 0;
     while (offset < size) : (offset += PAGE_SIZE) {
-        mapPage(virt + offset, phys + offset, .{
+        vmem.mapPage(virt + offset, phys + offset, .{
             .present = true,
             .write_through = false,
             .cache_disabled = false,
@@ -176,7 +38,7 @@ fn mapFramebuffer(fb: bootinfo.Framebuffer) void {
     }
 }
 
-pub fn init(mb: *const bootinfo.BootInfo) void {
+pub fn init(mb: *const bootinfo.BootInfo) *VirtualSpace {
     log.debug("Initializing paging", .{});
 
     // map all physical memory at HHDM offset (so toVirtual keeps working and this code still works)
@@ -188,8 +50,8 @@ pub fn init(mb: *const bootinfo.BootInfo) void {
     log.debug("Total memory: {x}", .{total_memory});
     // replace the 4KB HHDM loop with this
     var phys: u64 = 0;
-    while (phys < total_memory) : (phys += HUGE_PAGE_SIZE) {
-        mapHugePage(bootinfo.toVirtualHHDM(phys), phys, .rw);
+    while (phys < total_memory) : (phys += VirtualSpace.HUGE_PAGE_SIZE) {
+        kernel_vmem.mapHugePage(bootinfo.toVirtualHHDM(phys), phys, .rw);
     }
 
     log.debug("kernel virt range: {x} - {x}", .{ mb.kernel.virt_addr, mb.kernel.virt_addr + mb.kernel.size });
@@ -202,24 +64,19 @@ pub fn init(mb: *const bootinfo.BootInfo) void {
         const virt = mb.kernel.virt_addr + offset;
         const physical = mb.kernel.phys_addr + offset;
         const flags = getKernelFlags(virt);
-        mapPage(virt, physical, flags);
+        kernel_vmem.mapPage(virt, physical, flags);
     }
 
-    mapFramebuffer(mb.framebuffer);
+    mapFramebuffer(&kernel_vmem, mb.framebuffer);
 
-    const pml4_phys = bootinfo.kernelToPhysical(@intFromPtr(&pml4));
-
-    // switches to our page tables
-    asm volatile (
-        \\mov %[pml4], %%cr3
-        :
-        : [pml4] "r" (pml4_phys),
-        : .{ .memory = true });
+    kernel_vmem.switchTo();
 
     log.debug("Paging initialized", .{});
+
+    return &kernel_vmem;
 }
 
-fn getKernelFlags(virt: u64) PageFlags {
+fn getKernelFlags(virt: u64) VirtualSpace.PageFlags {
     const text_start = @intFromPtr(&__text_start);
     const text_end = @intFromPtr(&__text_end);
     const data_start = @intFromPtr(&__data_start);
@@ -241,31 +98,13 @@ fn getKernelFlags(virt: u64) PageFlags {
         return .rw;
 }
 
-fn getPageTable(table: *PageTable, index: u9) ?*PageTable {
+pub fn getPageTable(table: *VirtualSpace.PageTable, index: u9) ?*VirtualSpace.PageTable {
     const entry = &table[index];
     if (!entry.present) return null;
 
     return @ptrFromInt(bootinfo.toVirtualHHDM(entry.getAddress()));
 }
 
-pub fn getPageEntry(virt: u64) ?*const PageEntry {
-    const va = VirtualAddress.from(virt);
-    const pdpt_table = getOrCreatePageTable(&pml4, va.pml4_index) orelse return null;
-    const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index) orelse return null;
-    const pt_table = getOrCreatePageTable(pd_table, va.pd_index) orelse return null;
-
-    const entry = &pt_table[va.pt_index];
-    if (!entry.present) return null;
-    return entry;
-}
-
-fn getPageEntryMut(virt: u64) ?*PageEntry {
-    const va = VirtualAddress.from(virt);
-    const pdpt_table = getOrCreatePageTable(&pml4, va.pml4_index) orelse return null;
-    const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index) orelse return null;
-    const pt_table = getOrCreatePageTable(pd_table, va.pd_index) orelse return null;
-
-    const entry = &pt_table[va.pt_index];
-    if (!entry.present) return null;
-    return entry;
+pub fn getKernelVmem() *VirtualSpace {
+    return &kernel_vmem;
 }

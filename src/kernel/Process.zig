@@ -36,6 +36,8 @@ pub fn loadElf(data: []const u8, allocator: std.mem.Allocator) !Self {
 
     if (!header.is_64) return error.Not64Bit;
 
+    const vmem = paging.getKernelVmem();
+
     var ph_iter = header.iterateProgramHeadersBuffer(data);
     while (try ph_iter.next()) |ph| {
         if (ph.p_type != elf.PT_LOAD) continue; // don't load it
@@ -73,7 +75,7 @@ pub fn loadElf(data: []const u8, allocator: std.mem.Allocator) !Self {
         };
 
         const user_virt = std.mem.alignBackward(u64, ph.p_vaddr, paging.PAGE_SIZE);
-        paging.mapRange(user_virt, phys, bytes, flags);
+        vmem.mapRange(user_virt, phys, bytes, flags);
     }
 
     const stack_pages = (USER_STACK_SIZE + paging.PAGE_SIZE - 1) / paging.PAGE_SIZE;
@@ -86,7 +88,7 @@ pub fn loadElf(data: []const u8, allocator: std.mem.Allocator) !Self {
 
     const stack_bottom = USER_STACK_TOP - USER_STACK_SIZE;
 
-    paging.mapRange(stack_bottom, stack_phys, USER_STACK_SIZE, .{ .present = true, .user = true, .writeable = true, .execute_disable = true });
+    vmem.mapRange(stack_bottom, stack_phys, USER_STACK_SIZE, .{ .present = true, .user = true, .writeable = true, .execute_disable = true });
 
     log.debug("Mapped stack from {x} to {x}", .{ stack_bottom, USER_STACK_TOP });
     log.debug("Entry point: {x}", .{header.entry});

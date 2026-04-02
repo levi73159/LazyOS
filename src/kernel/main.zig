@@ -57,7 +57,8 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     log.debug("Kerenl location: physical 0x{x} virtual 0x{x}", .{ mb.kernel.phys_addr, mb.kernel.virt_addr });
 
     pmem.init(mb);
-    paging.init(mb);
+    const vmem = paging.init(mb);
+    _ = vmem;
     heap.init();
 
     console.logDebug(false);
