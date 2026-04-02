@@ -5,6 +5,7 @@ const acpi = @import("../arch/acpi.zig");
 const Shell = @import("../Shell.zig");
 const bootinfo = @import("../arch/bootinfo.zig");
 const scheduler = @import("../scheduler.zig");
+const Process = @import("../Process.zig");
 
 pub const commands = &[_]Command{
     Command{
@@ -172,20 +173,17 @@ fn run(s: *Shell, args: []const []const u8) anyerror!void {
     defer file.close();
 
     const data = try file.readAlloc(s.allocator);
+    defer s.allocator.free(data);
 
-    const user = @import("../usermode.zig");
-    const stack = try s.allocator.alignedAlloc(u8, .@"16", user.USER_STACK_SIZE);
+    const process = try s.allocator.create(Process);
+    errdefer s.allocator.destroy(process);
 
-    const stack_phys = bootinfo.toPhysicalHHDM(@intFromPtr(stack.ptr));
-    const code_phys = bootinfo.toPhysicalHHDM(@intFromPtr(data.ptr));
-    const code_map = user.mapCode(code_phys, data.len);
-    const stack_info = user.mapStack(stack_phys, user.USER_STACK_SIZE);
+    process.* = try Process.loadElf(data, s.allocator);
+    errdefer process.deinit(s.allocator);
 
-    std.log.debug("Running {s}", .{name});
-    std.log.debug("Code: {x}", .{code_map});
-    std.log.debug("User stack: {x} - {x}", .{ stack_info.bottom, stack_info.top });
+    const id = try scheduler.spawnProcess(process);
+    std.log.debug("Spawned process with id {d}", .{id});
 
-    const id = scheduler.createTask(code_map, stack_info.top, data, stack, true, .{});
     const exit_code = scheduler.waitForTaskToExit(id);
     if (exit_code != 0) {
         console.print("Process exited with code {d}\n", .{exit_code});

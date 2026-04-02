@@ -31,8 +31,8 @@ pub const SyscallFrame = extern struct {
     user_rflags: u64,
 };
 
-export var user_rsp: u64 = 0xdeadbeef1;
-export var kernel_rsp: u64 = 0xdeadbeef2; // set by the kernel before calling user code
+pub export var user_rsp: u64 = 0xdeadbeef1;
+pub export var kernel_rsp: u64 = 0xdeadbeef2; // set by the kernel before calling user code
 
 pub const SUCCESS: u64 = 0;
 pub const EPERM: u64 = 1;

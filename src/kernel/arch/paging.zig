@@ -28,7 +28,7 @@ pub const VirtualAddress = packed struct(u64) {
     }
 };
 
-const PageFlags = struct {
+pub const PageFlags = struct {
     present: bool = false,
     writeable: bool = false,
     user: bool = false,

@@ -4,6 +4,7 @@ const heap = @import("memory/heap.zig");
 const io = arch.io;
 const gdt = arch.descriptors.gdt;
 const pit = @import("pit.zig");
+const Process = @import("Process.zig");
 
 const PAGE_SIZE = heap.PAGE_SIZE;
 
@@ -33,7 +34,7 @@ pub const WaitingState = struct {
 pub const Task = struct {
     registers: arch.registers.InterruptFrame,
     stack: []u8, // required to be free
-    data: []u8, // file data, code, etc required to be free
+    process: ?*Process = null,
 
     next: ?*Task,
 
@@ -63,7 +64,6 @@ pub fn init() void {
         .state = .running,
         .registers = undefined, // set in the first schedule
         .stack = &.{}, // not own by us
-        .data = &.{}, // not own by us, always in memory
     };
 
     task_list = task;
@@ -107,6 +107,12 @@ pub fn schedule(frame: *arch.registers.InterruptFrame) void {
     current = next;
     current.?.state = .running;
     frame.* = current.?.registers; // copy saved register state
+
+    if (current.?.process != null) {
+        const kstack_top = @intFromPtr(current.?.stack.ptr) + current.?.stack.len;
+        gdt.tss.rsp0 = kstack_top;
+        arch.syscall.kernel_rsp = kstack_top;
+    }
 }
 
 fn checkWaitingTasks(task: *Task) void {
@@ -196,7 +202,7 @@ pub fn addTaskFunc(entry_point: anytype, args: anytype) u32 {
     // leave 128 bytes of space before taskExit
     // so the function prologue doesn't overwrite it
     const rsp = stack_top - 48 - 8;
-    return createTask(@intFromPtr(&taskReturn), rsp, &.{}, stack, false, args);
+    return createTask(@intFromPtr(&taskReturn), rsp, stack, false, args);
 }
 
 /// Creates a task with a specific entry point and meta data, and appends it to the task list as ready
@@ -207,7 +213,7 @@ pub fn addTaskFunc(entry_point: anytype, args: anytype) u32 {
 /// - *stack*: the stack data of the stack (to be freed when the task is removed, stack is always mapped in HHDM while rsp can be mapped in any)
 /// - *user*: whether the task is executed in user mode or kernel mode
 /// - *args*: the arguments to be passed to the task (starting in rip ending in r9)
-pub fn createTask(rip: u64, rsp: u64, code: []u8, stack: []u8, user: bool, args: anytype) u32 {
+pub fn createTask(rip: u64, rsp: u64, stack: []u8, user: bool, args: anytype) u32 {
     const helper = struct {
         pub fn getArg(_args: anytype, comptime index: comptime_int) usize {
             const info = @typeInfo(@TypeOf(_args));
@@ -273,12 +279,44 @@ pub fn createTask(rip: u64, rsp: u64, code: []u8, stack: []u8, user: bool, args:
         .state = .ready,
         .id = @bitCast(@as(i32, -1)), // id not set here, will be set in appendTask(task: *Task)
         .stack = stack,
-        .data = code,
         .registers = frame,
         .next = null,
     };
 
     appendTask(task);
+    return task.id;
+}
+
+pub fn spawnProcess(process: *Process) !u32 {
+    const allocator = heap.allocator();
+
+    const kstack = try allocator.alignedAlloc(u8, .@"16", STACK_SIZE);
+    const kstack_top = @intFromPtr(kstack.ptr) + STACK_SIZE;
+
+    const frame = arch.registers.InterruptFrame{
+        .rip = process.entry,
+        .rsp = process.stack_top,
+        .rbp = 0,
+        .cs = @intFromEnum(gdt.Segment.user_code),
+        .ds = @intFromEnum(gdt.Segment.user_data),
+        .ss = @intFromEnum(gdt.Segment.user_data),
+        .rflags = 0x202,
+    };
+
+    const task = try allocator.create(Task);
+    task.* = .{
+        .state = .ready,
+        .id = @bitCast(@as(i32, -1)), // id not set here, will be set in appendTask(task: *Task)
+        .stack = kstack,
+        .registers = frame,
+        .next = null,
+        .process = process,
+    };
+
+    appendTask(task);
+
+    log.debug("Spawned process task {d} entry={x} ustack={x} kstack={x}", .{ task.id, process.entry, process.stack_top, kstack_top });
+
     return task.id;
 }
 
@@ -337,8 +375,10 @@ fn removeTask(task: *Task) void {
     if (task.stack.len != 0) {
         allocator.free(task.stack);
     }
-    if (task.data.len != 0) {
-        allocator.free(task.data);
+
+    if (task.process) |process| {
+        process.deinit(allocator);
+        allocator.destroy(process);
     }
 
     allocator.destroy(task);

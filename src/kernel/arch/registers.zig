@@ -2,32 +2,32 @@ const std = @import("std");
 
 // 64 bit register frame
 pub const InterruptFrame = extern struct {
-    ds: u64,
-    rbp: u64,
-    rsi: u64,
-    rdi: u64,
-    r15: u64,
-    r14: u64,
-    r13: u64,
-    r12: u64,
-    r11: u64,
-    r10: u64,
-    r9: u64,
-    r8: u64,
-    rdx: u64,
-    rcx: u64,
-    rbx: u64,
-    rax: u64,
+    ds: u64 = 0,
+    rbp: u64 = 0,
+    rsi: u64 = 0,
+    rdi: u64 = 0,
+    r15: u64 = 0,
+    r14: u64 = 0,
+    r13: u64 = 0,
+    r12: u64 = 0,
+    r11: u64 = 0,
+    r10: u64 = 0,
+    r9: u64 = 0,
+    r8: u64 = 0,
+    rdx: u64 = 0,
+    rcx: u64 = 0,
+    rbx: u64 = 0,
+    rax: u64 = 0,
 
-    interrupt_number: u64,
-    error_code: u64,
+    interrupt_number: u64 = 0,
+    error_code: u64 = 0,
 
     // pushed by the processor
-    rip: u64, // +8 bytes
-    cs: u64, // +8 bytes
-    rflags: u64, // +8 bytes
-    rsp: u64, // +8 bytes
-    ss: u64, // +8 bytes
+    rip: u64 = 0, // +8 bytes
+    cs: u64 = 0, // +8 bytes
+    rflags: u64 = 0, // +8 bytes
+    rsp: u64 = 0, // +8 bytes
+    ss: u64 = 0, // +8 bytes
     // = 40 bytes total
 
     // general purpose registers

@@ -15,6 +15,11 @@ const Program = struct {
     build_step: *std.Build.Step,
 };
 
+pub const Programs = struct {
+    step: *std.Build.Step,
+    dir: std.Build.LazyPath,
+};
+
 pub fn build(b: *std.Build) void {
     // var threaded = std.Io.Threaded.init(b.allocator, .{});
     // io = threaded.io();
@@ -73,9 +78,9 @@ pub fn build(b: *std.Build) void {
 
     const install_kernel = b.addInstallArtifact(kernel, .{});
 
-    const program = makeProgram(b);
+    const programs = makePrograms(b);
 
-    const image = makeImage(b, kernel, &.{program});
+    const image = makeImage(b, kernel, programs);
     image.step.dependOn(&install_kernel.step);
 
     // const run_qemu_cmd = b.addSystemCommand(&.{ "qemu-system-x86_64", "-hda", image.path, "-m", "32", "-debugcon", "stdio" });
@@ -107,25 +112,43 @@ pub fn build(b: *std.Build) void {
     debug.dependOn(&debug_cmd.step);
 }
 
-pub fn makeProgram(b: *std.Build) Program {
-    const step = b.step("make-programs", "Build the programs");
+pub fn makePrograms(b: *std.Build) Programs {
+    const programs = "src/programs";
 
-    const compile_user = b.addSystemCommand(&.{
-        "nasm",
-        "-f",
-        "bin",
-    });
-    compile_user.addFileArg(b.path("src/programs/user.asm"));
-    const output = compile_user.addPrefixedOutputFileArg("-o", "user.bin");
-    step.dependOn(&compile_user.step);
+    const dir = b.build_root.handle.openDir(programs, .{ .iterate = true }) catch |err| {
+        std.log.err("Failed to open {s}: {s}", .{ programs, @errorName(err) });
+        exit(1);
+    };
+
+    const step = b.step("make-programs", "Build all programs");
+
+    var it = dir.iterate();
+    while (it.next() catch |err| @panic(@errorName(err))) |entry| {
+        if (entry.kind != .directory) continue;
+
+        const name = entry.name;
+        const path = b.pathJoin(&.{ programs, name });
+
+        const cmd = b.addSystemCommand(&.{ "make", "-C" });
+        cmd.addDirectoryArg(b.path(path));
+
+        const dupe_name = b.dupe(name);
+        const output_file = cmd.addPrefixedOutputFileArg("OUT=", name);
+        _ = cmd.addPrefixedOutputDirectoryArg("OBJ_DIR=", "cache");
+
+        const install_file = b.addInstallFileWithDir(output_file, .{ .custom = "programs" }, dupe_name);
+        install_file.step.dependOn(&cmd.step);
+
+        step.dependOn(&install_file.step);
+    }
 
     return .{
-        .path = output,
-        .build_step = step,
+        .step = step,
+        .dir = b.path("zig-out/programs"),
     };
 }
 
-pub fn makeImage(b: *std.Build, kernel: *std.Build.Step.Compile, programs: []const Program) Image {
+pub fn makeImage(b: *std.Build, kernel: *std.Build.Step.Compile, programs: Programs) Image {
     const img_root = "root";
     const out = b.getInstallPath(.bin, image_name);
 
@@ -138,6 +161,7 @@ pub fn makeImage(b: *std.Build, kernel: *std.Build.Step.Compile, programs: []con
 
     const files = b.addWriteFiles();
     files.step.dependOn(&convert.step); // staging dir must exist before copy
+    files.step.dependOn(programs.step);
     _ = files.addCopyFile(kernel.getEmittedBin(), "boot/kernel");
     _ = files.addCopyFile(b.path("src/bootloader/limine.conf"), "boot/limine.conf");
     _ = files.addCopyFile(b.path("limine/BOOTX64.EFI"), "EFI/BOOT/BOOTX64.EFI");
@@ -146,11 +170,8 @@ pub fn makeImage(b: *std.Build, kernel: *std.Build.Step.Compile, programs: []con
     _ = files.addCopyFile(b.path("limine/limine-bios.sys"), "boot/limine-bios.sys");
     _ = files.addCopyDirectory(b.path(img_root), "", .{});
     _ = files.addCopyDirectory(b.path("zig-out/ui"), "ui", .{}); // TGAs go in /ui
+    _ = files.addCopyDirectory(programs.dir, "bin", .{});
 
-    for (programs) |program| {
-        files.step.dependOn(program.build_step);
-        _ = files.addCopyFile(program.path, "bin/user");
-    }
     const make_iso = b.addSystemCommand(&.{
         "xorriso",                     "-as",              "mkisofs",
         "-o",                          out,                "-b",

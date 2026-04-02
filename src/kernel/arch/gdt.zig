@@ -166,7 +166,7 @@ var gdt = GDT{
     .tss_desc = undefined, // loaded at runtime
 };
 
-var tss = std.mem.zeroes(TSS);
+pub var tss = std.mem.zeroes(TSS);
 
 var descriptor = Descriptor{
     .limit = @sizeOf(@TypeOf(gdt)) - 1,
