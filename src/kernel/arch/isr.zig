@@ -7,6 +7,7 @@ const log = @import("std").log.scoped(.isr);
 const console = @import("../console.zig");
 const host = @import("std").log.scoped(.host);
 const io = @import("io.zig");
+const scheduler = @import("../scheduler.zig");
 
 const InterruptFn = *const fn () callconv(.naked) noreturn;
 pub const Handler = *const fn (frame: *InterruptFrame) void;
@@ -103,8 +104,21 @@ export fn interruptHandler(frame: *InterruptFrame) callconv(.c) void {
 }
 
 fn handleError(frame: *InterruptFrame) noreturn {
-    log.debug("Unhandled interrupt", .{});
+    log.debug("Unhandled error", .{});
     const exception: Exception = @enumFromInt(frame.interrupt_number);
+    if (frame.cs == @intFromEnum(gdt.Segment.user_code)) {
+        if (console.serial) |writer| {
+            writer.print("\x1b[97;41m", .{}) catch {};
+            writer.print("!!! UNHANDLED USER EXCEPTION !!!\n", .{}) catch {};
+            writer.print("Unhandled exception {d} {s}\n", .{ frame.interrupt_number, @tagName(exception) }) catch {};
+            writer.print("{f}\n", .{frame}) catch {};
+            writer.print("\x1b[0m", .{}) catch {};
+
+            scheduler.taskExit(255); // 255 means crash due to exception
+        }
+    }
+
+    // hard crash if error happens in kernel
     console.printB("\x1b[97;41m", .{});
     console.printB("!!! UNHANDLED EXCEPTION !!!\n", .{});
     console.printB("Unhandled exception {d} {s}\n", .{ frame.interrupt_number, @tagName(exception) });

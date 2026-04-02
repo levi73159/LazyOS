@@ -16,11 +16,5 @@ lea rsi, [rel err]
 mov rdx, 6
 syscall
 
-mov rax, 60
-mov rdi, 69
-syscall
-
-jmp $
-
 msg: db "Test Program", 10 ; len = 13
 err: db "Error", 10        ; len = 6
