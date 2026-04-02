@@ -115,10 +115,11 @@ pub fn build(b: *std.Build) void {
 pub fn makePrograms(b: *std.Build) Programs {
     const programs = "src/programs";
 
-    const dir = b.build_root.handle.openDir(programs, .{ .iterate = true }) catch |err| {
+    var dir = b.build_root.handle.openDir(programs, .{ .iterate = true }) catch |err| {
         std.log.err("Failed to open {s}: {s}", .{ programs, @errorName(err) });
         exit(1);
     };
+    defer dir.close();
 
     const step = b.step("make-programs", "Build all programs");
 
