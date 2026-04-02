@@ -94,7 +94,7 @@ fn sys_write(frame: *SyscallFrame) u64 {
 fn sys_exit(frame: *SyscallFrame) u64 {
     const code = frame.rdi;
 
-    scheduler.taskExit();
+    scheduler.taskExit(code);
     return code;
 }
 

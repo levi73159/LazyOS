@@ -410,7 +410,7 @@ export fn uacpi_kernel_schedule_work(
 export fn uacpi_kernel_wait_for_work_completion() c.uacpi_status {
     for (work_ids.items) |id| {
         log.debug("Waiting for task {d}", .{id});
-        scheduler.waitForTaskToExit(id);
+        _ = scheduler.waitForTaskToExit(id); // ignore exit code
     }
     work_ids.clearRetainingCapacity();
     log.debug("Completed work", .{});

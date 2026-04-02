@@ -186,5 +186,8 @@ fn run(s: *Shell, args: []const []const u8) anyerror!void {
     std.log.debug("User stack: {x} - {x}", .{ stack_info.bottom, stack_info.top });
 
     const id = scheduler.createTask(code_map, stack_info.top, data, stack, true, .{});
-    scheduler.waitForTaskToExit(id);
+    const exit_code = scheduler.waitForTaskToExit(id);
+    if (exit_code != 0) {
+        console.print("Process exited with code {d}\n", .{exit_code});
+    }
 }

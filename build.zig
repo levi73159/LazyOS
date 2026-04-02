@@ -10,6 +10,11 @@ const Image = struct {
     step: *std.Build.Step,
 };
 
+const Program = struct {
+    path: std.Build.LazyPath,
+    build_step: *std.Build.Step,
+};
+
 pub fn build(b: *std.Build) void {
     // var threaded = std.Io.Threaded.init(b.allocator, .{});
     // io = threaded.io();
@@ -68,7 +73,9 @@ pub fn build(b: *std.Build) void {
 
     const install_kernel = b.addInstallArtifact(kernel, .{});
 
-    const image = makeImage(b, kernel);
+    const program = makeProgram(b);
+
+    const image = makeImage(b, kernel, &.{program});
     image.step.dependOn(&install_kernel.step);
 
     // const run_qemu_cmd = b.addSystemCommand(&.{ "qemu-system-x86_64", "-hda", image.path, "-m", "32", "-debugcon", "stdio" });
@@ -100,7 +107,25 @@ pub fn build(b: *std.Build) void {
     debug.dependOn(&debug_cmd.step);
 }
 
-pub fn makeImage(b: *std.Build, kernel: *std.Build.Step.Compile) Image {
+pub fn makeProgram(b: *std.Build) Program {
+    const step = b.step("make-programs", "Build the programs");
+
+    const compile_user = b.addSystemCommand(&.{
+        "nasm",
+        "-f",
+        "bin",
+    });
+    compile_user.addFileArg(b.path("src/programs/user.asm"));
+    const output = compile_user.addPrefixedOutputFileArg("-o", "user.bin");
+    step.dependOn(&compile_user.step);
+
+    return .{
+        .path = output,
+        .build_step = step,
+    };
+}
+
+pub fn makeImage(b: *std.Build, kernel: *std.Build.Step.Compile, programs: []const Program) Image {
     const img_root = "root";
     const out = b.getInstallPath(.bin, image_name);
 
@@ -122,6 +147,10 @@ pub fn makeImage(b: *std.Build, kernel: *std.Build.Step.Compile) Image {
     _ = files.addCopyDirectory(b.path(img_root), "", .{});
     _ = files.addCopyDirectory(b.path("zig-out/ui"), "ui", .{}); // TGAs go in /ui
 
+    for (programs) |program| {
+        files.step.dependOn(program.build_step);
+        _ = files.addCopyFile(program.path, "bin/user");
+    }
     const make_iso = b.addSystemCommand(&.{
         "xorriso",                     "-as",              "mkisofs",
         "-o",                          out,                "-b",

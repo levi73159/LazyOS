@@ -16,7 +16,7 @@ var paused: bool = false;
 pub const TaskState = union(enum) {
     ready, // ready to run
     running, // currently running
-    dead, // task is dead
+    dead: u64, // task is dead (with return value)
     waiting: WaitingState, // waiting for task with id
 };
 
@@ -47,6 +47,7 @@ pub const Task = struct {
 var current: ?*Task = null;
 var task_list: ?*Task = null; // linked list
 var first: bool = false;
+var task_has_died: bool = false;
 
 pub fn init() void {
     const allocator = heap.allocator();
@@ -73,13 +74,15 @@ pub fn schedule(frame: *arch.registers.InterruptFrame) void {
     if (task_list == null) return; // no tasks
 
     paused = false;
-    if (pit.ticks() % 5 == 0) {
+    // try to free resources after every 10 ticks ()
+    if (task_has_died and pit.ticks() % 10 == 0) {
         removeDeadTasks();
     }
 
     if (current) |task| {
         checkWaitingTasks(task);
         if (task.state == .dead) {
+            task_has_died = true;
             log.warn("Task {d} is dead", .{task.id});
         } else {
             // log.debug("Copying frame to registers", .{});
@@ -130,6 +133,9 @@ fn checkWaitingTasks(task: *Task) void {
 
 fn removeDeadTasks() void {
     var current_node = task_list;
+    if (current_node.?.state != .dead) {
+        task_has_died = false;
+    }
     while (current_node) |task| : (current_node = task.next) {
         if (current == task) continue; // do not remove current task even if it is dead
         if (task.state == .dead) {
@@ -142,7 +148,7 @@ fn taskReturn() noreturn {
     asm volatile ("andq $-16, %%rsp");
     io.cli();
     log.warn("Task Exit", .{});
-    current.?.state = .dead;
+    current.?.state = .{ .dead = 0 };
     log.warn("Task {d} exited", .{current.?.id});
     io.sti();
     while (true) {
@@ -340,7 +346,7 @@ fn removeTask(task: *Task) void {
 
 pub fn killTask(id: u32) void {
     if (getTask(id)) |task| {
-        task.state = .dead;
+        task.state = .{ .dead = 137 }; // SIGKILL
     }
 }
 
@@ -348,33 +354,34 @@ pub fn currentTask() u32 {
     return if (current) |task| task.id else 0;
 }
 
-pub fn taskExit() noreturn {
+pub fn taskExit(code: u64) noreturn {
     io.cli();
-    current.?.state = .dead;
+    current.?.state = .{ .dead = code };
     io.sti();
     io.hlt();
 }
 
-pub fn waitForTaskToExit(id: u32) void {
+pub fn waitForTaskToExit(id: u32) u64 {
     // check if task is alreay dead or gone
-    if (getTask(id)) |task| {
-        if (task.state == .dead) return;
-    } else {
-        return;
-    }
-
-    if (current) |task| {
-        task.state = .{ .waiting = .{
-            .task_id = id,
-            .wait_type = .exit,
-        } };
-    }
     while (true) {
+        if (getTask(id)) |task| {
+            switch (task.state) {
+                .dead => |exitval| return exitval,
+                else => {},
+            }
+        } else {
+            return 0;
+        }
+
+        if (current) |task| {
+            task.state = .{ .waiting = .{
+                .task_id = id,
+                .wait_type = .exit,
+            } };
+        }
+
         io.sti();
         asm volatile ("hlt");
-        if (current) |task| {
-            if (task.state == .ready or task.state == .running) break;
-        }
     }
 }
 
