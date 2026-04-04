@@ -2,6 +2,7 @@ pub const MSR_EFER: u32 = 0xC0000080;
 pub const MSR_STAR: u32 = 0xC0000081;
 pub const MSR_LSTAR: u32 = 0xC0000082;
 pub const MSR_FMASK: u32 = 0xC0000084;
+pub const MSR_FSBASE: u32 = 0xC000_0100;
 
 pub fn write(msr: u32, value: u64) void {
     const low: u32 = @truncate(value);

@@ -87,7 +87,24 @@ pub fn init() Self {
 }
 
 pub fn deinit(self: *const Self) void {
+    for (self.pml4[0..256]) |entry| {
+        if (!entry.present) continue;
+        freePageTableEntry(@ptrFromInt(bootinfo.toVirtualHHDM(entry.getAddress())), 3);
+    }
     pmem.kernel().freePageV(@intFromPtr(self.pml4));
+}
+
+// pml4 -> pdpt -> pd -> pt
+fn freePageTableEntry(table: *PageTable, level: u8) void {
+    for (table) |entry| {
+        if (entry.present) {
+            if (level != 0 and !entry.page_size) {
+                const next: *PageTable = @ptrFromInt(bootinfo.toVirtualHHDM(entry.getAddress()));
+                freePageTableEntry(next, level - 1);
+                pmem.kernel().freePage(entry.getAddress());
+            }
+        }
+    }
 }
 
 pub fn safeDeinit(self: *const Self) void {

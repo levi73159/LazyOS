@@ -48,7 +48,13 @@ pub const EFAULT: u64 = 14;
 pub const EINVAL: u64 = 22;
 pub const ENOSYS: u64 = 38;
 
+pub const FD_FILE_START = 3;
+pub const FD_STDIN = 0;
+pub const FD_STDOUT = 1;
+pub const FD_STDERR = 2;
+
 export fn syscallHandler(frame: *SyscallFrame) callconv(.c) void {
+    log.debug("Syscall {d}", .{frame.rax});
     frame.rax = switch (frame.rax) {
         0 => sys_test(frame),
         1 => sys_write(frame),
@@ -72,15 +78,15 @@ fn sys_write(frame: *SyscallFrame) u64 {
 
     const string = buf[0..count];
     switch (fd) {
-        0 => {
+        FD_STDIN => {
             log.err("Can't write to stdin", .{});
             return EPERM;
         },
-        1 => {
+        FD_STDOUT => {
             console.write(string);
             return count;
         },
-        2 => {
+        FD_STDERR => {
             console.write(string);
             return count;
         },

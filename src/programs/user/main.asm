@@ -1,26 +1,22 @@
-[bits 64]
+; test.asm
+bits 64
+default rel
 
 section .text
 global _start
 
 _start:
-mov rax, 1          ; syscall number for write
-mov rdi, 1          ; file descriptor 1 (stdout)
-lea rsi, [rel msg]  ; address of the string
-mov rdx, 13         ; length of string
-syscall             ; invoke the kernel
+    ; sys_write(1, msg, 13)
+    mov rax, 1
+    mov rdi, 1
+    lea rsi, [msg]
+    mov rdx, 13
+    syscall
 
-mov rax, 1
-mov rdi, 2
-lea rsi, [rel err]
-mov rdx, 6
-syscall
+    ; sys_exit(0)
+    mov rax, 60
+    xor rdi, rdi
+    syscall
 
-mov rax, 60
-mov rdi, 0
-syscall
-
-jmp $
-
-msg: db "Test Program", 10 ; len = 13
-err: db "Error", 10        ; len = 6
+section .data
+msg: db "Hello World!", 10
