@@ -34,19 +34,19 @@ pub const SyscallFrame = extern struct {
 pub export var user_rsp: u64 = 0xdeadbeef1;
 pub export var kernel_rsp: u64 = 0xdeadbeef2; // set by the kernel before calling user code
 
-pub const SUCCESS: u64 = 0;
-pub const EPERM: u64 = 1;
-pub const ENOENT: u64 = 2;
-pub const ESRCH: u64 = 3;
-pub const EINTR: u64 = 4;
-pub const EIO: u64 = 5;
-pub const EBADF: u64 = 9;
-pub const EAGAIN: u64 = 11;
-pub const ENOMEM: u64 = 12;
-pub const EACCES: u64 = 13;
-pub const EFAULT: u64 = 14;
-pub const EINVAL: u64 = 22;
-pub const ENOSYS: u64 = 38;
+pub const SUCCESS: i64 = 0;
+pub const EPERM: i64 = -1;
+pub const ENOENT: i64 = -2;
+pub const ESRCH: i64 = -3;
+pub const EINTR: i64 = -4;
+pub const EIO: i64 = -5;
+pub const EBADF: i64 = -9;
+pub const EAGAIN: i64 = -11;
+pub const ENOMEM: i64 = -12;
+pub const EACCES: i64 = -13;
+pub const EFAULT: i64 = -14;
+pub const EINVAL: i64 = -22;
+pub const ENOSYS: i64 = -38;
 
 pub const FD_FILE_START = 3;
 pub const FD_STDIN = 0;
@@ -55,15 +55,23 @@ pub const FD_STDERR = 2;
 
 export fn syscallHandler(frame: *SyscallFrame) callconv(.c) void {
     log.debug("Syscall {d}", .{frame.rax});
-    frame.rax = switch (frame.rax) {
+    log.debug("syscall {d} rdi=0x{x} rsi=0x{x} rdx=0x{x}", .{ frame.rax, frame.rdi, frame.rsi, frame.rdx });
+    const num = frame.rax;
+    const val = switch (num) {
         0 => sys_test(frame),
         1 => sys_write(frame),
+        16 => sys_ioctl(frame),
+        20 => sys_writev(frame),
         60 => sys_exit(frame),
+        158 => sys_arch_prctl(frame),
+        218 => 1, // set_tid_address (stub it with fake TID address of 1 since we don't have threads)
         else => ENOSYS,
     };
+    frame.rax = @bitCast(val);
+    log.debug("syscall {d} -> {x}, user_rip={x}", .{ num, frame.rax, frame.user_rip });
 }
 
-fn sys_test(frame: *SyscallFrame) u64 {
+fn sys_test(frame: *SyscallFrame) i64 {
     _ = frame;
 
     @import("std").log.debug("sys_test", .{});
@@ -71,7 +79,22 @@ fn sys_test(frame: *SyscallFrame) u64 {
     return 0;
 }
 
-fn sys_write(frame: *SyscallFrame) u64 {
+fn sys_arch_prctl(frame: *SyscallFrame) i64 {
+    const SET_FS = 0x1002;
+    const code = frame.rdi;
+    const addr = frame.rsi;
+
+    switch (code) {
+        SET_FS => msr.write(msr.MSR_FSBASE, addr),
+        else => {
+            log.err("Unknown arch_prctl code {d}", .{code});
+            return EINVAL;
+        },
+    }
+    return 0;
+}
+
+fn sys_write(frame: *SyscallFrame) i64 {
     const fd = frame.rdi;
     const buf: [*]const u8 = @ptrFromInt(frame.rsi);
     const count = frame.rdx;
@@ -84,11 +107,11 @@ fn sys_write(frame: *SyscallFrame) u64 {
         },
         FD_STDOUT => {
             console.write(string);
-            return count;
+            return @intCast(count);
         },
         FD_STDERR => {
             console.write(string);
-            return count;
+            return @intCast(count);
         },
         else => {
             log.err("Can't write to fd {d}", .{fd});
@@ -97,11 +120,62 @@ fn sys_write(frame: *SyscallFrame) u64 {
     }
 }
 
-fn sys_exit(frame: *SyscallFrame) u64 {
+const iovec = struct {
+    base: usize,
+    len: usize,
+};
+
+fn sys_writev(frame: *SyscallFrame) i64 {
+    const fd = frame.rdi;
+    const iov: [*]const iovec = @ptrFromInt(frame.rsi);
+    const count = frame.rdx;
+
+    var total_len: u64 = 0;
+    const iovecs = iov[0..count];
+    for (iovecs) |vec| {
+        const ptr: [*]const u8 = @ptrFromInt(vec.base);
+        const slice = ptr[0..vec.len];
+
+        const string = slice[0..vec.len];
+        switch (fd) {
+            FD_STDIN => {
+                log.err("Can't write to stdin", .{});
+                return EPERM;
+            },
+            FD_STDOUT => {
+                console.write(string);
+                total_len += string.len;
+            },
+            FD_STDERR => {
+                console.write(string);
+                total_len += string.len;
+            },
+            else => {
+                log.err("Can't write to fd {d}", .{fd});
+                return EBADF;
+            },
+        }
+    }
+
+    return @intCast(total_len);
+}
+
+fn sys_exit(frame: *SyscallFrame) i64 {
     const code = frame.rdi;
 
     scheduler.taskExit(code);
     return code;
+}
+
+fn sys_ioctl(frame: *SyscallFrame) i64 {
+    const fd = frame.rdi;
+    const request = frame.rsi;
+
+    _ = fd;
+    _ = request;
+
+    // pretend it's NOT a terminal
+    return -25;
 }
 
 pub fn init() void {

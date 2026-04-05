@@ -121,7 +121,7 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
             io.hltNoInt();
         };
         FileSystem.setGlobal(fs);
-    } else {}
+    }
 
     const cpu = arch.CPU.init() catch |err| blk: {
         log.err("Failed to get the CPU: {s}", .{@errorName(err)});

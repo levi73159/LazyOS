@@ -41,8 +41,6 @@ interruptCommon:
     mov $0x10, %ax
     mov %ax, %ds
     mov %ax, %es
-    mov %ax, %fs
-    mov %ax, %gs
 
     mov %rsp, %rdi    # frame pointer into rdi (first arg)
     sub $8, %rsp      # align to 16 bytes before call
@@ -52,8 +50,6 @@ interruptCommon:
     pop %rax
     mov %ax, %ds
     mov %ax, %es
-    mov %ax, %fs
-    mov %ax, %gs
 
     pop %rbp
     pop %rsi

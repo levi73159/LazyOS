@@ -323,35 +323,6 @@ pub fn spawnProcess(process: *Process) !u32 {
 
     appendTask(task);
 
-    const pmem = @import("memory/pmem.zig");
-    const bootinfo = @import("arch/bootinfo.zig");
-
-    // in spawnProcess, before creating the task
-    // allocate a minimal TLS block - 128 bytes is enough for musl's basics
-    const tls_pages = 1;
-    const tls_phys = try pmem.kernel().allocPages(tls_pages);
-    const tls_user_vaddr: u64 = 0x300000;
-
-    process.vmem.mapRange(tls_user_vaddr, tls_phys, 4096, .{
-        .present = true,
-        .user = true,
-        .writeable = true,
-        .execute_disable = true,
-    });
-
-    // zero it
-    const tls_hhdm: [*]u8 = @ptrFromInt(bootinfo.toVirtualHHDM(tls_phys));
-    @memset(tls_hhdm[0..4096], 0);
-
-    // write self pointer at offset 0
-    @as(*u64, @ptrFromInt(bootinfo.toVirtualHHDM(tls_phys))).* = tls_user_vaddr;
-
-    // fill stack canary at fs:0x28 with a non-zero value
-    @as(*u64, @ptrFromInt(bootinfo.toVirtualHHDM(tls_phys) + 0x28)).* = 0xdeadbeefcafe1234;
-
-    process.fs_base = tls_user_vaddr;
-    task.fs_base = tls_user_vaddr;
-
     log.debug("Spawned process task {d} entry={x} ustack={x} kstack={x}", .{ task.id, process.entry, process.stack_top, kstack_top });
 
     return task.id;
