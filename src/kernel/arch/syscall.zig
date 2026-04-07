@@ -85,7 +85,10 @@ fn sys_arch_prctl(frame: *SyscallFrame) i64 {
     const addr = frame.rsi;
 
     switch (code) {
-        SET_FS => msr.write(msr.MSR_FSBASE, addr),
+        SET_FS => {
+            msr.write(msr.MSR_FSBASE, addr);
+            scheduler.getCurrentTask().fs_base = addr;
+        },
         else => {
             log.err("Unknown arch_prctl code {d}", .{code});
             return EINVAL;
@@ -133,6 +136,8 @@ fn sys_writev(frame: *SyscallFrame) i64 {
     var total_len: u64 = 0;
     const iovecs = iov[0..count];
     for (iovecs) |vec| {
+        if (vec.base == 0) continue; // skip NULL pointers
+        if (vec.len == 0) continue; // skip empty vectors
         const ptr: [*]const u8 = @ptrFromInt(vec.base);
         const slice = ptr[0..vec.len];
 

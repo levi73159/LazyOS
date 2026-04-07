@@ -41,14 +41,17 @@ pub fn loadElf(data: []const u8, allocator: std.mem.Allocator) !Self {
 
     var first_load_seen = false;
     var phdr_vaddr: u64 = 0;
+    var first_load_mapped_addr: usize = 0;
 
     var ph_iter = header.iterateProgramHeadersBuffer(data);
     while (try ph_iter.next()) |ph| {
         switch (ph.p_type) {
             elf.PT_LOAD => {
                 if (!first_load_seen) {
+                    const mapped_virt = std.mem.alignBackward(u64, ph.p_vaddr, paging.PAGE_SIZE);
                     phdr_vaddr = ph.p_vaddr;
                     first_load_seen = true;
+                    first_load_mapped_addr = mapped_virt;
                 }
                 try ptLoad(allocator, ph, data, &regions, &vmem);
             },
@@ -68,8 +71,10 @@ pub fn loadElf(data: []const u8, allocator: std.mem.Allocator) !Self {
 
     vmem.mapRange(stack_bottom, stack_phys, USER_STACK_SIZE, .{ .present = true, .user = true, .writeable = true, .execute_disable = true });
 
+    const base = first_load_mapped_addr - phdr_vaddr;
     log.debug("Mapped stack from {x} to {x}", .{ stack_bottom, USER_STACK_TOP });
     log.debug("Entry point: {x}", .{header.entry});
+    log.debug("Base: {x}", .{base});
 
     const user_sp = loadStack(stack_phys, ElfInfo{
         .entry = header.entry,
@@ -125,7 +130,7 @@ fn ptLoad(allocator: std.mem.Allocator, ph: elf.Elf64_Phdr, data: []const u8, re
 
     if (ph.p_filesz > 0) {
         const src = data[ph.p_offset..][0..ph.p_filesz];
-        @memcpy(memory[0..src.len], src);
+        @memcpy(memory[offset..][0..src.len], src);
     }
 
     log.debug("Mapped {d} bytes from {x} to {x}", .{ total_size, ph.p_vaddr, virt });

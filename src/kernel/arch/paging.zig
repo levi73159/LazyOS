@@ -26,8 +26,8 @@ fn mapFramebuffer(vmem: *VirtualSpace, fb: bootinfo.Framebuffer) void {
     const virt = fb.address;
 
     var offset: u64 = 0;
-    while (offset < size) : (offset += PAGE_SIZE) {
-        vmem.mapPage(virt + offset, phys + offset, .{
+    while (offset < size) : (offset += VirtualSpace.HUGE_PAGE_SIZE) {
+        vmem.mapHugePage(virt + offset, phys + offset, .{
             .present = true,
             .write_through = false,
             .cache_disabled = false,

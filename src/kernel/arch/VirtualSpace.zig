@@ -126,8 +126,9 @@ fn createPageTable() *PageTable {
         @panic("Failed to allocate page: Out of memory");
     };
     std.debug.assert(phys % PAGE_SIZE == 0); // should always hold
-
-    return @ptrFromInt(bootinfo.toVirtualHHDM(phys));
+    const ptr: *PageTable = @ptrFromInt(bootinfo.toVirtualHHDM(phys));
+    ptr.* = std.mem.zeroes(PageTable);
+    return ptr;
 }
 
 fn getOrCreatePageTable(table: *PageTable, index: u9, user: bool) *PageTable {
@@ -135,6 +136,9 @@ fn getOrCreatePageTable(table: *PageTable, index: u9, user: bool) *PageTable {
     if (entry.present) {
         if (user and !entry.user) {
             entry.user = true;
+        }
+        if (user and entry.page_size) {
+            log.warn("HUGE PAGE CONFLICT WITH SMALL PAGE at {x}", .{entry.getAddress()});
         }
         return @ptrFromInt(bootinfo.toVirtualHHDM(entry.getAddress()));
     } else {
@@ -153,6 +157,11 @@ pub fn mapPage(self: *const Self, virt: u64, phys: u64, flags: PageFlags) void {
 
     const pdpt_table = getOrCreatePageTable(self.pml4, va.pml4_index, flags.user);
     const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index, flags.user);
+    if (pd_table[va.pd_index].page_size) {
+        log.err("Try to map huge page to small page at {d}", .{va.pd_index});
+        log.err("phys: {x}, virt: {x}", .{ phys, virt });
+        @panic("Try to map huge page to small page");
+    }
     const pt_table = getOrCreatePageTable(pd_table, va.pd_index, flags.user);
 
     pt_table[va.pt_index] = PageEntry.init(phys, flags);
@@ -162,6 +171,10 @@ pub fn mapPage(self: *const Self, virt: u64, phys: u64, flags: PageFlags) void {
 pub fn mapRange(self: *const Self, virt: u64, phys: u64, size: u64, flags: PageFlags) void {
     var offset: u64 = 0;
     const size_aligned = std.mem.alignForward(u64, size, PAGE_SIZE);
+    if (phys > 0x8348_e589_0000) {
+        log.debug("suspicious phys: {x}, return_address: {x}", .{ phys, @returnAddress() });
+        @breakpoint();
+    }
     while (offset < size_aligned) : (offset += PAGE_SIZE) {
         self.mapPage(virt + offset, phys + offset, flags);
     }
@@ -174,8 +187,8 @@ pub fn mapHugePage(self: *const Self, virt: u64, phys: u64, flags: PageFlags) vo
     const pdpt_table = getOrCreatePageTable(self.pml4, va.pml4_index, flags.user);
     const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index, flags.user);
     const entry = pd_table[va.pd_index];
-    if (entry.present and entry.page_size) {
-        log.debug("HUGE PAGE CONFLICT at {x}", .{virt});
+    if (entry.present and !entry.page_size) {
+        log.warn("HUGE PAGE CONFLICT WITH SMALL PAGE at {x}, overwriting", .{virt});
     }
     // set huge page bit directly in PD, no PT needed
     pd_table[va.pd_index] = PageEntry.init(phys, .{

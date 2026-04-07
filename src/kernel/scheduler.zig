@@ -459,3 +459,8 @@ pub fn wakeTask(id: u32) void {
         }
     }
 }
+
+/// Assumes task is running
+pub fn getCurrentTask() *Task {
+    return current.?;
+}

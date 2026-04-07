@@ -30,7 +30,7 @@ pub fn build(b: *std.Build) void {
         .ofmt = .elf,
     });
 
-    const debug_int = b.option(bool, "interrupt", "turn on interrupt logging for qemu using the -d int option") orelse false;
+    const debug_int = b.option(bool, "int", "turn on interrupt logging for qemu using the -d int option") orelse false;
     const display = b.option([]const u8, "display", "choose display backend") orelse "sdl,gl=on";
     const optimize_mode: std.builtin.OptimizeMode = b.option(std.builtin.OptimizeMode, "optimize", "set the optimization mode") orelse switch (b.release_mode) {
         .off => std.builtin.OptimizeMode.ReleaseSafe,
