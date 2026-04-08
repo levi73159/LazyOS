@@ -1,8 +1,11 @@
-// src/programs/hello/hello.c
+// hello.c
 #include <stdio.h>
 
-int main(int argc, char **argv) {
-    printf("Hello from C!\n");
-    printf("argc = %d\n", argc);
+int main() {
+    char buf[256];
+    printf("Enter your name: ");
+    fflush(stdout);
+    fgets(buf, sizeof(buf), stdin);
+    printf("Hello, %s", buf);
     return 0;
 }

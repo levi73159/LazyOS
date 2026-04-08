@@ -58,7 +58,7 @@ export fn syscallHandler(frame: *SyscallFrame) callconv(.c) void {
     log.debug("syscall {d} rdi=0x{x} rsi=0x{x} rdx=0x{x}", .{ frame.rax, frame.rdi, frame.rsi, frame.rdx });
     const num = frame.rax;
     const val = switch (num) {
-        0 => sys_test(frame),
+        0 => sys_read(frame),
         1 => sys_write(frame),
         13 => rt_sigaction(frame),
         16 => sys_ioctl(frame),
@@ -74,12 +74,37 @@ export fn syscallHandler(frame: *SyscallFrame) callconv(.c) void {
     log.debug("syscall {d} -> {x}, user_rip={x}", .{ num, frame.rax, frame.user_rip });
 }
 
-fn sys_test(frame: *SyscallFrame) i64 {
-    _ = frame;
+fn sys_read(frame: *SyscallFrame) i64 {
+    const fd = frame.rdi;
+    const count = frame.rdx;
 
-    @import("std").log.debug("sys_test", .{});
+    if (fd != FD_STDIN) {
+        log.err("Can't read from fd {d}", .{fd});
+        return EBADF;
+    }
+    log.debug("Reading {d} bytes from stdin", .{count});
 
-    return 0;
+    const ptr: [*]u8 = @ptrFromInt(frame.rsi);
+    var i: usize = 0;
+    // enable interrupts
+    @import("io.zig").sti();
+    while (i < count) {
+        const kb = @import("../keyboard.zig");
+        const key = kb.getKey();
+        log.debug("key={}", .{key});
+        if (!key.pressed) continue;
+
+        if (key.getChar()) |c| {
+            ptr[i] = c;
+            i += 1;
+            // echo character back
+            console.putchar(c); // put char dones't swap buffers, must call complete
+            console.complete();
+            if (c == '\n') break;
+        }
+    }
+
+    return @intCast(i);
 }
 
 fn rt_sigaction(_: *SyscallFrame) i64 {
