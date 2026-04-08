@@ -61,19 +61,23 @@ extern const kernel_size: u8;
 // ─────────────────────────────────────────────────────────────────────────────
 
 export fn boot_init() callconv(.naked) noreturn {
-    asm volatile (
-    // ── 1. Set our stack ─────────────────────────────────────────────
-    // RIP-relative LEA: pure address arithmetic, no memory access,
-    // safe before RSP is valid.
-        "lea kernel_stack + " ++ std.fmt.comptimePrint("{d}", .{KERNEL_STACK_SIZE}) ++ "(%rip), %rsp\n" ++ "xor %ebp, %ebp\n"
+    asm volatile ("lea kernel_stack + " ++ std.fmt.comptimePrint("{d}", .{KERNEL_STACK_SIZE}) ++ "(%rip), %rsp\n" ++ "xor %ebp, %ebp\n"
 
-            // ── 2. Enable SSE ────────────────────────────────────────────────
-            // Zig emits SSE instructions constantly. CR0.EM=1 causes #UD on
-            // every SSE opcode → triple fault with no IDT.
-        ++ "mov %cr0, %rax\n" ++ "and $0xFFFFFFFFFFFFFFFB, %rax\n" // clear EM (bit 2)
-        ++ "or  $0x2, %rax\n" // set  MP (bit 1)
-        ++ "mov %rax, %cr0\n" ++ "mov %cr4, %rax\n" ++ "or  $0x600, %rax\n" // OSFXSR | OSXMMEXCPT
-        ++ "mov %rax, %cr4\n" ++ "call boot_init_stage2\n" ::: .{ .memory = true });
+            // enable SSE
+        ++ "mov %cr0, %rax\n" ++ "and $0xFFFFFFFFFFFFFFFB, %rax\n" ++ "or  $0x2, %rax\n" ++ "mov %rax, %cr0\n"
+
+            // enable SSE + AVX in CR4
+        ++ "mov %cr4, %rax\n" ++ "or  $0x40600, %rax\n" // OSFXSR(bit9) | OSXMMEXCPT(bit10) | OSXSAVE(bit18)
+        ++ "mov %rax, %cr4\n"
+
+            // enable AVX in XCR0 via xsetbv
+            // XCR0 bit 0 = x87, bit 1 = SSE, bit 2 = AVX
+        ++ "xor %ecx, %ecx\n" // XCR0 index = 0
+        ++ "xgetbv\n" // read current XCR0 into edx:eax
+        ++ "or  $0x7, %eax\n" // enable x87 + SSE + AVX
+        ++ "xsetbv\n" // write back
+
+        ++ "call boot_init_stage2\n" ::: .{ .memory = true });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

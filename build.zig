@@ -89,10 +89,10 @@ pub fn build(b: *std.Build) void {
     run_qemu_cmd.addArg("-cdrom");
     run_qemu_cmd.addArg(image.path);
     run_qemu_cmd.addArgs(&.{
-        "-machine", "q35", // closer to real hardware
+        "-machine", "q35,accel=kvm", // closer to real hardware
         "-device",  "virtio-vga", // modern GPU
         "-display", display,
-        "-cpu",     "qemu64",
+        "-cpu",     "host",
         "-serial",  "stdio",
     });
     if (debug_int) {

@@ -149,11 +149,6 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     console.echoToHost(false);
     console.logDebug(false);
 
-    const frame_buffer_addr = @intFromPtr(screen.buffer.ptr);
-    const frame_buffer_invalid = frame_buffer_addr - 12;
-    const ptr: [*]u8 = @ptrFromInt(frame_buffer_invalid);
-    ptr[1] = 43;
-
     io.sti();
     mainWrapper();
     while (true) {}

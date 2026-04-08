@@ -9,6 +9,7 @@ const log = std.log.scoped(.process);
 
 pub const USER_STACK_TOP = 0x00007FFFFFFFE000;
 pub const USER_STACK_SIZE = 1024 * 1024; // 1MB
+pub const USER_STACK_USABLE = USER_STACK_TOP - 0x1000; // rsp starts here
 
 const Self = @This();
 
@@ -24,6 +25,7 @@ vmem: VirtualSpace,
 regions: std.ArrayList(MemoryRegion),
 
 pub fn loadElf(data: []const u8, allocator: std.mem.Allocator) !Self {
+    log.debug("Loading, elf", .{});
     var reader: std.Io.Reader = std.Io.Reader.fixed(data);
     const header = try elf.Header.read(&reader);
 
@@ -132,9 +134,7 @@ fn ptLoad(allocator: std.mem.Allocator, ph: elf.Elf64_Phdr, data: []const u8, re
 
     if (ph.p_filesz > 0) {
         const src = data[ph.p_offset..][0..ph.p_filesz];
-        // BUG: put this here on purpose so we can test page fault
-        @memcpy(memory[0..src.len], src);
-        // @memcpy(memory[offset..][0..src.len], src); // TODO: this is the correct way
+        @memcpy(memory[offset..][0..src.len], src); // TODO: this is the correct way
     }
 
     log.debug("Mapped {d} bytes from {x} to {x}", .{ total_size, ph.p_vaddr, virt });
@@ -188,7 +188,7 @@ fn loadStack(
     info: ElfInfo,
 ) usize {
     const hhdm_base: usize = bootinfo.toVirtualHHDM(stack_phys);
-    const hhdm_top: usize = hhdm_base + USER_STACK_SIZE;
+    const hhdm_top: usize = hhdm_base + USER_STACK_SIZE - 0x1000;
 
     // the matching user virtual address will be USER_STACK_TOP - (stack_top - sp)
     // since (stack_top - sp) is the offset from the top of the stack to the stack pointer

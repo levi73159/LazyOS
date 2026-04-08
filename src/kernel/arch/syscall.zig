@@ -60,10 +60,13 @@ export fn syscallHandler(frame: *SyscallFrame) callconv(.c) void {
     const val = switch (num) {
         0 => sys_test(frame),
         1 => sys_write(frame),
+        13 => rt_sigaction(frame),
         16 => sys_ioctl(frame),
         20 => sys_writev(frame),
+        231 => sys_exit_group(frame),
         60 => sys_exit(frame),
         158 => sys_arch_prctl(frame),
+        186 => 1, // get_tid_address (stub it with fake TID address of 1 since we don't have threads)
         218 => 1, // set_tid_address (stub it with fake TID address of 1 since we don't have threads)
         else => ENOSYS,
     };
@@ -79,10 +82,15 @@ fn sys_test(frame: *SyscallFrame) i64 {
     return 0;
 }
 
+fn rt_sigaction(_: *SyscallFrame) i64 {
+    return 0;
+}
+
 fn sys_arch_prctl(frame: *SyscallFrame) i64 {
     const SET_FS = 0x1002;
     const code = frame.rdi;
     const addr = frame.rsi;
+    log.debug("arch_prctl: {x} to {x}", .{ code, addr });
 
     switch (code) {
         SET_FS => {
@@ -200,6 +208,11 @@ pub fn init() void {
     msr.write(msr.MSR_LSTAR, @intFromPtr(&syscallEntry));
 
     msr.write(msr.MSR_FMASK, 0x200 | 0x400);
+}
+
+fn sys_exit_group(frame: *SyscallFrame) i64 {
+    scheduler.taskExit(frame.rdi);
+    unreachable;
 }
 
 extern fn syscallEntry() callconv(.naked) noreturn;
