@@ -5,15 +5,21 @@ const pmem = @import("pmem.zig");
 
 pub const PAGE_SIZE = 0x1000;
 
-var heap: LinkedList = undefined;
+var heap: LinkedList = undefined; // used for kernel
+var acpi_heap: LinkedList = undefined; // strictly use for ACPI purposes (small)
 
-var acpi_heap: LinkedList = undefined;
 var has_initialized = false;
 
 pub fn init() void {
     heap = LinkedList.init(pmem.kernel());
     acpi_heap = LinkedList.init(pmem.acpi());
     has_initialized = true;
+}
+
+// NOTE: to be called when vmem done updating
+pub fn addRegions() void {
+    heap.updateRegions(heap.allocator(), "Kernel");
+    acpi_heap.updateRegions(heap.allocator(), "Acpi");
 }
 
 pub fn allocator() @import("std").mem.Allocator {

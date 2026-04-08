@@ -45,7 +45,7 @@ pub const InterruptFrame = extern struct {
             self.rdi,
         });
 
-        try writer.print("   r8={x}   r9={x}   r10={x}   r11={x}\nr12={x}   r13={x}   r14={x}   r15={x}\n", .{
+        try writer.print("   r8={x}   r9={x}   r10={x}   r11={x}\n   r12={x}   r13={x}   r14={x}   r15={x}\n", .{
             self.r8,
             self.r9,
             self.r10,

@@ -82,25 +82,51 @@ pub const PAGE_SIZE = 4096;
 pub const HUGE_PAGE_SIZE = 2 * 1024 * 1024; // 2MB
 pub const PageTable = [512]PageEntry;
 
-const GuardPage = struct {
+pub const GuardPage = struct {
     name: []const u8,
     virt: u64,
 };
 
+pub const Region = struct {
+    name: []const u8,
+    start: u64,
+    end: u64,
+};
+
 pml4: *PageTable,
 guard_pages: std.ArrayList(GuardPage) = .empty,
+regions: std.ArrayList(Region) = .empty,
 
 pub fn init() Self {
     const pml4 = createPageTable();
     return .{ .pml4 = pml4 };
 }
 
-pub fn deinit(self: *const Self) void {
+pub fn deinit(self: *Self) void {
     for (self.pml4[0..256]) |entry| {
         if (!entry.present) continue;
         freePageTableEntry(@ptrFromInt(bootinfo.toVirtualHHDM(entry.getAddress())), 3);
     }
     pmem.kernel().freePageV(@intFromPtr(self.pml4));
+
+    const allocator = @import("../memory/heap.zig").allocator();
+
+    self.regions.deinit(allocator);
+    self.guard_pages.deinit(allocator);
+}
+
+pub fn safeDeinit(self: *Self) void {
+    const cr3 = asm volatile ("mov %%cr3, %[out]"
+        : [out] "=r" (-> u64),
+    );
+
+    const phys = bootinfo.toPhysical(@intFromPtr(self.pml4));
+    if (cr3 == phys) {
+        log.err("PML4 still in use: {x}", .{phys});
+        paging.getKernelVmem().switchTo(); // switch to kernel virtual memory so we don't crash
+    }
+
+    self.deinit();
 }
 
 // pml4 -> pdpt -> pd -> pt
@@ -130,20 +156,6 @@ pub fn addGuardPage(self: *Self, allocator: std.mem.Allocator, name: []const u8,
     };
 
     log.info("Added guard page {s} at {x}", .{ name, virt });
-}
-
-pub fn safeDeinit(self: *const Self) void {
-    const cr3 = asm volatile ("mov %%cr3, %[out]"
-        : [out] "=r" (-> u64),
-    );
-
-    const phys = bootinfo.toPhysical(@intFromPtr(self.pml4));
-    if (cr3 == phys) {
-        log.err("PML4 still in use: {x}", .{phys});
-        paging.getKernelVmem().switchTo(); // switch to kernel virtual memory so we don't crash
-    }
-
-    self.deinit();
 }
 
 fn createPageTable() *PageTable {
@@ -282,10 +294,59 @@ pub fn switchTo(self: *const Self) void {
     );
 }
 
+pub fn addRegion(
+    self: *Self,
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    start: u64,
+    size: u64,
+) void {
+    const end = start + size;
+
+    self.regions.append(allocator, .{
+        .name = name,
+        .start = start,
+        .end = end,
+    }) catch {
+        log.err("Failed to add region {s}", .{name});
+        return;
+    };
+
+    log.debug("Region {s}: {x} - {x}", .{ name, start, end });
+}
+
+pub fn addRegion2(
+    self: *Self,
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    start: u64,
+    end: u64,
+) void {
+    self.regions.append(allocator, .{
+        .name = name,
+        .start = start,
+        .end = end,
+    }) catch {
+        log.err("Failed to add region {s}", .{name});
+        return;
+    };
+
+    log.debug("Region {s}: {x} - {x}", .{ name, start, end });
+}
+
 pub fn getGuardPage(self: *const Self, vaddr: usize) ?GuardPage {
     const aligned_vaddr = std.mem.alignBackward(usize, vaddr, 4096);
     for (self.guard_pages.items) |guard| {
         if (guard.virt == aligned_vaddr) return guard;
+    }
+    return null;
+}
+
+pub fn findRegion(self: *const Self, addr: u64) ?Region {
+    for (self.regions.items) |region| {
+        if (addr >= region.start and addr < region.end) {
+            return region;
+        }
     }
     return null;
 }

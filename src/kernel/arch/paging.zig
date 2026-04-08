@@ -4,6 +4,8 @@ const bootinfo = @import("bootinfo.zig");
 const pmem = @import("../memory/pmem.zig");
 const VirtualSpace = @import("VirtualSpace.zig");
 const scheduler = @import("../scheduler.zig");
+const io = @import("io.zig");
+const heap = @import("../memory/heap.zig");
 
 pub const PageFlags = VirtualSpace.PageFlags;
 
@@ -30,16 +32,18 @@ fn mapFramebuffer(vmem: *VirtualSpace, fb: bootinfo.Framebuffer) void {
     const virt = FRAMEBUFFER_BASE;
 
     var offset: u64 = 0;
+    const flags = PageFlags{
+        .present = true,
+        .write_through = false,
+        .cache_disabled = false,
+        .pat = true,
+        .writeable = true,
+        .execute_disable = true,
+    };
     while (offset < size) : (offset += VirtualSpace.HUGE_PAGE_SIZE) {
-        vmem.mapHugePage(virt + offset, phys + offset, .{
-            .present = true,
-            .write_through = false,
-            .cache_disabled = false,
-            .pat = true,
-            .writeable = true,
-            .execute_disable = true,
-        });
+        vmem.mapHugePage(virt + offset, phys + offset, flags);
     }
+    vmem.addRegion2(heap.allocator(), "Framebuffer", virt - 4096, virt + offset + 4096);
 
     // update screen
     const Screen = @import("../graphics/Screen.zig");
@@ -77,6 +81,7 @@ pub fn init(mb: *const bootinfo.BootInfo) *VirtualSpace {
         const flags = getKernelFlags(virt);
         kernel_vmem.mapPage(virt, physical, flags);
     }
+    addKernelRegions(&kernel_vmem, mb.kernel.virt_addr, mb.kernel.size);
 
     mapFramebuffer(&kernel_vmem, mb.framebuffer);
 
@@ -110,6 +115,27 @@ fn getKernelFlags(virt: u64) VirtualSpace.PageFlags {
         return .rw;
 }
 
+fn addKernelRegions(vmem: *VirtualSpace, start: usize, size: usize) void {
+    const allocator = heap.allocator();
+    const boot = @import("root");
+
+    const text_start = @intFromPtr(&__text_start);
+    const text_end = @intFromPtr(&__text_end);
+    const data_start = @intFromPtr(&__data_start);
+    const data_end = @intFromPtr(&__data_end);
+    const bss_start = @intFromPtr(&__bss_start);
+    const bss_end = @intFromPtr(&__bss_end);
+    const rodata_start = @intFromPtr(&__rodata_start);
+    const rodata_end = @intFromPtr(&__rodata_end);
+
+    vmem.addRegion(allocator, "Kernel Stack", @intFromPtr(&boot.kernel_stack), boot.KERNEL_STACK_SIZE);
+    vmem.addRegion2(allocator, "Kernel .text", text_start, text_end);
+    vmem.addRegion2(allocator, "Kernel .data", data_start, data_end);
+    vmem.addRegion2(allocator, "Kernel .bss", bss_start, bss_end);
+    vmem.addRegion2(allocator, "Kernel .rodata", rodata_start, rodata_end);
+    vmem.addRegion(allocator, "Kernel data/code unmapped", start, size);
+}
+
 pub fn getPageTable(table: *VirtualSpace.PageTable, index: u9) ?*VirtualSpace.PageTable {
     const entry = &table[index];
     if (!entry.present) return null;
@@ -117,72 +143,125 @@ pub fn getPageTable(table: *VirtualSpace.PageTable, index: u9) ?*VirtualSpace.Pa
     return @ptrFromInt(bootinfo.toVirtualHHDM(entry.getAddress()));
 }
 
-pub fn getKernelVmem() *const VirtualSpace {
+pub fn getKernelVmem() *VirtualSpace {
     return &kernel_vmem;
 }
 
 pub fn createUserVmem() VirtualSpace {
-    const vmem = VirtualSpace.init();
+    var vmem = VirtualSpace.init();
 
     // copy kernel mappnig into user vmem
     for (256..512) |i| {
         vmem.pml4[i] = kernel_vmem.pml4[i];
     }
 
+    vmem.regions.appendSlice(heap.allocator(), kernel_vmem.regions.items) catch {};
+
     return vmem;
 }
 
 pub const ErrorCode = packed struct(u32) {
-    present: u1, // bit 0
-    write: u1, // bit 1
-    user: u1, // bit 2
-    reserved_write: u1, // bit 3
-    instruction_fetch: u1, // bit 4
-    protection_key: u1, // bit 5
-    shadow_stack: u1, // bit 6
+    present: bool, // bit 0
+    write: bool, // bit 1
+    user: bool, // bit 2
+    reserved_write: bool, // bit 3
+    instruction_fetch: bool, // bit 4
+    protection_key: bool, // bit 5
+    shadow_stack: bool, // bit 6
     _reserved0: u8, // bits 7–14
-    sgx: u1, // bit 15
+    sgx: bool, // bit 15
     _reserved1: u16, // bits 16–31
 };
 
 pub fn pageFaultHandler(frame: *arch.registers.InterruptFrame) void {
     const console = @import("../console.zig");
-    const gdt = @import("descriptors.zig").gdt;
     console.printB("\x1b[97;41m", .{});
-    console.printB("!!! PAGE FAULT EXCEPTION !!!\n", .{});
-
-    const cs_enum: gdt.Segment = @enumFromInt(frame.cs);
-    const ds_enum: gdt.Segment = @enumFromInt(frame.ds);
-
-    console.printB("cs: {s}, ds: {s}\n", .{ @tagName(cs_enum), @tagName(ds_enum) });
+    const error_code: ErrorCode = @bitCast(@as(u32, @truncate(frame.error_code))); // ignore upper bits
     const address = asm volatile ("mov %%cr2, %[addr]\n"
         : [addr] "=r" (-> u64),
     );
 
-    console.printB("Invalid Page fault at address: 0x{x}\n", .{address});
-    const error_code: ErrorCode = @bitCast(@as(u32, @truncate(frame.error_code))); // ignore upper bits
+    const vmem = getVmem(error_code.user);
+    const guard_page = vmem.getGuardPage(address);
+    const spacer = if (guard_page != null) " | guard page: " else "";
 
-    const vmem: ?VirtualSpace = if (ds_enum == .kernel_data) kernel_vmem else blk: {
+    const region = vmem.findRegion(address);
+
+    console.printB(
+        \\ ====================PAGE FAULT====================
+        \\ Type:   {s}
+        \\ Reason: {s}{s}{s}
+        \\ Addr:   0x{x}
+        \\ RIP:    0x{x}
+        \\
+    , .{
+        faultType(error_code),
+        describeFault(error_code),
+        spacer,
+        if (guard_page) |page| page.name else "",
+        address,
+        frame.rip,
+    });
+    console.printB(
+        " Flags:  [{s}{s}{s}{s}{s}{s}{s}]\n",
+        .{
+            if (error_code.present) "P" else "-",
+            if (error_code.write) "W" else "R",
+            if (error_code.user) "U" else "K",
+            if (error_code.instruction_fetch) "I" else "-",
+            if (error_code.reserved_write) "Rsv" else "-",
+            if (error_code.protection_key) "PK" else "-",
+            if (error_code.shadow_stack) "SS" else "-",
+        },
+    );
+
+    if (region) |r| {
+        console.printB(" Region: {s} (0x{x} - 0x{x})\n", .{ r.name, r.start, r.end });
+    } else {
+        console.printB(" Region: <unmapped>\n", .{});
+    }
+
+    if (address == 0) {
+        console.printB("Hint: NULL pointer dereference\n", .{});
+    } else if (address < 0x1000) {
+        console.printB("Hint: low memory access (likely NULL offset)\n", .{});
+    }
+
+    console.printB(" ==================================================\n", .{});
+
+    console.printB("Frame:\n", .{});
+    console.printB("{f}\n", .{frame});
+
+    io.hlt();
+}
+
+fn faultType(err: ErrorCode) []const u8 {
+    return if (err.user) "USER" else "KERNEL";
+}
+
+fn getVmem(user: bool) VirtualSpace {
+    const vmem: ?VirtualSpace = if (!user) kernel_vmem else blk: {
         const process = scheduler.getCurrentTask().process orelse break :blk null;
         break :blk process.vmem;
     };
-    if (vmem) |v| blk: {
-        const guard = v.getGuardPage(address) orelse break :blk;
-        console.printB("Guard Page accessed: {s}", .{guard.name});
-    } else {
-        console.printB("Can't get virtual memory of process...", .{});
+    if (vmem == null) {
+        log.err("can't get virtual address space", .{});
     }
+    return vmem.?;
+}
 
-    console.printB("Present: {}\n", .{error_code.present});
-    console.printB("Write: {}\n", .{error_code.write});
-    console.printB("User: {}\n", .{error_code.user});
-    console.printB("Instruction fetch: {}\n", .{error_code.instruction_fetch});
-    console.printB("Protection key: {}\n", .{error_code.protection_key});
-    console.printB("Shadow stack: {}\n", .{error_code.shadow_stack});
-    console.printB("SGX: {}\n", .{error_code.sgx});
-
-    console.printB("Frame: \n", .{});
-    console.printB("{f}\n", .{frame});
-
-    @panic("Unhandled exception");
+fn describeFault(err: ErrorCode) []const u8 {
+    if (!err.present) {
+        return "non-present page (null / unmapped)";
+    }
+    if (err.reserved_write) {
+        return "reserved bit violation (corrupt page tables)";
+    }
+    if (err.instruction_fetch) {
+        return "NX violation (execute on non-exec page)";
+    }
+    if (err.write) {
+        return "write to read-only page";
+    }
+    return "read protection fault";
 }

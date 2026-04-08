@@ -1,4 +1,5 @@
 const std = @import("std");
+const paging = @import("../arch.zig").paging;
 const mem = std.mem;
 const BitmapAllocator = @import("BitmapAllocator.zig");
 const is_debug = true;
@@ -104,6 +105,11 @@ pub fn init(pmem: *BitmapAllocator) Self {
     return Self{ .start = header, .end = header, .last_free = header, .pages_in_heap = HEAP_PAGES, .pmem = pmem };
 }
 
+// NOTE: only to be called by heap.zig when fully init heap and vmem
+pub fn updateRegions(self: *Self, alloc: std.mem.Allocator, comptime name: []const u8) void {
+    paging.getKernelVmem().addRegion(alloc, name ++ " heap start", @intFromPtr(self.start.?), self.start.?.trueSize());
+}
+
 pub fn deinit(self: *Self) void {
     var current = self.start;
     while (current) |b| {
@@ -154,6 +160,8 @@ fn growHeap(self: *Self, pages: usize) !*Header {
 
     self.pages_in_heap += @intCast(pages);
     if (extra != null) self.pages_in_heap += EXTRA_GROWTH;
+
+    paging.getKernelVmem().addRegion(self.allocator(), "kernel heap", @intFromPtr(header), header.trueSize());
     return header;
 }
 

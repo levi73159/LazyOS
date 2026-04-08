@@ -37,7 +37,7 @@ pub fn loadElf(data: []const u8, allocator: std.mem.Allocator) !Self {
 
     if (!header.is_64) return error.Not64Bit;
 
-    const vmem = paging.createUserVmem();
+    var vmem = paging.createUserVmem();
 
     var first_load_seen = false;
     var phdr_vaddr: u64 = 0;
@@ -70,6 +70,8 @@ pub fn loadElf(data: []const u8, allocator: std.mem.Allocator) !Self {
     const stack_bottom = USER_STACK_TOP - USER_STACK_SIZE;
 
     vmem.mapRange(stack_bottom, stack_phys, USER_STACK_SIZE, .{ .present = true, .user = true, .writeable = true, .execute_disable = true });
+    vmem.addRegion2(allocator, "user stack", stack_bottom, USER_STACK_TOP);
+    vmem.addGuardPage(allocator, "user stack overflow", stack_bottom - 4096);
 
     const base = first_load_mapped_addr - phdr_vaddr;
     log.debug("Mapped stack from {x} to {x}", .{ stack_bottom, USER_STACK_TOP });
@@ -101,7 +103,7 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
     self.vmem.safeDeinit();
 }
 
-fn ptLoad(allocator: std.mem.Allocator, ph: elf.Elf64_Phdr, data: []const u8, regions: *std.ArrayList(MemoryRegion), vmem: *const VirtualSpace) !void {
+fn ptLoad(allocator: std.mem.Allocator, ph: elf.Elf64_Phdr, data: []const u8, regions: *std.ArrayList(MemoryRegion), vmem: *VirtualSpace) !void {
     if (ph.p_memsz == 0) return; // don't load it
 
     const aligned_vaddr = std.mem.alignBackward(u64, ph.p_vaddr, paging.PAGE_SIZE);
@@ -147,6 +149,14 @@ fn ptLoad(allocator: std.mem.Allocator, ph: elf.Elf64_Phdr, data: []const u8, re
 
     const user_virt = std.mem.alignBackward(u64, ph.p_vaddr, paging.PAGE_SIZE);
     vmem.mapRange(user_virt, phys, total_size, flags);
+
+    const section_name = switch (ph.p_flags) {
+        elf.PF_X => "user text",
+        elf.PF_W => "user data",
+        else => "user rodata",
+    };
+
+    vmem.addRegion(allocator, section_name, user_virt, total_size);
 }
 
 const AT_NULL: u64 = 0;
