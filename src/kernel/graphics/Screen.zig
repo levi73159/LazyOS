@@ -61,6 +61,10 @@ pub fn getBufferConst(self: Self) []const u32 {
     return self.buffer;
 }
 
+pub fn updateBuffer(self: *Self, new_vaddr: usize) void {
+    self.buffer.ptr = @ptrFromInt(new_vaddr);
+}
+
 pub fn getPixel(self: Self, x: u32, y: u32) u32 {
     return self.getBufferConst()[y * self.stride + x];
 }

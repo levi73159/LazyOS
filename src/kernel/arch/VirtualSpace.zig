@@ -30,6 +30,7 @@ pub const PageFlags = struct {
     execute_disable: bool = false,
     global: bool = false,
     pat: bool = false,
+    guard: bool = false,
 
     pub const rw = PageFlags{ .present = true, .writeable = true };
     pub const ro = PageFlags{ .present = true, .writeable = false };
@@ -48,7 +49,8 @@ const PageEntry = packed struct(u64) {
     dirty: bool = false, // reserved in non-page-sized entries
     page_size: bool = false,
     global: bool = false,
-    avl: u2 = 0,
+    guard: bool = false,
+    avl: u1 = 0,
     pat: bool = false,
     address: u40 = 0,
     __reserved2: u11 = 0,
@@ -67,6 +69,7 @@ const PageEntry = packed struct(u64) {
             .address = @truncate(address >> 12),
             .global = flags.global,
             .pat = flags.pat,
+            .guard = flags.guard,
         };
     }
 
@@ -79,7 +82,13 @@ pub const PAGE_SIZE = 4096;
 pub const HUGE_PAGE_SIZE = 2 * 1024 * 1024; // 2MB
 pub const PageTable = [512]PageEntry;
 
+const GuardPage = struct {
+    name: []const u8,
+    virt: u64,
+};
+
 pml4: *PageTable,
+guard_pages: std.ArrayList(GuardPage) = .empty,
 
 pub fn init() Self {
     const pml4 = createPageTable();
@@ -105,6 +114,22 @@ fn freePageTableEntry(table: *PageTable, level: u8) void {
             }
         }
     }
+}
+
+pub fn addGuardPage(self: *Self, allocator: std.mem.Allocator, name: []const u8, virt: u64) void {
+    if (virt & 0xFFF != 0) {
+        log.warn("virtual is not page aligned", .{});
+    }
+    self.mapGuard(virt);
+    self.guard_pages.append(allocator, .{
+        .name = name,
+        .virt = virt,
+    }) catch {
+        log.warn("Out of memory, can't add guard page: {s}", .{name});
+        return;
+    };
+
+    log.info("Added guard page {s} at {x}", .{ name, virt });
 }
 
 pub fn safeDeinit(self: *const Self) void {
@@ -133,6 +158,9 @@ fn createPageTable() *PageTable {
 
 fn getOrCreatePageTable(table: *PageTable, index: u9, user: bool) *PageTable {
     const entry = &table[index];
+    if (entry.guard) {
+        log.err("Overlapping guard page, return address: 0x{x}", .{@returnAddress()});
+    }
     if (entry.present) {
         if (user and !entry.user) {
             entry.user = true;
@@ -180,6 +208,52 @@ pub fn mapRange(self: *const Self, virt: u64, phys: u64, size: u64, flags: PageF
     }
 }
 
+pub fn mapGuard(self: *const Self, virt: u64) void {
+    const va = VirtualAddress.from(virt);
+
+    const pdpt_table = getOrCreatePageTable(self.pml4, va.pml4_index, false);
+    const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index, false);
+    if (pd_table[va.pd_index].page_size) {
+        log.info("Spliting huge page", .{});
+        splitHugePage(pd_table, va.pd_index, virt);
+    }
+    const pt_table = getOrCreatePageTable(pd_table, va.pd_index, false);
+    pt_table[va.pt_index] = PageEntry.init(0, .{ .guard = true }); // a null entry
+}
+
+fn splitHugePage(pd_table: *PageTable, index: u9, va: usize) void {
+    const entry = &pd_table[index];
+
+    const huge_phys = entry.getAddress();
+
+    const flags = PageFlags{
+        .present = entry.present,
+        .writeable = entry.writeable,
+        .user = entry.user,
+        .write_through = entry.write_through,
+        .cache_disabled = entry.cache_disabled,
+        .execute_disable = entry.execute_disable,
+        .pat = entry.pat,
+        .global = entry.global,
+    };
+
+    const new_pt = createPageTable();
+    for (0..512) |i| {
+        new_pt[i] = PageEntry.init(huge_phys + @as(u64, i) * PAGE_SIZE, flags);
+    }
+
+    entry.* = PageEntry.init(bootinfo.toPhysicalHHDM(@intFromPtr(new_pt)), if (entry.user) .user_rw else .rw);
+
+    // proper flush of the whole split range
+    var flush_offset: u64 = 0;
+    while (flush_offset < HUGE_PAGE_SIZE) : (flush_offset += PAGE_SIZE) {
+        asm volatile ("invlpg (%[v])"
+            :
+            : [v] "r" (va + flush_offset),
+            : .{ .memory = true });
+    }
+}
+
 pub fn mapHugePage(self: *const Self, virt: u64, phys: u64, flags: PageFlags) void {
     const va = VirtualAddress.from(virt);
     std.debug.assert(phys & (HUGE_PAGE_SIZE - 1) == 0);
@@ -206,4 +280,12 @@ pub fn switchTo(self: *const Self) void {
         :
         : [pml4] "r" (phys),
     );
+}
+
+pub fn getGuardPage(self: *const Self, vaddr: usize) ?GuardPage {
+    const aligned_vaddr = std.mem.alignBackward(usize, vaddr, 4096);
+    for (self.guard_pages.items) |guard| {
+        if (guard.virt == aligned_vaddr) return guard;
+    }
+    return null;
 }

@@ -510,11 +510,15 @@ pub fn logFn(
     else
         color ++ comptime level.asText() ++ ": ";
 
-    w.writeAll(prefix) catch unreachable;
-    w.print(format, args) catch unreachable;
-    w.writeAll(reset ++ "\r\n") catch unreachable;
+    const write_to_con = log_debug and (level == .debug or scope == .host);
 
-    if (log_debug and (level == .debug or scope == .host)) {
+    if (!(write_to_con and (echo_to_host or !initialized))) {
+        w.writeAll(prefix) catch unreachable;
+        w.print(format, args) catch unreachable;
+        w.writeAll(reset ++ "\r\n") catch unreachable;
+    }
+
+    if (write_to_con) {
         con_writer.writeAll(prefix) catch unreachable;
         con_writer.print(format, args) catch unreachable;
         con_writer.writeAll(reset ++ "\r\n") catch unreachable;

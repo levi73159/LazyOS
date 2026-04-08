@@ -33,8 +33,7 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     // const kernel_start: usize = @intFromPtr(&__kernel_start);
     // const kernel_end: usize = @intFromPtr(&__kernel_end);
     // arch.paging.init(kernel_start, kernel_end);
-    const framebuffer = mb.getFramebuffer(u32);
-    const screen = Screen.init(framebuffer, mb.framebuffer);
+    const screen = Screen.init(mb.getFramebuffer(u32), mb.framebuffer);
 
     const serial_writer = serial.SerialWriter.init(.COM1);
     if (serial_writer != null) {
@@ -58,8 +57,24 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
 
     pmem.init(mb);
     const vmem = paging.init(mb);
-    _ = vmem;
     heap.init();
+
+    log.debug("Framebuffer address: {x}", .{@intFromPtr(screen.buffer.ptr)});
+
+    const allocator = heap.allocator();
+    // add guard pages
+    {
+        const boot = @import("boot.zig");
+        vmem.addGuardPage(allocator, "Kernel Stack overflow", @intFromPtr(&boot.kernel_stack));
+        const frame_buffer_addr = @intFromPtr(screen.buffer.ptr);
+        const frame_buffer_size = screen.buffer.len * 4;
+
+        const upper_frame_buffer = frame_buffer_addr + frame_buffer_size + 4096;
+        const below_frame_buffer = frame_buffer_addr - 4096;
+
+        vmem.addGuardPage(allocator, "Framebuffer high guard", upper_frame_buffer);
+        vmem.addGuardPage(allocator, "Framebuffer low guard", below_frame_buffer);
+    }
 
     console.logDebug(false);
     pit.init(100);
@@ -70,8 +85,6 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     console.logDebug(true);
 
     @import("pci.zig").emunerate();
-
-    const allocator = heap.allocator();
 
     screen.use_double_buffer = true;
     screen.createDoubleBuffer() catch |err| {
@@ -134,6 +147,11 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
 
     console.echoToHost(false);
     console.logDebug(false);
+
+    const frame_buffer_addr = @intFromPtr(screen.buffer.ptr);
+    const frame_buffer_invalid = frame_buffer_addr - 12;
+    const ptr: [*]u8 = @ptrFromInt(frame_buffer_invalid);
+    ptr[1] = 43;
 
     io.sti();
     mainWrapper();

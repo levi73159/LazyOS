@@ -22,7 +22,11 @@ const c = @cImport({
 export var rsdp_address_request: limine.RSDPRequest linksection(".limine_requests") = .{};
 
 export fn uacpi_kernel_get_rsdp(phys_out: *c.uacpi_phys_addr) c.uacpi_status {
+    log.debug("rsdp_request address: 0x{x}", .{@intFromPtr(&rsdp_address_request)});
+    log.debug("rsdp_response_maybe address: 0x{x}", .{@intFromPtr(&rsdp_address_request.response)});
     if (rsdp_address_request.response) |response| {
+        log.debug("rsdp_response address: 0x{x}", .{@intFromPtr(response)});
+        log.debug("response address: 0x{x}", .{response.address});
         phys_out.* = bootinfo.toPhysical(response.address); // we don't know if it from the kernel (different mapping) or the HHDM
         return c.UACPI_STATUS_OK;
     }

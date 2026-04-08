@@ -47,8 +47,8 @@ export var kernel_addr_request: limine.KernelAddressRequest linksection(".limine
 
 export var kernel_file_request: limine.ExecutableFileRequest linksection(".limine_requests") = .{};
 
-pub const KERNEL_STACK_SIZE: usize = 1024 * 1024; // 1 MiB
-pub export var kernel_stack: [KERNEL_STACK_SIZE]u8 align(16) linksection(".bss") = undefined;
+pub const KERNEL_STACK_SIZE: usize = 4096 + 1024 * 1024; // 1 MiB
+pub export var kernel_stack: [KERNEL_STACK_SIZE]u8 align(4096) linksection(".bss") = undefined; // KERNEL_STACK_SIZE + 1 page aka the stack overflow page
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Linker script variables

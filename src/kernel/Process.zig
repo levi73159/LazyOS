@@ -130,7 +130,9 @@ fn ptLoad(allocator: std.mem.Allocator, ph: elf.Elf64_Phdr, data: []const u8, re
 
     if (ph.p_filesz > 0) {
         const src = data[ph.p_offset..][0..ph.p_filesz];
-        @memcpy(memory[offset..][0..src.len], src);
+        // BUG: put this here on purpose so we can test page fault
+        @memcpy(memory[0..src.len], src);
+        // @memcpy(memory[offset..][0..src.len], src); // TODO: this is the correct way
     }
 
     log.debug("Mapped {d} bytes from {x} to {x}", .{ total_size, ph.p_vaddr, virt });
