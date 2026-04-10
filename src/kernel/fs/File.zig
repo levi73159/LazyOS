@@ -157,7 +157,7 @@ pub const FileOps = struct {
     read: *const fn (f: *File, buf: []u8) Error!usize,
     write: *const fn (f: *File, buf: []const u8) Error!usize,
     seek: ?*const fn (f: *File, offset: u32) Error!void,
-    ioctl: ?*const fn (f: *File, req: u32, arg: usize) Error!void,
+    ioctl: ?*const fn (f: *File, req: u32, arg: usize) Error!i64,
     close: *const fn (f: *File) void,
 };
 
@@ -206,7 +206,7 @@ pub fn readAll(self: *Self, buf: []u8) Error![]u8 {
     return buf[0..total];
 }
 
-pub fn write(self: *Self, buf: []u8) Error!usize {
+pub fn write(self: *Self, buf: []const u8) Error!usize {
     if (!self.handle.flags.writable) return error.PermissionDenied;
     return self.f_ops.write(self, buf);
 }

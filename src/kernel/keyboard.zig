@@ -1,6 +1,7 @@
 const std = @import("std");
 const InterruptFrame = @import("arch.zig").registers.InterruptFrame;
 const console = @import("console.zig");
+const tty0 = @import("dev/tty0.zig");
 
 const arch = @import("arch.zig");
 const io = arch.io;
@@ -102,6 +103,9 @@ const Scancode = enum(u8) {
 
     pub fn getChar(self: Scancode) ?u8 {
         return switch (self) {
+            .backspace => 0x08,
+            .tab => 0x09,
+            .esc => 0x1b,
             .one => '1',
             .two => '2',
             .three => '3',
@@ -262,8 +266,6 @@ pub fn init() void {
 }
 
 pub fn handler(_: *InterruptFrame) void {
-    io.cli();
-
     const scancode = io.inb(PORT_DATA);
 
     const key_presses = scancode & 0x80 == 0;
@@ -296,27 +298,25 @@ pub fn handler(_: *InterruptFrame) void {
 
         .left_shift, .right_shfit => {
             if (key_presses) {
-                log.debug("shift pressed", .{});
                 modifiers.shift = true;
             } else {
-                log.debug("shift released", .{});
                 modifiers.shift = false;
             }
             is_special = true;
         },
         .alt => {
             if (key_presses) {
-                modifiers.alt = false;
-            } else {
                 modifiers.alt = true;
+            } else {
+                modifiers.alt = false;
             }
             is_special = true;
         },
         .ctrl => {
             if (key_presses) {
-                modifiers.ctrl = false;
-            } else {
                 modifiers.ctrl = true;
+            } else {
+                modifiers.ctrl = false;
             }
             is_special = true;
         },
@@ -327,17 +327,16 @@ pub fn handler(_: *InterruptFrame) void {
     buf[end_index] = key;
     prev = key;
 
+    // if (key_presses) {
+    //     if (key.getChar()) |char| {
+    //         tty0.get().putChar(char);
+    //     }
+    // }
+
     if (!bufferFull())
         end_index = (end_index + 1) % buf.len;
 
     wait_key.store(false, .release);
-
-    if (code == .f1) {
-        if (console.serial) |s| {
-            s.writeAll("hello world\n") catch {};
-        }
-    }
-    io.sti();
 }
 
 fn sendCommand(command: u8, params: ?u8) void {

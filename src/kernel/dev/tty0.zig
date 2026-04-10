@@ -3,15 +3,49 @@ const Process = @import("../Process.zig");
 const File = @import("../fs/File.zig");
 
 var tty: TTY = .{};
-var file: File = .{ .f_ops = &TTY.vtable, .private = &tty, .handle = .{
-    .size = 0,
-    .pos = 0,
-    .opened = true,
-    .ctx = 0,
-} };
 
-pub fn fdInit(fdTable: Process.FdTable) void {
-    fdTable[0] = &file; // STDIN
-    fdTable[1] = &file; // STDOUT
-    fdTable[2] = &file; // STDERR
+const stdout: File = .{
+    .private = &tty,
+    .handle = .{
+        .flags = .{ .writable = true, .readable = false, .seekable = false, .executable = false },
+        .ctx = 0,
+        .size = 0,
+        .opened = false,
+        .pos = 0,
+    },
+    .f_ops = &TTY.vtable,
+};
+
+const stdin: File = .{
+    .private = &tty,
+    .handle = .{
+        .flags = .{ .writable = false, .readable = true, .seekable = false, .executable = false },
+        .ctx = 0,
+        .size = 0,
+        .opened = true,
+        .pos = 0,
+    },
+    .f_ops = &TTY.vtable,
+};
+
+const stderr: File = .{
+    .private = &tty,
+    .handle = .{
+        .flags = .{ .writable = true, .readable = false, .seekable = false, .executable = false },
+        .ctx = 0,
+        .size = 0,
+        .opened = true,
+        .pos = 0,
+    },
+    .f_ops = &TTY.vtable,
+};
+
+pub fn fdInit(fdTable: *Process.FdTable) void {
+    _ = fdTable.allocAndSet(stdin);
+    _ = fdTable.allocAndSet(stdout);
+    _ = fdTable.allocAndSet(stderr);
+}
+
+pub fn get() *TTY {
+    return &tty;
 }

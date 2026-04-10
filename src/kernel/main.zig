@@ -21,6 +21,7 @@ const mouse = @import("mouse.zig");
 const pit = @import("pit.zig");
 const scheduler = @import("scheduler.zig");
 const Shell = @import("Shell.zig");
+const TTY = @import("fs/TTY.zig");
 
 // NOTE: MUST BE IMPORTED FIRST FOR ACPI TO WORK
 comptime {
@@ -83,6 +84,7 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     kb.init();
     mouse.init();
     scheduler.init();
+    _ = scheduler.addTaskFunc(&TTY.ttyKeyTask, .{});
     console.logDebug(true);
 
     @import("pci.zig").emunerate();

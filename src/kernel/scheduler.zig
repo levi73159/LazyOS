@@ -6,6 +6,7 @@ const io = arch.io;
 const gdt = arch.descriptors.gdt;
 const pit = @import("pit.zig");
 const Process = @import("Process.zig");
+const boot = @import("boot.zig");
 
 const PAGE_SIZE = heap.PAGE_SIZE;
 
@@ -71,6 +72,15 @@ pub fn init() void {
 
     task_list = task;
     current = task;
+
+    idle_frame = arch.registers.InterruptFrame{
+        .rip = @intFromPtr(&idleLoop),
+        .rsp = @intFromPtr(&boot.kernel_stack) + boot.KERNEL_STACK_SIZE - 8,
+        .cs = @intFromEnum(gdt.Segment.kernel_code),
+        .ss = @intFromEnum(gdt.Segment.kernel_data),
+        .ds = @intFromEnum(gdt.Segment.kernel_data),
+        .rflags = 0x202, // IF=1 so interrupts still fire
+    };
 }
 
 pub fn schedule(frame: *arch.registers.InterruptFrame) void {
@@ -87,8 +97,11 @@ pub fn schedule(frame: *arch.registers.InterruptFrame) void {
         if (task.state == .dead) {
             task_has_died = true;
             log.warn("Task {d} is dead", .{task.id});
+        } else if (task.state == .wait_input or task.state == .waiting) {
+            // blocked task — only save registers, don't touch state
+            task.registers = frame.*;
+            task.fs_base = msr.read(0xC0000100);
         } else {
-            // log.debug("Copying frame to registers", .{});
             task.state = .ready;
             task.registers = frame.*;
             task.fs_base = msr.read(0xC0000100);
@@ -99,9 +112,12 @@ pub fn schedule(frame: *arch.registers.InterruptFrame) void {
     while (next.?.state != .ready) {
         next = next.?.next orelse task_list;
 
-        if (next == current) {
-            if (current.?.state == .dead) {
-                log.warn("Current task {d} is dead", .{current.?.id});
+        if (next == current or (next == task_list and current == null)) {
+            if (current == null or current.?.state != .ready) {
+                frame.* = idle_frame.?;
+                current = null; // no current tasks
+                arch.paging.getKernelVmem().switchTo();
+                return;
             }
             current.?.state = .running;
             return; // continue execution
@@ -211,7 +227,7 @@ pub fn addTaskFunc(entry_point: anytype, args: anytype) u32 {
     // leave 128 bytes of space before taskExit
     // so the function prologue doesn't overwrite it
     const rsp = stack_top - 48 - 8;
-    return createTask(@intFromPtr(&taskReturn), rsp, stack, false, args);
+    return createTask(@intFromPtr(entry_point), rsp, stack, false, args);
 }
 
 /// Creates a task with a specific entry point and meta data, and appends it to the task list as ready
@@ -321,6 +337,8 @@ pub fn spawnProcess(process: *Process) !u32 {
         .next = null,
         .process = process,
     };
+
+    @import("dev/tty0.zig").fdInit(&process.fd_table);
 
     appendTask(task);
 
@@ -483,5 +501,20 @@ pub fn wakeInputWaiters() void {
         if (node.state == .wait_input) {
             node.state = .ready;
         }
+    }
+}
+
+pub fn waitInput() void {
+    if (current) |task| {
+        task.state = .wait_input;
+    }
+    asm volatile ("sti; hlt");
+}
+
+// set up once at init
+var idle_frame: ?arch.registers.InterruptFrame = null;
+fn idleLoop() callconv(.c) noreturn {
+    while (true) {
+        asm volatile ("sti; hlt");
     }
 }

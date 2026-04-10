@@ -122,7 +122,7 @@ pub fn open(self: *Self, path: []const u8) Error!File {
 
     return File{
         .handle = handle,
-        .any_fs = &self.inner,
+        .private = &self.inner,
         .f_ops = &file_ops,
     };
 }
@@ -132,13 +132,14 @@ const file_ops = File.FileOps{
     .write = write,
     .close = close,
     .seek = seek,
+    .ioctl = null,
 };
 
 pub fn read(self: *File, buf: []u8) Error!usize {
     const h: *Handle = &self.handle;
     const any_fs: *AnyFs = @ptrCast(@alignCast(self.private));
 
-    return any_fs.vtable.read_file(self.private, h, buf) catch |err| return convertToError(err);
+    return any_fs.vtable.read_file(@ptrCast(@alignCast(self.private)), h, buf) catch |err| return convertToError(err);
 }
 
 pub fn write(_: *File, _: []const u8) Error!usize {

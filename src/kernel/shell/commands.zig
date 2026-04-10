@@ -166,21 +166,28 @@ fn run(s: *Shell, args: []const []const u8) anyerror!void {
     const fs = s.fs.?;
     const name = args[0];
 
+    std.log.debug("Running {s}", .{name});
     const path = try std.mem.join(s.allocator, "/", &[_][]const u8{ "/bin", name });
     defer s.allocator.free(path);
 
     var file = try fs.open(path);
     defer file.close();
 
+    if (!file.handle.flags.executable) return error.NotExecutable;
+
+    std.log.debug("File opened: {s}", .{path});
     const data = try file.readAlloc(s.allocator);
     defer s.allocator.free(data);
 
+    std.log.debug("data read", .{});
     const process = try s.allocator.create(Process);
     errdefer s.allocator.destroy(process);
 
+    std.log.debug("process created", .{});
     process.* = try Process.loadElf(data, s.allocator);
     errdefer process.deinit(s.allocator);
 
+    std.log.debug("elf loaded", .{});
     const id = try scheduler.spawnProcess(process);
     std.log.debug("Spawned process with id {d}", .{id});
 

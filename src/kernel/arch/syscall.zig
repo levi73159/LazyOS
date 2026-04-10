@@ -81,42 +81,26 @@ export fn syscallHandler(frame: *SyscallFrame) callconv(.c) void {
     log.debug("syscall {d} -> {x}, user_rip={x}", .{ num, frame.rax, frame.user_rip });
 }
 
+// TODO: position independent readv (right now it just called readv)
 fn sys_preadv(frame: *SyscallFrame) i64 {
     const fd = frame.rdi;
-    const iov: [*]const iovec = @ptrFromInt(frame.rsi);
+    const iov: [*]const File.iovec = @ptrFromInt(frame.rsi);
     const count = frame.rdx;
 
-    if (fd != FD_STDIN) {
-        log.err("Can't read from fd {d}", .{fd});
+    const process = scheduler.getCurrentProcess() orelse {
+        log.err("No current process", .{});
+        return EAGAIN;
+    };
+
+    const file = process.getFile(@intCast(fd)) orelse {
+        log.err("Invalid file descriptor {d}", .{fd});
         return EBADF;
-    }
+    };
 
-    if (count == 0) return 0;
-
-    var total: usize = 0;
-    @import("io.zig").sti();
-    for (iov[0..count]) |vec| {
-        if (vec.len == 0) continue;
-        if (vec.base == 0) continue;
-
-        const ptr: [*]u8 = @ptrFromInt(vec.base);
-        const buf = ptr[0..vec.len];
-
-        var i: usize = 0;
-        while (i < buf.len) {
-            const key = @import("../keyboard.zig").getKey();
-            if (!key.pressed) continue;
-
-            if (key.getChar()) |c| {
-                buf[i] = c;
-                i += 1;
-                console.putchar(c);
-                console.complete();
-                if (c == '\n') break;
-            }
-        }
-        total += i;
-    }
+    const total = file.readv(iov[0..count]) catch |err| {
+        log.err("Failed to read from file {d}: {s}", .{ fd, @errorName(err) });
+        return EIO;
+    };
 
     return @intCast(total);
 }
@@ -139,33 +123,24 @@ fn sys_gettid(_: *SyscallFrame) i64 {
 fn sys_read(frame: *SyscallFrame) i64 {
     const fd = frame.rdi;
     const count = frame.rdx;
-
-    if (fd != FD_STDIN) {
-        log.err("Can't read from fd {d}", .{fd});
-        return EBADF;
-    }
-    log.debug("Reading {d} bytes from stdin", .{count});
-
     const ptr: [*]u8 = @ptrFromInt(frame.rsi);
-    var i: usize = 0;
-    // enable interrupts
-    @import("io.zig").sti();
-    while (i < count) {
-        const kb = @import("../keyboard.zig");
-        const key = kb.getKey();
-        if (!key.pressed) continue;
 
-        if (key.getChar()) |c| {
-            ptr[i] = c;
-            i += 1;
-            // echo character back
-            console.putchar(c); // put char dones't swap buffers, must call complete
-            console.complete();
-            if (c == '\n') break;
-        }
-    }
+    const process = scheduler.getCurrentProcess() orelse {
+        log.err("No current process", .{});
+        return EAGAIN;
+    };
 
-    return @intCast(i);
+    const file = process.getFile(@intCast(fd)) orelse {
+        log.err("Invalid file descriptor {d}", .{fd});
+        return EBADF;
+    };
+
+    const read = file.read(ptr[0..count]) catch |err| {
+        log.err("Error reading file: {s}", .{@errorName(err)});
+        return EIO;
+    };
+
+    return @intCast(read);
 }
 
 fn rt_sigaction(_: *SyscallFrame) i64 {
@@ -211,17 +186,12 @@ fn sys_write(frame: *SyscallFrame) i64 {
     };
 
     const written = file.write(string) catch |err| {
-        log.err("Failed to write to file {d}: {s}", .{ fd, err });
+        log.err("Failed to write to file {d}: {s}", .{ fd, @errorName(err) });
         return EIO;
     };
 
     return @intCast(written);
 }
-
-const iovec = struct {
-    base: usize,
-    len: usize,
-};
 
 fn sys_writev(frame: *SyscallFrame) i64 {
     const fd = frame.rdi;
@@ -242,7 +212,7 @@ fn sys_writev(frame: *SyscallFrame) i64 {
     };
 
     const n = file.writev(iov[0..count]) catch |err| {
-        log.err("Failed to write to file {d}: {s}", .{ fd, err });
+        log.err("Failed to write to file {d}: {s}", .{ fd, @errorName(err) });
         return EIO;
     };
 

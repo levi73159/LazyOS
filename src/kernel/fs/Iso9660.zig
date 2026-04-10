@@ -480,6 +480,12 @@ fn vfsOpenFile(fs: *FS.AnyFs, path: []const u8) anyerror!FS.Handle {
         .size = entry.data_length.value(),
         .ctx = entry.location_of_extent.value(),
         .opened = true,
+        .flags = .{
+            .readable = true,
+            .executable = true,
+            .writable = false,
+            .seekable = true,
+        },
     };
 }
 

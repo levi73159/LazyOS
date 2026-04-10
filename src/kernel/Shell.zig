@@ -2,6 +2,7 @@ const std = @import("std");
 const FS = @import("fs/FileSystem.zig");
 const console = @import("console.zig");
 const Command = @import("shell/Command.zig");
+const tty0 = @import("dev/tty0.zig");
 
 const log = std.log.scoped(.shell);
 
@@ -53,14 +54,15 @@ pub fn inputLoop(self: *Self) !void {
 
     while (true) {
         console.print("{s}{s}", .{ self.cwd, self.prompt });
-        const input = try console.readline(&buf, true);
-        console.write("\n");
+        var n = tty0.get().waitAndRead(&buf);
+        const input = if (buf[n - 1] != '\n') buf[0..n] else buf[0 .. n - 1];
         if (input.len == 0) continue;
 
         if (std.mem.eql(u8, input, "exit")) {
             console.print("Are you sure you wanna exit? (y/N)\n", .{});
-            const answer = try console.readline(&buf, true);
-            if (!std.mem.eql(u8, answer, "y")) {
+            n = tty0.get().waitAndRead(&buf);
+            if (n == 0) continue;
+            if (buf[0] != 'y' and buf[0] != 'Y') {
                 continue;
             }
             break;

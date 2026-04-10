@@ -6,6 +6,7 @@ const scheduler = @import("../scheduler.zig");
 const File = @import("File.zig");
 const linux = std.os.linux;
 const T = linux.T;
+const V = linux.V;
 
 const log = std.log.scoped(.tty);
 
@@ -18,46 +19,8 @@ read_pos: usize = 0,
 write_pos: usize = 0,
 line_ready: bool = false,
 col: usize = 0,
-termios: linux.termios = .{
-    .iflag = .{ .ICRNL = true, .IXON = true, .IUTF8 = true },
-    .oflag = .{ .OPOST = true, .OCRNL = true },
-    .cflag = .{ .CSIZE = .CS8, .CREAD = true, .HUPCL = true },
-    .lflag = .{
-        .ISIG = false, // We don't have signals yet
-        .ICANON = true,
-        .ECHO = true,
-        .ECHOE = true,
-        .ECHOK = true,
-        .IEXTEN = true,
-        .ECHOCTL = true,
-        .ECHOKE = true,
-    },
-    .line = 0,
-    .cc = .{
-        3, // VINTR    Ctrl+C
-        28, // VQUIT    Ctrl+\
-        127, // VERASE   Backspace/DEL
-        21, // VKILL    Ctrl+U
-        4, // VEOF     Ctrl+D
-        0, // VTIME
-        1, // VMIN
-        0, // VSWTC
-        17, // VSTART   Ctrl+Q
-        19, // VSTOP    Ctrl+S
-        26, // VSUSP    Ctrl+Z
-        0, // VEOL
-        18, // VREPRINT Ctrl+R
-        15, // VDISCARD Ctrl+O
-        23, // VWERASE  Ctrl+W
-        22, // VLNEXT   Ctrl+V
-        0, // VEOL2
-        0,
-        0,
-    },
-    .ispeed = 0,
-    .ospeed = 0,
-},
-winsize: linux.winsize = .{
+termios: linux.termios = initTermios(),
+winsize: std.posix.winsize = .{
     .row = 25,
     .col = 80,
     .xpixel = 0,
@@ -97,7 +60,7 @@ pub fn putChar(self: *Self, c: u8) void {
 fn procesICANON(self: *Self, c: u8) void {
     const cc = self.termios.cc;
 
-    if (c == cc[linux.V.ERASE] or c == 8) {
+    if (c == cc[@intFromEnum(V.ERASE)] or c == 8) {
         if (self.write_pos > 0) {
             self.write_pos -= 1;
             if (self.termios.lflag.ECHO and self.termios.lflag.ECHOE) {
@@ -107,7 +70,7 @@ fn procesICANON(self: *Self, c: u8) void {
         return;
     }
 
-    if (c == cc[linux.V.KILL]) {
+    if (c == cc[@intFromEnum(V.KILL)]) {
         if (self.termios.lflag.ECHO and self.termios.lflag.ECHOK) {
             // erase all characters written
             while (self.write_pos > 0) {
@@ -124,14 +87,14 @@ fn procesICANON(self: *Self, c: u8) void {
         return;
     }
 
-    if (c == cc[linux.V.EOF]) {
+    if (c == cc[@intFromEnum(V.EOF)]) {
         self.line_ready = true;
         scheduler.wakeInputWaiters();
         return;
     }
 
     const actual_c = if (self.termios.iflag.ICRNL and c == '\r') '\n' else c;
-    const is_eol = actual_c == '\n' or actual_c == cc[linux.V.EOL] or actual_c == cc[linux.V.EOL2];
+    const is_eol = actual_c == '\n' or actual_c == cc[@intFromEnum(V.EOL)] or actual_c == cc[@intFromEnum(V.EOL2)];
 
     if (self.write_pos < BUF_SIZE - 1) {
         self.input_buf[self.write_pos] = actual_c;
@@ -169,6 +132,14 @@ pub fn read(self: *Self, buf: []u8) usize {
         self.line_ready = false;
     }
     return i;
+}
+
+pub fn waitAndRead(self: *Self, buf: []u8) usize {
+    while (!self.line_ready) {
+        scheduler.waitInput();
+    }
+
+    return self.read(buf);
 }
 
 pub fn processOutput(self: *Self, c: u8) void {
@@ -241,20 +212,21 @@ pub fn processOutput(self: *Self, c: u8) void {
 }
 
 pub fn ttyRead(file: *File, buf: []u8) File.Error!usize {
-    const tty: *Self = @ptrCast(file.private);
-    return tty.read(buf);
+    const tty: *Self = @ptrCast(@alignCast(file.private));
+    return tty.waitAndRead(buf);
 }
 
 pub fn ttyWrite(file: *File, buf: []const u8) File.Error!usize {
-    const tty: *Self = @ptrCast(file.private);
+    const tty: *Self = @ptrCast(@alignCast(file.private));
     for (buf) |c| {
         tty.processOutput(c);
     }
+    console.complete();
     return buf.len;
 }
 
 pub fn ttyClose(file: *File) void {
-    const tty: *Self = @ptrCast(file.private);
+    const tty: *Self = @ptrCast(@alignCast(file.private));
     tty.line_ready = false;
     tty.write_pos = 0;
     tty.read_pos = 0;
@@ -262,7 +234,7 @@ pub fn ttyClose(file: *File) void {
 }
 
 pub fn ttyIoCtl(file: *File, request: u32, arg: usize) File.Error!i64 {
-    const tty: *Self = @ptrCast(file.private);
+    const tty: *Self = @ptrCast(@alignCast(file.private));
     switch (request) {
         T.CGETS => {
             const ptr: *linux.termios = @ptrFromInt(arg);
@@ -275,12 +247,12 @@ pub fn ttyIoCtl(file: *File, request: u32, arg: usize) File.Error!i64 {
             return 0;
         },
         T.IOCGWINSZ => {
-            const ptr: *linux.winsize = @ptrFromInt(arg);
+            const ptr: *std.posix.winsize = @ptrFromInt(arg);
             ptr.* = tty.winsize;
             return 0;
         },
         T.IOCSWINSZ => {
-            const ptr: *linux.winsize = @ptrFromInt(arg);
+            const ptr: *std.posix.winsize = @ptrFromInt(arg);
             tty.winsize = ptr.*;
             return 0;
         },
@@ -303,3 +275,57 @@ pub const vtable = File.FileOps{
     .seek = null,
     .close = ttyClose,
 };
+
+fn initTermios() linux.termios {
+    var termios: linux.termios = .{
+        .iflag = .{ .ICRNL = true, .IXON = true, .IUTF8 = true },
+        .oflag = .{ .OPOST = true, .OCRNL = true },
+        .cflag = .{ .CSIZE = .CS8, .CREAD = true, .HUPCL = true },
+        .lflag = .{
+            .ISIG = false, // We don't have signals yet
+            .ICANON = true,
+            .ECHO = true,
+            .ECHOE = true,
+            .ECHOK = true,
+            .IEXTEN = true,
+            .ECHOCTL = true,
+            .ECHOKE = true,
+        },
+        .line = 0,
+        .cc = undefined,
+        .ispeed = .B0,
+        .ospeed = .B0,
+    };
+    @memset(&termios.cc, 0);
+    termios.cc[0] = 3; // VINTR    Ctrl+C
+    termios.cc[1] = 28; // VQUIT    Ctrl+\
+    termios.cc[2] = 127; // VERASE   Backspace/DEL
+    termios.cc[3] = 21; // VKILL    Ctrl+U
+    termios.cc[4] = 4; // VEOF     Ctrl+D
+    termios.cc[5] = 0; // VTIME
+    termios.cc[6] = 1; // VMIN
+    termios.cc[7] = 0; // VSWTC
+    termios.cc[8] = 17; // VSTART   Ctrl+Q
+    termios.cc[9] = 19; // VSTOP    Ctrl+S
+    termios.cc[10] = 26; // VSUSP    Ctrl+Z
+    termios.cc[11] = 0; // VEOL
+    termios.cc[12] = 18; // VREPRINT Ctrl+R
+    termios.cc[13] = 15; // VDISCARD Ctrl+O
+    termios.cc[14] = 23; // VWERASE  Ctrl+W
+    termios.cc[15] = 22; // VLNEXT   Ctrl+V
+    termios.cc[16] = 0; // VEOL2
+
+    return termios;
+}
+
+const tty0 = @import("../dev/tty0.zig");
+pub fn ttyKeyTask() callconv(.c) void {
+    while (true) {
+        const key = keyboard.getKey();
+        if (key.pressed) {
+            if (key.getChar()) |c| {
+                tty0.get().putChar(c);
+            }
+        }
+    }
+}

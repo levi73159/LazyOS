@@ -20,18 +20,67 @@ const MemoryRegion = struct {
 };
 
 pub const FD_TABLE_SIZE = 256;
-pub const FdTable = [FD_TABLE_SIZE]?*File;
+pub const FdTable = struct {
+    table: [FD_TABLE_SIZE]?File,
+    idx: u8,
+
+    pub fn empty() FdTable {
+        return .{
+            .table = [_]?File{null} ** FD_TABLE_SIZE,
+            .idx = 0,
+        };
+    }
+
+    pub fn getFile(self: *FdTable, fd: u8) ?*File {
+        if (fd >= self.table.len) return null;
+        if (self.table[fd] == null) return null;
+        return &self.table[fd].?;
+    }
+
+    // returns null if out of handles
+    pub fn allocHandle(self: *FdTable) ?u8 {
+        if (self.idx >= self.table.len) return null;
+        if (self.table[self.idx] == null) {
+            self.idx += 1;
+            return self.idx - 1;
+        } else {
+            for (self.table[self.idx..], 0..) |f, i| {
+                if (f == null) {
+                    self.idx += @intCast(i);
+                    return self.idx - 1;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    pub fn allocAndSet(self: *FdTable, file: File) ?u8 {
+        const idx = self.allocHandle() orelse return null;
+        self.table[idx] = file;
+        return idx;
+    }
+
+    pub fn setFile(self: *FdTable, fd: u8, file: File) void {
+        self.table[fd] = file;
+    }
+
+    // note if pointer is allocated it will
+    pub fn freeHandle(self: *FdTable, fd: u8) void {
+        self.idx = fd;
+        self.table[fd] = null;
+    }
+};
 
 entry: u64,
 stack_top: u64,
 vmem: VirtualSpace,
-fd_table: FdTable = [_]?*File{null} ** FD_TABLE_SIZE,
+fd_table: FdTable = .empty(),
 
 regions: std.ArrayList(MemoryRegion),
 
 pub fn getFile(self: *Self, fd: u8) ?*File {
-    if (fd >= 256) return null;
-    return self.fd_table[fd];
+    return self.fd_table.getFile(fd);
 }
 
 pub fn loadElf(data: []const u8, allocator: std.mem.Allocator) !Self {
