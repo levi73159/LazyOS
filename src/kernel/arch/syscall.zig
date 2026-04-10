@@ -229,12 +229,25 @@ fn sys_exit(frame: *SyscallFrame) i64 {
 fn sys_ioctl(frame: *SyscallFrame) i64 {
     const fd = frame.rdi;
     const request = frame.rsi;
+    const arg = frame.rdx;
 
-    _ = fd;
-    _ = request;
+    const process = scheduler.getCurrentProcess() orelse {
+        log.err("No current process", .{});
+        return EAGAIN;
+    };
 
-    // pretend it's NOT a terminal
-    return -25;
+    if (fd > std.math.maxInt(u8)) {
+        return EBADF;
+    }
+
+    const file = process.getFile(@intCast(fd)) orelse {
+        return EBADF;
+    };
+
+    return file.ioctl(@intCast(request), arg) catch |err| {
+        log.err("Failed to ioctl file {d}: {s}", .{ fd, @errorName(err) });
+        return EIO;
+    };
 }
 
 pub fn init() void {

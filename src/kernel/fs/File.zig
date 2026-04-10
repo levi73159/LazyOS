@@ -178,7 +178,7 @@ pub fn read(self: *Self, buf: []u8) Error!usize {
     return self.f_ops.read(self, buf);
 }
 
-pub fn ioctl(self: *Self, req: u32, arg: usize) Error!void {
+pub fn ioctl(self: *Self, req: u32, arg: usize) Error!i64 {
     if (self.f_ops.ioctl) |f| return f(self, req, arg);
     return error.NotImplemented;
 }
