@@ -3,6 +3,7 @@ const msr = @import("msr.zig");
 const gdt = @import("gdt.zig");
 const scheduler = @import("../scheduler.zig");
 const console = @import("../console.zig");
+const File = @import("../fs/File.zig");
 
 const log = std.log.scoped(._syscall);
 
@@ -54,8 +55,6 @@ pub const FD_STDOUT = 1;
 pub const FD_STDERR = 2;
 
 export fn syscallHandler(frame: *SyscallFrame) callconv(.c) void {
-    log.debug("Syscall {d}", .{frame.rax});
-    log.debug("syscall {d} rdi=0x{x} rsi=0x{x} rdx=0x{x}", .{ frame.rax, frame.rdi, frame.rsi, frame.rdx });
     const num = frame.rax;
     const val = switch (num) {
         0 => sys_read(frame),
@@ -66,12 +65,75 @@ export fn syscallHandler(frame: *SyscallFrame) callconv(.c) void {
         231 => sys_exit_group(frame),
         60 => sys_exit(frame),
         158 => sys_arch_prctl(frame),
-        186 => 1, // get_tid_address (stub it with fake TID address of 1 since we don't have threads)
-        218 => 1, // set_tid_address (stub it with fake TID address of 1 since we don't have threads)
+        39 => sys_getpid(frame),
+        186 => sys_gettid(frame),
+        218 => sys_gettid(frame), // set_tid_address (stub it with fake TID address of 1 since we don't have threads)
+        295 => sys_preadv(frame),
+        14 => @as(i64, 0), // rt_sigprocmask — mask signals, stub ok
+        131 => @as(i64, 0), // sigaltstack — alternate signal stack, stub ok
+        200 => @as(i64, 0), // tkill — send signal to thread, stub ok
+        310 => @as(i64, 0), // process_vm_readv — read another process memory, stub ok
+        26 => @as(i64, 0), // msync — sync memory to file, stub ok
+        257 => sys_openat(frame), // openat — needs real impl for stack traces
         else => ENOSYS,
     };
     frame.rax = @bitCast(val);
     log.debug("syscall {d} -> {x}, user_rip={x}", .{ num, frame.rax, frame.user_rip });
+}
+
+fn sys_preadv(frame: *SyscallFrame) i64 {
+    const fd = frame.rdi;
+    const iov: [*]const iovec = @ptrFromInt(frame.rsi);
+    const count = frame.rdx;
+
+    if (fd != FD_STDIN) {
+        log.err("Can't read from fd {d}", .{fd});
+        return EBADF;
+    }
+
+    if (count == 0) return 0;
+
+    var total: usize = 0;
+    @import("io.zig").sti();
+    for (iov[0..count]) |vec| {
+        if (vec.len == 0) continue;
+        if (vec.base == 0) continue;
+
+        const ptr: [*]u8 = @ptrFromInt(vec.base);
+        const buf = ptr[0..vec.len];
+
+        var i: usize = 0;
+        while (i < buf.len) {
+            const key = @import("../keyboard.zig").getKey();
+            if (!key.pressed) continue;
+
+            if (key.getChar()) |c| {
+                buf[i] = c;
+                i += 1;
+                console.putchar(c);
+                console.complete();
+                if (c == '\n') break;
+            }
+        }
+        total += i;
+    }
+
+    return @intCast(total);
+}
+
+fn sys_openat(frame: *SyscallFrame) i64 {
+    const path_ptr: [*:0]const u8 = @ptrFromInt(frame.rsi);
+    const path = std.mem.span(path_ptr);
+    log.warn("openat: path={s}", .{path});
+    return ENOENT;
+}
+
+fn sys_getpid(_: *SyscallFrame) i64 {
+    return scheduler.currentTask();
+}
+
+fn sys_gettid(_: *SyscallFrame) i64 {
+    return scheduler.currentTask();
 }
 
 fn sys_read(frame: *SyscallFrame) i64 {
@@ -91,7 +153,6 @@ fn sys_read(frame: *SyscallFrame) i64 {
     while (i < count) {
         const kb = @import("../keyboard.zig");
         const key = kb.getKey();
-        log.debug("key={}", .{key});
         if (!key.pressed) continue;
 
         if (key.getChar()) |c| {
@@ -136,24 +197,25 @@ fn sys_write(frame: *SyscallFrame) i64 {
     const count = frame.rdx;
 
     const string = buf[0..count];
-    switch (fd) {
-        FD_STDIN => {
-            log.err("Can't write to stdin", .{});
-            return EPERM;
-        },
-        FD_STDOUT => {
-            console.write(string);
-            return @intCast(count);
-        },
-        FD_STDERR => {
-            console.write(string);
-            return @intCast(count);
-        },
-        else => {
-            log.err("Can't write to fd {d}", .{fd});
-            return EBADF;
-        },
+    const process = scheduler.getCurrentProcess() orelse {
+        log.err("No current process", .{});
+        return EAGAIN;
+    };
+
+    if (fd > std.math.maxInt(u8)) {
+        return EBADF;
     }
+
+    const file = process.getFile(@intCast(fd)) orelse {
+        return EBADF;
+    };
+
+    const written = file.write(string) catch |err| {
+        log.err("Failed to write to file {d}: {s}", .{ fd, err });
+        return EIO;
+    };
+
+    return @intCast(written);
 }
 
 const iovec = struct {
@@ -163,39 +225,28 @@ const iovec = struct {
 
 fn sys_writev(frame: *SyscallFrame) i64 {
     const fd = frame.rdi;
-    const iov: [*]const iovec = @ptrFromInt(frame.rsi);
+    const iov: [*]const File.iovec = @ptrFromInt(frame.rsi);
     const count = frame.rdx;
 
-    var total_len: u64 = 0;
-    const iovecs = iov[0..count];
-    for (iovecs) |vec| {
-        if (vec.base == 0) continue; // skip NULL pointers
-        if (vec.len == 0) continue; // skip empty vectors
-        const ptr: [*]const u8 = @ptrFromInt(vec.base);
-        const slice = ptr[0..vec.len];
+    const process = scheduler.getCurrentProcess() orelse {
+        log.err("No current process", .{});
+        return EAGAIN;
+    };
 
-        const string = slice[0..vec.len];
-        switch (fd) {
-            FD_STDIN => {
-                log.err("Can't write to stdin", .{});
-                return EPERM;
-            },
-            FD_STDOUT => {
-                console.write(string);
-                total_len += string.len;
-            },
-            FD_STDERR => {
-                console.write(string);
-                total_len += string.len;
-            },
-            else => {
-                log.err("Can't write to fd {d}", .{fd});
-                return EBADF;
-            },
-        }
+    if (fd > std.math.maxInt(u8)) {
+        return EBADF;
     }
 
-    return @intCast(total_len);
+    const file = process.getFile(@intCast(fd)) orelse {
+        return EBADF;
+    };
+
+    const n = file.writev(iov[0..count]) catch |err| {
+        log.err("Failed to write to file {d}: {s}", .{ fd, err });
+        return EIO;
+    };
+
+    return @intCast(n);
 }
 
 fn sys_exit(frame: *SyscallFrame) i64 {

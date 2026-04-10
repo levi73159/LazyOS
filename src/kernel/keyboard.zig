@@ -374,7 +374,7 @@ pub fn flush() void {
 pub fn waitForKey() void {
     wait_key.store(true, .release);
     while (wait_key.load(.acquire)) {
-        io.pause();
+        asm volatile ("hlt");
     }
 }
 

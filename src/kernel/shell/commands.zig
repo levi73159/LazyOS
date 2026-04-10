@@ -146,7 +146,7 @@ fn cat(s: *Shell, args: []const []const u8) anyerror!void {
     const path = try s.combinePath(args[0]);
 
     const fs = s.fs.?;
-    const file = try fs.open(path);
+    var file = try fs.open(path);
     defer file.close();
 
     var buf: [4096]u8 = undefined;
@@ -169,7 +169,7 @@ fn run(s: *Shell, args: []const []const u8) anyerror!void {
     const path = try std.mem.join(s.allocator, "/", &[_][]const u8{ "/bin", name });
     defer s.allocator.free(path);
 
-    const file = try fs.open(path);
+    var file = try fs.open(path);
     defer file.close();
 
     const data = try file.readAlloc(s.allocator);

@@ -20,6 +20,7 @@ pub const TaskState = union(enum) {
     running, // currently running
     dead: u64, // task is dead (with return value)
     waiting: WaitingState, // waiting for task with id
+    wait_input, // TODO: make it where it will specify which TTY this is waiting for
 };
 
 pub const WaitType = enum(u8) {
@@ -463,4 +464,24 @@ pub fn wakeTask(id: u32) void {
 /// Assumes task is running
 pub fn getCurrentTask() *Task {
     return current.?;
+}
+
+pub fn getCurrentProcess() ?*Process {
+    return if (current) |task| task.process else null;
+}
+
+pub fn getProcess(id: u32) ?*Process {
+    if (getTask(id)) |task| {
+        return task.process;
+    }
+    return null;
+}
+
+pub fn wakeInputWaiters() void {
+    var current_node = task_list;
+    while (current_node) |node| : (current_node = node.next) {
+        if (node.state == .wait_input) {
+            node.state = .ready;
+        }
+    }
 }

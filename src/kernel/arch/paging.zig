@@ -6,6 +6,7 @@ const VirtualSpace = @import("VirtualSpace.zig");
 const scheduler = @import("../scheduler.zig");
 const io = @import("io.zig");
 const heap = @import("../memory/heap.zig");
+const acpi = @import("acpi.zig");
 
 pub const PageFlags = VirtualSpace.PageFlags;
 
@@ -175,11 +176,13 @@ pub const ErrorCode = packed struct(u32) {
 
 pub fn pageFaultHandler(frame: *arch.registers.InterruptFrame) void {
     const console = @import("../console.zig");
-    console.printB("\x1b[97;41m", .{});
+
     const error_code: ErrorCode = @bitCast(@as(u32, @truncate(frame.error_code))); // ignore upper bits
     const address = asm volatile ("mov %%cr2, %[addr]\n"
         : [addr] "=r" (-> u64),
     );
+
+    console.printB("\x1b[97;41m", .{});
 
     const vmem = getVmem(error_code.user);
     const guard_page = vmem.getGuardPage(address);
@@ -231,6 +234,15 @@ pub fn pageFaultHandler(frame: *arch.registers.InterruptFrame) void {
 
     console.printB("Frame:\n", .{});
     console.printB("{f}\n", .{frame});
+
+    console.printB("\x1b[0m", .{});
+
+    if (error_code.user) {
+        scheduler.taskExit(255);
+    } else {
+        console.printB("Rebooting...\n", .{});
+        acpi.reboot();
+    }
 
     io.hlt();
 }

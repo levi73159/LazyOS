@@ -4,6 +4,7 @@ const paging = @import("arch/paging.zig");
 const pmem = @import("memory/pmem.zig");
 const bootinfo = @import("arch/bootinfo.zig");
 const VirtualSpace = @import("arch/VirtualSpace.zig");
+const File = @import("fs/File.zig");
 
 const log = std.log.scoped(.process);
 
@@ -18,11 +19,20 @@ const MemoryRegion = struct {
     page_count: u64,
 };
 
+pub const FD_TABLE_SIZE = 256;
+pub const FdTable = [FD_TABLE_SIZE]?*File;
+
 entry: u64,
 stack_top: u64,
 vmem: VirtualSpace,
+fd_table: FdTable = [_]?*File{null} ** FD_TABLE_SIZE,
 
 regions: std.ArrayList(MemoryRegion),
+
+pub fn getFile(self: *Self, fd: u8) ?*File {
+    if (fd >= 256) return null;
+    return self.fd_table[fd];
+}
 
 pub fn loadElf(data: []const u8, allocator: std.mem.Allocator) !Self {
     log.debug("Loading, elf", .{});

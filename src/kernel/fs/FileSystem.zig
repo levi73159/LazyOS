@@ -10,11 +10,19 @@ pub const FileInfo = struct {
     type: FileType,
 };
 
+pub const FileFlags = packed struct {
+    readable: bool = false,
+    writable: bool = false,
+    executable: bool = false,
+    seekable: bool = false,
+};
+
 pub const Handle = struct {
     pos: u32 = 0,
     size: u32 = 0,
     ctx: u64 = 0, // LBA for iso9660, cluster for fat32
     opened: bool = false,
+    flags: FileFlags = .{},
 };
 
 pub const FileSysetmType = enum { iso9660 }; // TODO: add fat32/fat16
@@ -56,12 +64,13 @@ pub const AnyFs = struct {
     state: [4096]u8 align(8) = undefined, // filesystem state manage by the filesystem
 };
 
-pub const MAX_HANDLES = 16;
+pub const MAX_HANDLES = 256;
 
 const Self = @This();
 
 pub const Error = error{
     UnknownFileSystem,
+    PermissionDenied,
     NoFreeHandles,
     FileNotFound,
     NotFile,
@@ -72,10 +81,10 @@ pub const Error = error{
     BadFileHandle,
     Unexpected,
     InvalidSeek,
+    NotImplemented,
 } || Disk.DiskError;
 
 inner: AnyFs,
-handles: [MAX_HANDLES]Handle = [_]Handle{.{}} ** MAX_HANDLES,
 
 var global: ?Self = null;
 
@@ -86,7 +95,6 @@ pub fn init(disk: *Disk) Error!Self {
 
     return Self{
         .inner = anyfs,
-        .handles = [_]Handle{.{}} ** MAX_HANDLES,
     };
 }
 
@@ -109,54 +117,49 @@ fn convertToError(err: anyerror) Error {
     return error.Unexpected;
 }
 
-fn allocHandle(self: *Self) Error!struct { *Handle, u8 } {
-    for (self.handles, 0..) |h, i| {
-        if (!h.opened) {
-            self.handles[i].opened = true;
-            return .{ &self.handles[i], @intCast(i) };
-        }
-    }
-    return error.NoFreeHandles;
-}
-
 pub fn open(self: *Self, path: []const u8) Error!File {
     const handle = self.inner.vtable.open_file(&self.inner, path) catch |err| return convertToError(err);
-    const h, const i = try self.allocHandle();
-    h.* = handle;
 
     return File{
-        .fs = self,
-        .fd = i,
+        .handle = handle,
+        .any_fs = &self.inner,
+        .f_ops = &file_ops,
     };
 }
 
-pub fn read(self: *Self, handle: u8, buf: []u8) Error!usize {
-    if (handle >= MAX_HANDLES) return error.BadFileHandle;
-    const h = &self.handles[handle];
+const file_ops = File.FileOps{
+    .read = read,
+    .write = write,
+    .close = close,
+    .seek = seek,
+};
 
-    return self.inner.vtable.read_file(&self.inner, h, buf) catch |err| return convertToError(err);
+pub fn read(self: *File, buf: []u8) Error!usize {
+    const h: *Handle = &self.handle;
+    const any_fs: *AnyFs = @ptrCast(@alignCast(self.private));
+
+    return any_fs.vtable.read_file(self.private, h, buf) catch |err| return convertToError(err);
+}
+
+pub fn write(_: *File, _: []const u8) Error!usize {
+    return error.NotImplemented;
 }
 
 pub fn stat(self: *Self, path: []const u8) Error!FileInfo {
     return self.inner.vtable.stat(&self.inner, path) catch |err| return convertToError(err);
 }
 
-pub fn seek(self: *Self, handle: u8, offset: u32) Error!void {
-    if (handle >= MAX_HANDLES) return error.BadFileHandle;
-    const h = &self.handles[handle];
+pub fn seek(self: *File, offset: u32) Error!void {
+    const h = &self.handle;
 
     if (offset > h.size) return error.InvalidSeek;
     h.pos = offset;
 }
 
-pub fn close(self: *Self, handle: u8) void {
-    if (handle >= MAX_HANDLES) return;
-    self.handles[handle].opened = false;
-}
-
-pub fn getHandle(self: *Self, handle: u8) error{BadFileHandle}!*Handle {
-    if (handle >= MAX_HANDLES) return error.BadFileHandle;
-    return &self.handles[handle];
+pub fn close(self: *File) void {
+    self.handle.opened = false;
+    self.handle.pos = 0;
+    self.handle.size = 0;
 }
 
 pub fn it(self: *Self, path: []const u8) Error!DirIterator {
@@ -176,6 +179,7 @@ fn detectFat32(disk: *Disk) !bool {
     try disk.readAll(0, &buf);
     // check boot sector signature
     if (buf[510] != 0x55 or buf[511] != 0xAA) return false;
+
     // check FAT type string at offset 82
     return std.mem.eql(u8, buf[82..90], "FAT32   ");
 }

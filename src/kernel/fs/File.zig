@@ -1,5 +1,6 @@
 const std = @import("std");
 const FS = @import("FileSystem.zig");
+const File = @import("File.zig");
 const IOReader = std.Io.Reader;
 const IOWriter = std.Io.Writer;
 
@@ -40,36 +41,28 @@ pub const Reader = struct {
 
     fn readVec(io_reader: *std.Io.Reader, data: [][]u8) std.Io.Reader.Error!usize {
         const r: *Reader = @alignCast(@fieldParentPtr("interface", io_reader));
+        var total: usize = 0;
+
         const handle = r.fs.getHandle(r.fd) catch {
             r.err = error.BadFileHandle;
             return error.ReadFailed;
         };
 
-        if (handle.pos >= handle.size) {
-            r.size = handle.size;
-            return error.EndOfStream;
+        for (data) |dest| {
+            if (dest.len == 0) continue;
+            if (handle.pos >= handle.size) {
+                if (total == 0) return error.EndOfStream;
+                break;
+            }
+            const n = r.fs.read(r.fd, dest) catch |err| {
+                r.err = err;
+                return error.ReadFailed;
+            };
+            if (n == 0) break;
+            r.pos += n;
+            total += n;
         }
-
-        // read into first buffer in the vec
-        const dest = data[0];
-        const remaining: usize = handle.size - handle.pos;
-        const to_read = @min(dest.len, remaining);
-
-        const n = r.fs.read(
-            r.fd,
-            dest[0..to_read],
-        ) catch |err| {
-            r.err = err;
-            return error.ReadFailed;
-        };
-
-        if (n == 0) {
-            r.size = r.pos;
-            return error.EndOfStream;
-        }
-
-        r.pos += n;
-        return n;
+        return total;
     }
 
     fn stream(
@@ -160,23 +153,38 @@ pub const Reader = struct {
     }
 };
 
-fs: *FS,
-fd: u8,
+pub const FileOps = struct {
+    read: *const fn (f: *File, buf: []u8) Error!usize,
+    write: *const fn (f: *File, buf: []const u8) Error!usize,
+    seek: ?*const fn (f: *File, offset: u32) Error!void,
+    ioctl: ?*const fn (f: *File, req: u32, arg: usize) Error!void,
+    close: *const fn (f: *File) void,
+};
 
-const Error = FS.Error;
+f_ops: *const FileOps,
+handle: FS.Handle,
+private: *anyopaque, // AnyFS for a file/dir, TTY for stdin/stdout/stderr
+
+pub const Error = FS.Error;
 const UnxpectedEOF = error{UnexpectedEOF} || Error;
 const AllocReadError = std.mem.Allocator.Error || Error;
 
-pub fn close(self: *const Self) void {
-    return self.fs.close(self.fd);
+pub fn close(self: *Self) void {
+    return self.f_ops.close(self);
 }
 
-pub fn read(self: *const Self, buf: []u8) Error!usize {
-    return self.fs.read(self.fd, buf);
+pub fn read(self: *Self, buf: []u8) Error!usize {
+    if (!self.handle.flags.readable) return error.PermissionDenied;
+    return self.f_ops.read(self, buf);
 }
 
-pub fn readAlloc(self: *const Self, allocator: std.mem.Allocator) AllocReadError![]u8 {
-    const handle = try self.fs.getHandle(self.fd);
+pub fn ioctl(self: *Self, req: u32, arg: usize) Error!void {
+    if (self.f_ops.ioctl) |f| return f(self, req, arg);
+    return error.NotImplemented;
+}
+
+pub fn readAlloc(self: *Self, allocator: std.mem.Allocator) AllocReadError![]u8 {
+    const handle = self.handle;
     // calculate how much is left to read
     const left = handle.size - handle.pos;
 
@@ -188,7 +196,7 @@ pub fn readAlloc(self: *const Self, allocator: std.mem.Allocator) AllocReadError
     return buf[0..size];
 }
 
-pub fn readAll(self: *const Self, buf: []u8) Error![]u8 {
+pub fn readAll(self: *Self, buf: []u8) Error![]u8 {
     var total: usize = 0;
     while (total < buf.len) {
         const n = try self.read(buf[total..]);
@@ -198,6 +206,46 @@ pub fn readAll(self: *const Self, buf: []u8) Error![]u8 {
     return buf[0..total];
 }
 
-pub fn reader(self: *const Self, buf: []u8) Reader {
+pub fn write(self: *Self, buf: []u8) Error!usize {
+    if (!self.handle.flags.writable) return error.PermissionDenied;
+    return self.f_ops.write(self, buf);
+}
+
+pub const iovec = struct {
+    base: u64,
+    len: u64,
+};
+
+pub fn writev(self: *Self, iovecs: []const iovec) Error!usize {
+    if (!self.handle.flags.writable) return error.PermissionDenied;
+    var written: u64 = 0;
+    for (iovecs) |vec| {
+        if (vec.len == 0) continue; // skip empty vectors
+        if (vec.base == 0) continue; // skip NULL pointers
+        const ptr: [*]const u8 = @ptrFromInt(vec.base);
+        const slice = ptr[0..vec.len];
+        const n = try self.write(slice);
+        written += n;
+        if (n < slice.len) break;
+    }
+
+    return written;
+}
+
+pub fn readv(self: *Self, iovecs: []const iovec) Error!usize {
+    var total: u64 = 0;
+    for (iovecs) |vec| {
+        if (vec.len == 0) continue; // skip empty vectors
+        if (vec.base == 0) continue; // skip NULL pointers
+        const ptr: [*]u8 = @ptrFromInt(vec.base);
+        const slice = ptr[0..vec.len];
+        const n = try self.read(slice);
+        total += n;
+        if (n < slice.len) break;
+    }
+    return total;
+}
+
+pub fn reader(self: *Self, buf: []u8) Reader {
     return Reader.init(self.fs, self.fd, buf);
 }
