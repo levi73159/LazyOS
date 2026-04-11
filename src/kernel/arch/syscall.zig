@@ -4,6 +4,9 @@ const gdt = @import("gdt.zig");
 const scheduler = @import("../scheduler.zig");
 const console = @import("../console.zig");
 const File = @import("../fs/File.zig");
+const errno = @import("syscalls/errno.zig");
+
+const sysvfs = @import("syscalls/vfs.zig");
 
 const log = std.log.scoped(._syscall);
 
@@ -35,81 +38,31 @@ pub const SyscallFrame = extern struct {
 pub export var user_rsp: u64 = 0xdeadbeef1;
 pub export var kernel_rsp: u64 = 0xdeadbeef2; // set by the kernel before calling user code
 
-pub const SUCCESS: i64 = 0;
-pub const EPERM: i64 = -1;
-pub const ENOENT: i64 = -2;
-pub const ESRCH: i64 = -3;
-pub const EINTR: i64 = -4;
-pub const EIO: i64 = -5;
-pub const EBADF: i64 = -9;
-pub const EAGAIN: i64 = -11;
-pub const ENOMEM: i64 = -12;
-pub const EACCES: i64 = -13;
-pub const EFAULT: i64 = -14;
-pub const EINVAL: i64 = -22;
-pub const ENOSYS: i64 = -38;
-
-pub const FD_FILE_START = 3;
-pub const FD_STDIN = 0;
-pub const FD_STDOUT = 1;
-pub const FD_STDERR = 2;
-
 export fn syscallHandler(frame: *SyscallFrame) callconv(.c) void {
     const num = frame.rax;
     const val = switch (num) {
-        0 => sys_read(frame),
-        1 => sys_write(frame),
+        0 => sysvfs.read(frame),
+        1 => sysvfs.write(frame),
         13 => rt_sigaction(frame),
-        16 => sys_ioctl(frame),
-        20 => sys_writev(frame),
+        16 => sysvfs.ioctl(frame),
+        20 => sysvfs.writev(frame),
         231 => sys_exit_group(frame),
         60 => sys_exit(frame),
         158 => sys_arch_prctl(frame),
         39 => sys_getpid(frame),
         186 => sys_gettid(frame),
         218 => sys_gettid(frame), // set_tid_address (stub it with fake TID address of 1 since we don't have threads)
-        295 => sys_preadv(frame),
+        295 => sysvfs.preadv(frame),
         14 => @as(i64, 0), // rt_sigprocmask — mask signals, stub ok
         131 => @as(i64, 0), // sigaltstack — alternate signal stack, stub ok
         200 => @as(i64, 0), // tkill — send signal to thread, stub ok
         310 => @as(i64, 0), // process_vm_readv — read another process memory, stub ok
         26 => @as(i64, 0), // msync — sync memory to file, stub ok
-        257 => sys_openat(frame), // openat — needs real impl for stack traces
-        else => ENOSYS,
+        257 => sysvfs.openat(frame), // openat — needs real impl for stack traces
+        else => errno.ENOSYS,
     };
     frame.rax = @bitCast(val);
     log.debug("syscall {d} -> {x}, user_rip={x}", .{ num, frame.rax, frame.user_rip });
-}
-
-// TODO: position independent readv (right now it just called readv)
-fn sys_preadv(frame: *SyscallFrame) i64 {
-    const fd = frame.rdi;
-    const iov: [*]const File.iovec = @ptrFromInt(frame.rsi);
-    const count = frame.rdx;
-
-    const process = scheduler.getCurrentProcess() orelse {
-        log.err("No current process", .{});
-        return EAGAIN;
-    };
-
-    const file = process.getFile(@intCast(fd)) orelse {
-        log.err("Invalid file descriptor {d}", .{fd});
-        return EBADF;
-    };
-
-    const total = file.readv(iov[0..count]) catch |err| {
-        log.err("Failed to read from file {d}: {s}", .{ fd, @errorName(err) });
-        return EIO;
-    };
-
-    return @intCast(total);
-}
-
-fn sys_openat(frame: *SyscallFrame) i64 {
-    const path_ptr: [*:0]const u8 = @ptrFromInt(frame.rsi);
-    const path = std.mem.span(path_ptr);
-    log.warn("openat: path={s}", .{path});
-    return ENOENT;
 }
 
 fn sys_getpid(_: *SyscallFrame) i64 {
@@ -118,29 +71,6 @@ fn sys_getpid(_: *SyscallFrame) i64 {
 
 fn sys_gettid(_: *SyscallFrame) i64 {
     return scheduler.currentTask();
-}
-
-fn sys_read(frame: *SyscallFrame) i64 {
-    const fd = frame.rdi;
-    const count = frame.rdx;
-    const ptr: [*]u8 = @ptrFromInt(frame.rsi);
-
-    const process = scheduler.getCurrentProcess() orelse {
-        log.err("No current process", .{});
-        return EAGAIN;
-    };
-
-    const file = process.getFile(@intCast(fd)) orelse {
-        log.err("Invalid file descriptor {d}", .{fd});
-        return EBADF;
-    };
-
-    const read = file.read(ptr[0..count]) catch |err| {
-        log.err("Error reading file: {s}", .{@errorName(err)});
-        return EIO;
-    };
-
-    return @intCast(read);
 }
 
 fn rt_sigaction(_: *SyscallFrame) i64 {
@@ -160,63 +90,10 @@ fn sys_arch_prctl(frame: *SyscallFrame) i64 {
         },
         else => {
             log.err("Unknown arch_prctl code {d}", .{code});
-            return EINVAL;
+            return errno.EINVAL;
         },
     }
     return 0;
-}
-
-fn sys_write(frame: *SyscallFrame) i64 {
-    const fd = frame.rdi;
-    const buf: [*]const u8 = @ptrFromInt(frame.rsi);
-    const count = frame.rdx;
-
-    const string = buf[0..count];
-    const process = scheduler.getCurrentProcess() orelse {
-        log.err("No current process", .{});
-        return EAGAIN;
-    };
-
-    if (fd > std.math.maxInt(u8)) {
-        return EBADF;
-    }
-
-    const file = process.getFile(@intCast(fd)) orelse {
-        return EBADF;
-    };
-
-    const written = file.write(string) catch |err| {
-        log.err("Failed to write to file {d}: {s}", .{ fd, @errorName(err) });
-        return EIO;
-    };
-
-    return @intCast(written);
-}
-
-fn sys_writev(frame: *SyscallFrame) i64 {
-    const fd = frame.rdi;
-    const iov: [*]const File.iovec = @ptrFromInt(frame.rsi);
-    const count = frame.rdx;
-
-    const process = scheduler.getCurrentProcess() orelse {
-        log.err("No current process", .{});
-        return EAGAIN;
-    };
-
-    if (fd > std.math.maxInt(u8)) {
-        return EBADF;
-    }
-
-    const file = process.getFile(@intCast(fd)) orelse {
-        return EBADF;
-    };
-
-    const n = file.writev(iov[0..count]) catch |err| {
-        log.err("Failed to write to file {d}: {s}", .{ fd, @errorName(err) });
-        return EIO;
-    };
-
-    return @intCast(n);
 }
 
 fn sys_exit(frame: *SyscallFrame) i64 {
@@ -224,30 +101,6 @@ fn sys_exit(frame: *SyscallFrame) i64 {
 
     scheduler.taskExit(code);
     return code;
-}
-
-fn sys_ioctl(frame: *SyscallFrame) i64 {
-    const fd = frame.rdi;
-    const request = frame.rsi;
-    const arg = frame.rdx;
-
-    const process = scheduler.getCurrentProcess() orelse {
-        log.err("No current process", .{});
-        return EAGAIN;
-    };
-
-    if (fd > std.math.maxInt(u8)) {
-        return EBADF;
-    }
-
-    const file = process.getFile(@intCast(fd)) orelse {
-        return EBADF;
-    };
-
-    return file.ioctl(@intCast(request), arg) catch |err| {
-        log.err("Failed to ioctl file {d}: {s}", .{ fd, @errorName(err) });
-        return EIO;
-    };
 }
 
 pub fn init() void {

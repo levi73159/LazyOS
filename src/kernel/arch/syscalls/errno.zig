@@ -1,0 +1,13 @@
+pub const SUCCESS: i64 = 0;
+pub const EPERM: i64 = -1;
+pub const ENOENT: i64 = -2;
+pub const ESRCH: i64 = -3;
+pub const EINTR: i64 = -4;
+pub const EIO: i64 = -5;
+pub const EBADF: i64 = -9;
+pub const EAGAIN: i64 = -11;
+pub const ENOMEM: i64 = -12;
+pub const EACCES: i64 = -13;
+pub const EFAULT: i64 = -14;
+pub const EINVAL: i64 = -22;
+pub const ENOSYS: i64 = -38;
