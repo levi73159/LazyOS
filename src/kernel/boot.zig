@@ -122,19 +122,3 @@ export fn boot_init_stage2() callconv(.c) noreturn {
         asm volatile ("hlt");
     }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Zig hooks
-// ─────────────────────────────────────────────────────────────────────────────
-
-pub const std_options: std.Options = .{
-    .log_level = .debug,
-    .logFn = console.logFn,
-    .page_size_min = 4096,
-    .page_size_max = 4096,
-};
-
-pub fn panic(msg: []const u8, stack: ?*std.builtin.StackTrace, ret: ?usize) noreturn {
-    @branchHint(.cold);
-    @import("panic_handler.zig").panic(msg, stack, ret);
-}

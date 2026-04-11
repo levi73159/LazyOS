@@ -1,8 +1,0 @@
-added:
-gdt, idt, isr, irq, pic
-paging, acpi, heap(linked list allocator), pmem(bitmap allocator)
-usermode and running elf programs (with some syscalls)
-Iso9660 filesystem
-Disk drivers
-PS/2 mouse & keyboard drivers
-single threaded multitasking
