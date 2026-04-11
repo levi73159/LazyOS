@@ -1,10 +1,11 @@
 const std = @import("std");
-const io = @import("arch.zig").io;
-const console = @import("console.zig");
-const acpi = @import("arch/acpi.zig");
-const heap = @import("memory/heap.zig");
-const bootinfo = @import("arch/bootinfo.zig");
-const symbols = @import("debug/symbols.zig");
+const root = @import("root");
+const io = root.io;
+const console = root.console;
+const acpi = root.acpi;
+const heap = root.heap;
+const bootinfo = root.arch.bootinfo;
+const symbols = root.debug.symbols;
 
 pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
     // display blue square in the bottom right corner

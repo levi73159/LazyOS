@@ -1,12 +1,12 @@
 const std = @import("std");
-const arch = @import("../arch.zig");
+const root = @import("root");
+const arch = root.arch;
 const bootinfo = @import("bootinfo.zig");
-const pmem = @import("../memory/pmem.zig");
+const pmem = root.pmem;
 const VirtualSpace = @import("VirtualSpace.zig");
-const scheduler = @import("../scheduler.zig");
 const io = @import("io.zig");
-const heap = @import("../memory/heap.zig");
-const acpi = @import("acpi.zig");
+const heap = root.heap;
+const acpi = root.acpi;
 
 pub const PageFlags = VirtualSpace.PageFlags;
 
@@ -175,7 +175,7 @@ pub const ErrorCode = packed struct(u32) {
 };
 
 pub fn pageFaultHandler(frame: *arch.registers.InterruptFrame) void {
-    const console = @import("../console.zig");
+    const console = root.console;
 
     const error_code: ErrorCode = @bitCast(@as(u32, @truncate(frame.error_code))); // ignore upper bits
     const address = asm volatile ("mov %%cr2, %[addr]\n"
@@ -238,7 +238,7 @@ pub fn pageFaultHandler(frame: *arch.registers.InterruptFrame) void {
     console.printB("\x1b[0m", .{});
 
     if (error_code.user) {
-        scheduler.taskExit(255);
+        root.proc.scheduler.taskExit(255);
     } else {
         console.printB("Rebooting...\n", .{});
         acpi.reboot();
@@ -253,7 +253,7 @@ fn faultType(err: ErrorCode) []const u8 {
 
 fn getVmem(user: bool) VirtualSpace {
     const vmem: ?VirtualSpace = if (!user) kernel_vmem else blk: {
-        const process = scheduler.getCurrentTask().process orelse break :blk null;
+        const process = root.proc.scheduler.getCurrentTask().process orelse break :blk null;
         break :blk process.vmem;
     };
     if (vmem == null) {

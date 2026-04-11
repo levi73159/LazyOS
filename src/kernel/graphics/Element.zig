@@ -1,7 +1,9 @@
 const std = @import("std");
 const ui = @import("ui.zig");
 const Screen = @import("Screen.zig");
-const Position = @import("../Position.zig");
+const Position = @import("Position.zig");
+const dev = @import("root").dev;
+const mouse = dev.mouse;
 
 pub const Rect = struct {
     x: u32,
@@ -124,9 +126,7 @@ pub const MouseState = struct {
 /// get whether the mouse is clicking on the element
 /// get the relative position of the mouse
 pub fn getMouseState(self: Self, screen: *Screen) MouseState {
-    const mouse = @import("../mouse.zig");
-
-    const pos = mouse.getPosition();
+    const pos = dev.mouse.getPosition();
 
     const rect = self.asRect(screen);
 

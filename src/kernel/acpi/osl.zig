@@ -1,16 +1,17 @@
 const std = @import("std");
-const arch = @import("../arch.zig");
+const root = @import("root");
+const arch = root.arch;
 const heap = @import("../memory/heap.zig");
-const scheduler = @import("../scheduler.zig");
+const scheduler = root.proc.scheduler;
 const bootinfo = arch.bootinfo;
-const limine = arch.limine;
+const limine = root.arch.limine;
 const paging = arch.paging;
 const io = arch.io;
-const pit = @import("../pit.zig");
+const pit = arch.pit;
 const InterruptFrame = arch.registers.InterruptFrame;
 const irq = arch.irq;
-const sync = @import("../sync.zig");
-const pci = @import("../pci.zig");
+const sync = root.lib.sync;
+const pci = root.dev.pci;
 
 const log = std.log.scoped(.acpi_osl);
 

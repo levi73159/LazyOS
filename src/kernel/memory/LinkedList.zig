@@ -1,5 +1,6 @@
 const std = @import("std");
-const paging = @import("../arch.zig").paging;
+const root = @import("root");
+const paging = root.arch.paging;
 const mem = std.mem;
 const BitmapAllocator = @import("BitmapAllocator.zig");
 const is_debug = true;

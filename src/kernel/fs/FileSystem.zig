@@ -1,5 +1,7 @@
 const std = @import("std");
-const Disk = @import("../Disk.zig");
+const root = @import("root");
+const Disk = root.dev.Disk;
+
 const Iso9660 = @import("Iso9660.zig");
 
 pub const File = @import("File.zig");

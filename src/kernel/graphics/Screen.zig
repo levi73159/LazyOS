@@ -1,9 +1,9 @@
 const std = @import("std");
 const Color = @import("Color.zig");
-const font = @import("../fonts/Basic.zig");
-const bootinfo = @import("../arch/bootinfo.zig");
+const font = @import("fonts/Basic.zig");
+const bootinfo = @import("root").arch.bootinfo;
 const Texture = @import("ui.zig").Texture;
-const io = @import("../arch.zig").io;
+const io = @import("root").io;
 
 const Self = @This();
 

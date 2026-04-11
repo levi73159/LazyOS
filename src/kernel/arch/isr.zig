@@ -4,10 +4,10 @@ const desc = @import("descriptors.zig");
 const idt = desc.idt;
 const gdt = desc.gdt;
 const log = @import("std").log.scoped(.isr);
-const console = @import("../console.zig");
+const console = @import("root").console;
 const host = @import("std").log.scoped(.host);
 const io = @import("io.zig");
-const scheduler = @import("../scheduler.zig");
+const scheduler = @import("root").proc.scheduler;
 
 const InterruptFn = *const fn () callconv(.naked) noreturn;
 pub const Handler = *const fn (frame: *InterruptFrame) void;

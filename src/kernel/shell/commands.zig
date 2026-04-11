@@ -1,11 +1,12 @@
 const std = @import("std");
+const root = @import("root");
 const Command = @import("Command.zig");
-const console = @import("../console.zig");
-const acpi = @import("../arch/acpi.zig");
-const Shell = @import("../Shell.zig");
-const bootinfo = @import("../arch/bootinfo.zig");
-const scheduler = @import("../scheduler.zig");
-const Process = @import("../Process.zig");
+const console = root.console;
+const acpi = root.acpi;
+const Shell = root.Shell;
+const bootinfo = root.arch.bootinfo;
+const scheduler = root.proc.scheduler;
+const Process = root.proc.Process;
 
 pub const commands = &[_]Command{
     Command{

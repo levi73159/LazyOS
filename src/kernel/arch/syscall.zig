@@ -1,12 +1,13 @@
 const std = @import("std");
 const msr = @import("msr.zig");
 const gdt = @import("gdt.zig");
-const scheduler = @import("../scheduler.zig");
-const console = @import("../console.zig");
-const File = @import("../fs/File.zig");
-const errno = @import("syscalls/errno.zig");
+const root = @import("root");
+const scheduler = root.proc.scheduler;
+const console = root.console;
+const File = root.fs.File;
+const errno = @import("syscall/errno.zig");
 
-const sysvfs = @import("syscalls/vfs.zig");
+const sysvfs = @import("syscall/vfs.zig");
 
 const log = std.log.scoped(._syscall);
 

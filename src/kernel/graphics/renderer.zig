@@ -1,11 +1,14 @@
 const std = @import("std");
 const Screen = @import("Screen.zig");
-const kb = @import("../keyboard.zig");
-const acpi = @import("../arch/acpi.zig");
-const console = @import("../console.zig");
-const io = @import("../arch.zig").io;
+const root = @import("root");
 
-const mouse = @import("../mouse.zig");
+const kb = root.dev.keyboard;
+const mouse = root.dev.mouse;
+
+const acpi = root.acpi;
+const console = root.console;
+const io = root.io;
+
 const ui = @import("ui.zig");
 const Color = @import("Color.zig");
 const Element = @import("Element.zig");

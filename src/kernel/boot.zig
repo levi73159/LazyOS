@@ -1,6 +1,6 @@
 const std = @import("std");
 const main = @import("main.zig");
-const console = @import("console.zig");
+const console = @import("graphics/console.zig");
 const bootinfo = @import("arch/bootinfo.zig");
 const BootInfo = @import("arch/bootinfo.zig").BootInfo;
 const paging = @import("arch/paging.zig");

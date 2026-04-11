@@ -10,8 +10,9 @@ const log = std.log.scoped(._iso9660);
 const iterator = @import("iterator.zig");
 const Allocator = std.mem.Allocator;
 const FS = @import("FileSystem.zig");
+const root = @import("root");
 
-const Disk = @import("../Disk.zig");
+const Disk = root.dev.Disk;
 
 pub const VolumeDescriptorType = enum(u8) {
     boot_record = 0,

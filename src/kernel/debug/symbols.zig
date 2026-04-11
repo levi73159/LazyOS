@@ -5,7 +5,8 @@
 //! then `printStackTrace()` from the panic handler.
 
 const std = @import("std");
-const console = @import("../console.zig");
+const root = @import("root");
+const console = root.console;
 const elf = std.elf;
 
 const Ehdr = elf.Elf64_Ehdr;

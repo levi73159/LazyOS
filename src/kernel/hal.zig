@@ -1,12 +1,12 @@
 const std = @import("std");
-const arch = @import("arch.zig");
+const arch = @import("root").arch;
 const gdt = arch.descriptors.gdt;
 const idt = arch.descriptors.idt;
 const isr = arch.isr;
 const irq = arch.irq;
-const acpi = arch.acpi;
+const acpi = @import("root").acpi;
 
-const console = @import("console.zig");
+const console = @import("root").console;
 
 const log = std.log.scoped(.hal);
 

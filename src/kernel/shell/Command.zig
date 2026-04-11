@@ -1,5 +1,5 @@
 const std = @import("std");
-const Shell = @import("../Shell.zig");
+const Shell = @import("Shell.zig");
 
 name: []const u8,
 help: []const u8,

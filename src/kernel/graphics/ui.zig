@@ -1,7 +1,7 @@
 const std = @import("std");
-const FS = @import("../fs/FileSystem.zig");
-const Bitmap = @import("../image/Bitmap.zig");
-const TGA = @import("../image/Tga.zig");
+const FS = @import("root").fs.FileSystem;
+const Bitmap = @import("image/Bitmap.zig");
+const TGA = @import("image/Tga.zig");
 
 const log = std.log.scoped(.ui);
 

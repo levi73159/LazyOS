@@ -1,27 +1,29 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const root = @import("root");
 
 const acpi_oslevel = @import("acpi/osl.zig");
-const arch = @import("arch.zig");
-const BootInfo = @import("arch/bootinfo.zig").BootInfo;
-const paging = @import("arch/paging.zig");
-const serial = @import("arch/serial.zig");
-const console = @import("console.zig");
-const Disk = @import("Disk.zig");
-const FileSystem = @import("fs/FileSystem.zig");
-const renderer = @import("graphics/renderer.zig");
-const Screen = @import("graphics/Screen.zig");
-const ui = @import("graphics/ui.zig");
+const acpi = root.acpi;
+const arch = root.arch;
+const BootInfo = arch.bootinfo.BootInfo;
+const paging = arch.paging;
+const serial = root.dev.serial;
+const console = root.console;
+const Disk = root.dev.Disk;
+const FileSystem = root.fs.FileSystem;
+const renderer = root.graphics.renderer;
+const Screen = root.graphics.Screen;
+const ui = root.graphics.ui;
 const hal = @import("hal.zig");
-const io = @import("arch.zig").io;
-const kb = @import("keyboard.zig");
-const heap = @import("memory/heap.zig");
-const pmem = @import("memory/pmem.zig");
-const mouse = @import("mouse.zig");
-const pit = @import("pit.zig");
-const scheduler = @import("scheduler.zig");
-const Shell = @import("Shell.zig");
-const TTY = @import("fs/TTY.zig");
+const io = root.io;
+const kb = root.dev.keyboard;
+const heap = root.heap;
+const pmem = root.pmem;
+const mouse = root.dev.mouse;
+const pit = arch.pit;
+const scheduler = root.proc.scheduler;
+const Shell = root.Shell;
+const TTY = root.dev.TTY;
 
 // NOTE: MUST BE IMPORTED FIRST FOR ACPI TO WORK
 comptime {
@@ -87,7 +89,7 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     _ = scheduler.addTaskFunc(&TTY.ttyKeyTask, .{});
     console.logDebug(true);
 
-    @import("pci.zig").emunerate();
+    root.dev.pci.emunerate();
 
     screen.use_double_buffer = true;
     screen.createDoubleBuffer() catch |err| {
@@ -99,7 +101,7 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     }
 
     blk: {
-        const ahci = @import("disks/ahci.zig");
+        const ahci = root.dev.disks.ahci;
         var ports_buf: [32]?ahci.Port = undefined;
         const ports = ahci.init(allocator, &ports_buf) catch |err| {
             log.warn("Failed to init ahci: {s}", .{@errorName(err)}); // on legacy systems we don't have ahci, but that's ok (somtimes)
@@ -163,7 +165,7 @@ fn mainWrapper() callconv(.c) noreturn {
     main(screen) catch |err| {
         std.log.scoped(.host).err("Main failed: {s}", .{@errorName(err)});
     };
-    arch.acpi.shutdown();
+    acpi.shutdown();
     while (true) {
         asm volatile ("hlt");
     }
@@ -194,7 +196,7 @@ fn update(screen: *Screen, state: *renderer.State) anyerror!void {
         const mouse_state = power_button.getMouseState(screen);
 
         if (mouse_state.left_clicked) {
-            arch.acpi.shutdown();
+            acpi.shutdown();
             return error.ShutdownFailed;
         }
     }

@@ -1,6 +1,7 @@
-const TTY = @import("../fs/TTY.zig");
-const Process = @import("../Process.zig");
-const File = @import("../fs/File.zig");
+const TTY = @import("TTY.zig");
+const root = @import("root");
+const Process = root.proc.Process;
+const File = root.fs.File;
 
 var tty: TTY = .{};
 

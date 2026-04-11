@@ -1,0 +1,528 @@
+const std = @import("std");
+const root = @import("root");
+const vga = @import("vga.zig");
+const io = root.io;
+const arch = root.arch;
+const Screen = @import("Screen.zig");
+const Color = @import("Color.zig");
+const font = @import("fonts/Basic.zig");
+const SerialWriter = root.dev.serial.SerialWriter;
+
+const charmap = @import("fonts/charmap.zig");
+
+const host = @import("std").log.scoped(.host);
+
+var terminal_row: u16 = 0;
+var terminal_column: u16 = 0;
+
+var terminal_foreground: Color = Color.white();
+var terminal_background: Color = Color.black();
+
+var screen: *Screen = undefined;
+var initialized: bool = false;
+
+var echo_to_host: bool = false;
+var no_swap: bool = false;
+
+var log_debug: bool = false; // set true if we want to print debug messages to CON
+
+const pixels_per_scanline = 32;
+
+var dirty_min_x: u16 = 0;
+var dirty_min_y: u16 = 0;
+var dirty_max_x: u16 = 0;
+var dirty_max_y: u16 = 0;
+var dirty_valid: bool = false;
+
+var serial_writer: ?SerialWriter = null;
+pub var serial: ?*std.Io.Writer = null;
+
+pub fn init(_screen: *Screen) void {
+    std.log.debug("Initializing console", .{});
+    screen = _screen;
+    initialized = true;
+}
+
+pub fn isInitialized() bool {
+    return initialized;
+}
+
+pub fn initSerial(s: SerialWriter) void {
+    serial_writer = s;
+    serial = &serial_writer.?.writer;
+}
+
+pub fn echoToHost(enabled: bool) void {
+    echo_to_host = enabled;
+}
+
+pub fn getBackground() Color {
+    return terminal_background;
+}
+
+pub fn getForeground() Color {
+    return terminal_foreground;
+}
+
+pub fn clear() void {
+    screen.clear(terminal_background);
+    terminal_row = 0;
+    terminal_column = 0;
+    drawCursor();
+    screen.swapBuffers();
+}
+
+pub fn drawChar(char_index: u8, x: u16, y: u16) void {
+    const width = font.width;
+    const height = font.height;
+    if (width > 16) {
+        @panic("Fonts wider than 16 pixels are illegal as of now! ");
+    }
+    const char_start: usize = char_index * @as(usize, height);
+
+    const base_x: u16 = x * width;
+    const base_y: u16 = y * height;
+    const x0 = base_x;
+    const y0 = base_y;
+    const x1 = base_x + width;
+    const y1 = base_y + height;
+
+    if (!dirty_valid) {
+        dirty_min_x = x0;
+        dirty_min_y = y0;
+        dirty_max_x = x1;
+        dirty_max_y = y1;
+        dirty_valid = true;
+    } else {
+        dirty_min_x = @min(dirty_min_x, x0);
+        dirty_min_y = @min(dirty_min_y, y0);
+        dirty_max_x = @max(dirty_max_x, x1);
+        dirty_max_y = @max(dirty_max_y, y1);
+    }
+    var col: u4 = 0;
+    var row: u8 = 0;
+
+    var buf = screen.getBuffer();
+    const stride = screen.stride;
+    while (row < height) : ({
+        row += 1;
+        col = 0;
+    }) {
+        const row_bits = font.font_data[char_start + row];
+        while (col < width) : (col += 1) {
+            const x_pos: u16 = base_x + col;
+            const y_pos: u16 = base_y + row;
+            const index = y_pos * stride + x_pos;
+            const value = row_bits & @as(u16, 1) << (width - col);
+            const color = if (value == 0) terminal_background else terminal_foreground;
+            buf[index] = color.get();
+        }
+    }
+}
+
+pub fn getTextWidth() u32 {
+    return @divFloor(screen.width, font.width);
+}
+
+pub fn getTextHeight() u32 {
+    return @divFloor(screen.height, font.height);
+}
+
+fn dbgc(c: u8) void {
+    if (serial) |s| {
+        s.writeByte(c) catch {};
+    }
+    io.out(0xe9, c);
+}
+
+pub fn putchar(c: u8) void {
+    if (c == '\r') return; // ignore carriage returns
+    if (!initialized) {
+        dbgc(c);
+        return;
+    }
+    if (echo_to_host) {
+        dbgc(c);
+    }
+    defer drawCursor();
+    if (c == '\n') {
+        drawChar(' ', terminal_column, terminal_row); // remove the cursor
+        terminal_column = 0;
+        if (terminal_row < getTextHeight() - 1) {
+            terminal_row += 1;
+        }
+    } else {
+        drawChar(c, terminal_column, terminal_row);
+        terminal_column += 1;
+        if (terminal_column == getTextWidth()) {
+            terminal_column = 0;
+            if (terminal_row < getTextHeight() - 1) {
+                terminal_row += 1;
+            }
+        }
+    }
+
+    if (terminal_row >= getTextHeight() - 1) {
+        scroll();
+        terminal_row -= 1;
+    }
+}
+
+pub fn backspace() void {
+    if (!initialized) {
+        dbgc('\x7f');
+        return;
+    }
+    if (terminal_column == 0) {
+        return;
+    }
+    drawChar(' ', terminal_column, terminal_row);
+    terminal_column -= 1;
+    drawChar(' ', terminal_column, terminal_row);
+    drawCursor();
+
+    complete();
+}
+
+// should be an underline
+pub fn drawCursor() void {
+    drawChar('_', terminal_column, terminal_row);
+}
+
+pub fn complete() void {
+    if (initialized) swapBuffers();
+}
+
+pub fn write(data: []const u8) void {
+    const flags = io.disableInterrupts();
+    defer io.restoreFlags(flags);
+
+    noSwap();
+    var i: usize = 0;
+    var buf: [4]u8 = undefined;
+    var ib: usize = 0;
+    while (i < data.len) {
+        const c = data[i];
+        if (!initialized) {
+            dbgc(c);
+            i += 1;
+            continue;
+        }
+
+        if (c == '\x1b' and i + 1 < data.len and data[i + 1] == '[') {
+            // We have an escape sequence starting: \x1b[
+            i += 2;
+            var num: u8 = 0;
+            while (true) {
+                while (i < data.len and data[i] >= '0' and data[i] <= '9') {
+                    num = num * 10 + (data[i] - '0');
+                    i += 1;
+                }
+                buf[ib] = num;
+                ib += 1;
+                num = 0;
+                if (i < data.len and data[i] == ';') {
+                    if (ib == buf.len) {
+                        @panic("Too many arguments in escape sequence");
+                    }
+                    i += 1;
+                    continue;
+                }
+                break;
+            }
+
+            // Check for 'm' terminator (SGR sequence)
+            if (i < data.len and data[i] == 'm') {
+                for (buf[0..ib]) |code| {
+                    if (echo_to_host) {
+                        dbgPrint("\x1b[{d}m", .{code});
+                    }
+                    setAnsiColor(code);
+                }
+            }
+            ib = 0;
+            i += 1;
+            continue;
+        }
+
+        putchar(c);
+        i += 1;
+    }
+
+    swap();
+}
+
+pub fn dbg(data: []const u8) void {
+    for (data) |c| {
+        io.outb(0xe9, c);
+    }
+
+    if (serial) |s| {
+        s.writeAll(data) catch {};
+    }
+}
+
+pub fn print(comptime fmt: []const u8, args: anytype) void {
+    const flags = io.disableInterrupts();
+    defer io.restoreFlags(flags);
+
+    writer().print(fmt, args) catch {};
+}
+
+// print to both the terminal and the dbg port
+pub fn printB(comptime fmt: []const u8, args: anytype) void {
+    const flags = io.disableInterrupts();
+    defer io.restoreFlags(flags);
+    if (serial) |s| {
+        s.print(fmt, args) catch {};
+    }
+    if (isInitialized()) {
+        writer().print(fmt, args) catch {};
+    }
+}
+
+pub fn dbgPrint(comptime fmt: []const u8, args: anytype) void {
+    dbgWriter().print(fmt, args) catch {};
+}
+
+pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
+    // white on red
+    if (serial) |s| {
+        s.writeAll("\x1b[97;41m") catch {};
+        s.print("!!! KERNEL PANIC !!!\n{s}\n", .{msg}) catch {};
+
+        s.print("return address: {?x}\n", .{ret_addr}) catch {};
+    }
+
+    dbg("\x1b[97;41m");
+    dbgPrint("!!! KERNEL PANIC !!!\n{s}\n", .{msg});
+
+    dbgPrint("return address: {?x}\n", .{ret_addr});
+    io.hltNoInt();
+}
+
+pub fn writeFn(comptime func: fn ([]const u8) void) fn (
+    w: *std.Io.Writer,
+    data: []const []const u8,
+    splat: usize,
+) std.Io.Writer.Error!usize {
+    const Inner = struct {
+        fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
+            _ = w;
+
+            if (splat > data.len) {
+                @panic("writer splat > data.len");
+            }
+
+            var total: usize = 0;
+            const non_splat_len = data.len - splat;
+
+            for (data[0..non_splat_len]) |chunk| {
+                func(chunk);
+                total += chunk.len;
+            }
+
+            if (splat > 0) {
+                if (data.len == 0) @panic("writer splat with empty data");
+                const repeated = data[data.len - 1];
+                var i: usize = 0;
+                while (i < splat) : (i += 1) {
+                    func(repeated);
+                    total += repeated.len;
+                }
+            }
+
+            return total;
+        }
+    };
+    return Inner.drain;
+}
+
+pub fn getVTable(comptime func: fn ([]const u8) void) std.Io.Writer.VTable {
+    return .{
+        .drain = writeFn(func),
+        .sendFile = std.Io.Writer.unimplementedSendFile,
+        .flush = std.Io.Writer.defaultFlush,
+        .rebase = std.Io.Writer.defaultRebase,
+    };
+}
+
+const ConVtable = getVTable(write);
+const DbgVtable = getVTable(dbg);
+
+var con_writer = std.Io.Writer{ .buffer = &.{}, .vtable = &ConVtable };
+var dbg_writer = std.Io.Writer{ .buffer = &.{}, .vtable = &DbgVtable };
+
+pub fn writer() *std.Io.Writer {
+    return &con_writer;
+}
+
+fn dbgWriter() *std.Io.Writer {
+    return &dbg_writer;
+}
+
+pub fn setFg(fg: vga.Color) void {
+    terminal_foreground = fg.to32bitColor();
+}
+
+pub fn setBg(bg: vga.Color) void {
+    terminal_background = bg.to32bitColor();
+}
+
+pub fn setFgBg(fg: vga.Color, bg: vga.Color) void {
+    terminal_foreground = fg.to32bitColor();
+    terminal_background = bg.to32bitColor();
+}
+
+fn setAnsiColor(code: u8) void {
+    switch (code) {
+        // Reset
+        0 => setFgBg(.light_grey, .black),
+
+        // Foreground colors 30–37
+        30 => setFg(.black),
+        31 => setFg(.red),
+        32 => setFg(.green),
+        33 => setFg(.yellow),
+        34 => setFg(.blue),
+        35 => setFg(.magenta),
+        36 => setFg(.cyan),
+        37 => setFg(.light_grey),
+
+        // Foreground bright colors 90–97
+        90 => setFg(.dark_grey),
+        91 => setFg(.light_red),
+        92 => setFg(.light_green),
+        93 => setFg(.light_yellow),
+        94 => setFg(.light_blue),
+        95 => setFg(.light_magenta),
+        96 => setFg(.light_cyan),
+        97 => setFg(.white),
+
+        // Background colors 40–47
+        40 => setBg(.black),
+        41 => setBg(.red),
+        42 => setBg(.green),
+        43 => setBg(.yellow),
+        44 => setBg(.blue),
+        45 => setBg(.magenta),
+        46 => setBg(.cyan),
+        47 => setBg(.light_grey),
+
+        // Background bright colors 100–107
+        100 => setBg(.dark_grey),
+        101 => setBg(.light_red),
+        102 => setBg(.light_green),
+        103 => setBg(.light_yellow),
+        104 => setBg(.light_blue),
+        105 => setBg(.light_magenta),
+        106 => setBg(.light_cyan),
+        107 => setBg(.white),
+
+        else => {},
+    }
+}
+
+// Helper to get current fg/bg from terminal_color
+fn terminal_fg() vga.Color {
+    return .white;
+}
+fn terminal_bg() vga.Color {
+    return .black;
+}
+
+fn scroll() void {
+    const stride = screen.stride; // pixels per row
+    const char_height = font.height;
+    const pixels_to_scroll = char_height * stride; // one text row in pixels
+    const total = stride * screen.height;
+
+    // shift entire framebuffer up by one character row
+    const buf = screen.getBuffer();
+    std.mem.copyForwards(u32, buf[0 .. total - pixels_to_scroll], buf[pixels_to_scroll..total]);
+
+    // clear the last character row
+    const last_row_start = total - pixels_to_scroll;
+    @memset(buf[last_row_start..total], terminal_background.get());
+
+    dirty_min_x = 0;
+    dirty_min_y = 0;
+    dirty_max_x = @intCast(screen.width);
+    dirty_max_y = @intCast(screen.height);
+    swapBuffers();
+}
+
+pub fn logFn(
+    comptime level: std.log.Level,
+    comptime scope: @TypeOf(.EnumLiteral),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    const flags = io.disableInterrupts();
+    defer io.restoreFlags(flags);
+
+    const color = comptime switch (level) {
+        .debug => "\x1b[32m",
+        .info => "\x1b[36m",
+        .warn => "\x1b[33m",
+        .err => "\x1b[31m",
+    };
+
+    const reset = "\x1b[0m";
+    const scope_start_unscore = comptime std.mem.startsWith(u8, @tagName(scope), "_");
+    const w = if (scope == .host or level == .debug or scope_start_unscore) serial orelse dbgWriter() else writer();
+
+    const prefix = if (scope != .host and scope != .default and scope != .none)
+        color ++ "[" ++ @tagName(scope)[if (scope_start_unscore) 1 else 0..] ++ "] " ++ comptime level.asText() ++ ": "
+    else
+        color ++ comptime level.asText() ++ ": ";
+
+    const write_to_con = log_debug and (level == .debug or scope == .host);
+
+    if (!(write_to_con and (echo_to_host or !initialized))) {
+        w.writeAll(prefix) catch unreachable;
+        w.print(format, args) catch unreachable;
+        w.writeAll(reset ++ "\r\n") catch unreachable;
+    }
+
+    if (write_to_con) {
+        con_writer.writeAll(prefix) catch unreachable;
+        con_writer.print(format, args) catch unreachable;
+        con_writer.writeAll(reset ++ "\r\n") catch unreachable;
+    }
+}
+
+pub fn noSwap() void {
+    no_swap = true;
+}
+
+pub fn swap() void {
+    no_swap = false;
+    if (dirty_valid) {
+        const width = dirty_max_x - dirty_min_x;
+        const height = dirty_max_y - dirty_min_y;
+
+        screen.swapBuffersRegion(dirty_min_x, dirty_min_y, width, height);
+
+        dirty_valid = false;
+    } else {
+        screen.swapBuffers();
+    }
+}
+
+fn swapBuffers() void {
+    if (!no_swap) {
+        if (dirty_valid) {
+            const width = dirty_max_x - dirty_min_x;
+            const height = dirty_max_y - dirty_min_y;
+
+            screen.swapBuffersRegion(dirty_min_x, dirty_min_y, width, height);
+
+            dirty_valid = false;
+        }
+    }
+}
+
+pub fn logDebug(enabled: bool) void {
+    log_debug = enabled;
+}
