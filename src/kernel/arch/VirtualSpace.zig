@@ -224,6 +224,9 @@ pub fn mapPage(self: *const Self, virt: u64, phys: u64, flags: PageFlags) void {
     }
     const pt_table = getOrCreatePageTable(pd_table, va.pd_index, flags.user);
 
+    if (pt_table[va.pt_index].present) {
+        log.warn("Overwritting page {x}, phys: {x}", .{ virt, pt_table[va.pt_index].getAddress() });
+    }
     pt_table[va.pt_index] = PageEntry.init(phys, flags);
 }
 
@@ -325,13 +328,17 @@ pub fn mapHugePage(self: *const Self, virt: u64, phys: u64, flags: PageFlags) vo
     });
 }
 
-pub fn getPhys(self: *const Self, virt: u64) ?u64 {
+pub fn getPhys(self: *const Self, virt: u64, user: bool) ?u64 {
     const va = VirtualAddress.from(virt);
     const pdpt_table = getOrCreatePageTable(self.pml4, va.pml4_index, false);
     const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index, false);
     const pt_table = getOrCreatePageTable(pd_table, va.pd_index, false);
     const entry = pt_table[va.pt_index];
     if (!entry.present) return null;
+    if (!entry.user and user) {
+        log.warn("User process try to get privilege page at {x}", .{virt});
+        return null;
+    }
     return entry.getAddress();
 }
 

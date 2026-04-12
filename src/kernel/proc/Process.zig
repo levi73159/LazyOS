@@ -9,9 +9,10 @@ const File = root.fs.File;
 
 const log = std.log.scoped(.process);
 
-pub const USER_STACK_TOP = 0x00007FFFFFFFE000;
+pub const USER_STACK_TOP = 0x0000_7FFF_FFFF_E000;
 pub const USER_STACK_SIZE = 1024 * 1024; // 1MB
 pub const USER_STACK_USABLE = USER_STACK_TOP - 0x1000; // rsp starts here
+pub const USER_MEM_MAP_BASE = 0x0000_7000_0000_0000; // MMAP base grows down
 
 const Self = @This();
 
@@ -80,6 +81,8 @@ fd_table: FdTable = .empty(),
 
 brk_base: usize,
 brk_current: usize,
+
+mmap_current: u64 = USER_MEM_MAP_BASE,
 
 regions: std.ArrayList(MemoryRegion),
 
@@ -184,7 +187,7 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
 
     for (0..pages) |i| {
         const virt = virt_start + (i * paging.PAGE_SIZE);
-        const phys = self.vmem.getPhys(virt) orelse {
+        const phys = self.vmem.getPhys(virt, true) orelse {
             @branchHint(.cold);
             log.warn("Failed to get physical address for {x}", .{virt});
             continue;

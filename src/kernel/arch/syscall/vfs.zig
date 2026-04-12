@@ -13,6 +13,7 @@ pub fn read(frame: *SyscallFrame) i64 {
     const ptr: [*]u8 = @ptrFromInt(frame.rsi);
 
     const process = scheduler.getCurrentProcess() orelse {
+        @branchHint(.cold);
         log.err("No current process", .{});
         return errno.EAGAIN;
     };
@@ -39,6 +40,7 @@ pub fn preadv(frame: *SyscallFrame) i64 {
     const count = frame.rdx;
 
     const process = scheduler.getCurrentProcess() orelse {
+        @branchHint(.cold);
         log.err("No current process", .{});
         return errno.EAGAIN;
     };
@@ -72,6 +74,7 @@ pub fn ioctl(frame: *SyscallFrame) i64 {
     const arg = frame.rdx;
 
     const process = scheduler.getCurrentProcess() orelse {
+        @branchHint(.cold);
         log.err("No current process", .{});
         return errno.EAGAIN;
     };
@@ -97,6 +100,7 @@ pub fn write(frame: *SyscallFrame) i64 {
 
     const string = buf[0..count];
     const process = scheduler.getCurrentProcess() orelse {
+        @branchHint(.cold);
         log.err("No current process", .{});
         return errno.EAGAIN;
     };
@@ -126,6 +130,7 @@ pub fn writev(frame: *SyscallFrame) i64 {
     const count = frame.rdx;
 
     const process = scheduler.getCurrentProcess() orelse {
+        @branchHint(.cold);
         log.err("No current process", .{});
         return errno.EAGAIN;
     };
@@ -195,6 +200,7 @@ pub fn open(frame: *SyscallFrame) i64 {
     }
 
     const process = scheduler.getCurrentProcess() orelse {
+        @branchHint(.cold);
         log.err("No current process", .{});
         return errno.EAGAIN;
     };
@@ -204,4 +210,21 @@ pub fn open(frame: *SyscallFrame) i64 {
     } else {
         return errno.EMFILE;
     }
+}
+
+pub fn close(frame: *SyscallFrame) i64 {
+    const fd = frame.rdi;
+    const process = scheduler.getCurrentProcess() orelse {
+        @branchHint(.cold);
+        log.err("No current process", .{});
+        return errno.EAGAIN;
+    };
+
+    if (process.getFile(@intCast(fd))) |file| {
+        file.close();
+        process.fd_table.freeHandle(@intCast(fd));
+        return 0;
+    }
+
+    return errno.EBADF;
 }

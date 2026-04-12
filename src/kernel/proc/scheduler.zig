@@ -97,7 +97,7 @@ pub fn schedule(frame: *arch.registers.InterruptFrame) void {
         checkWaitingTasks(task);
         if (task.state == .dead) {
             task_has_died = true;
-            log.warn("Task {d} is dead", .{task.id});
+            log.info("Task {d} is dead", .{task.id});
         } else if (task.state == .wait_input or task.state == .waiting) {
             // blocked task — only save registers, don't touch state
             task.registers = frame.*;
@@ -179,7 +179,6 @@ fn removeDeadTasks() void {
 fn taskReturn() noreturn {
     asm volatile ("andq $-16, %%rsp");
     io.cli();
-    log.warn("Task Exit", .{});
     current.?.state = .{ .dead = 0 };
     log.warn("Task {d} exited", .{current.?.id});
     io.sti();

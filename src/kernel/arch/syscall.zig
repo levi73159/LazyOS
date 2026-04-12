@@ -46,6 +46,9 @@ export fn syscallHandler(frame: *SyscallFrame) callconv(.c) void {
         0 => sysvfs.read(frame),
         1 => sysvfs.write(frame),
         2 => sysvfs.open(frame),
+        3 => sysvfs.close(frame),
+        9 => sysmem.mmap(frame),
+        11 => sysmem.munmap(frame),
         12 => sysmem.brk(frame),
         13 => rt_sigaction(frame),
         16 => sysvfs.ioctl(frame),
@@ -65,8 +68,8 @@ export fn syscallHandler(frame: *SyscallFrame) callconv(.c) void {
         257 => sysvfs.openat(frame), // openat — needs real impl for stack traces
         else => errno.ENOSYS,
     };
+    log.debug("syscall {d} -> {x}, user_rip={x}", .{ num, val, frame.user_rip });
     frame.rax = @bitCast(val);
-    log.debug("syscall {d} -> {x}, user_rip={x}", .{ num, frame.rax, frame.user_rip });
 }
 
 fn sys_getpid(_: *SyscallFrame) i64 {
