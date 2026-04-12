@@ -156,7 +156,10 @@ pub fn createUserVmem() VirtualSpace {
         vmem.pml4[i] = kernel_vmem.pml4[i];
     }
 
-    vmem.regions.appendSlice(heap.allocator(), kernel_vmem.regions.items) catch {};
+    var it = kernel_vmem.regions.iterator();
+    while (it.next()) |region| {
+        vmem.regions.put(heap.allocator(), region.key_ptr.*, region.value_ptr.*) catch unreachable;
+    }
 
     return vmem;
 }

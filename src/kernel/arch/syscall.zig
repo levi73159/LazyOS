@@ -8,6 +8,7 @@ const File = root.fs.File;
 const errno = @import("syscall/errno.zig");
 
 const sysvfs = @import("syscall/vfs.zig");
+const sysmem = @import("syscall/memory.zig");
 
 const log = std.log.scoped(._syscall);
 
@@ -44,6 +45,8 @@ export fn syscallHandler(frame: *SyscallFrame) callconv(.c) void {
     const val = switch (num) {
         0 => sysvfs.read(frame),
         1 => sysvfs.write(frame),
+        2 => sysvfs.open(frame),
+        12 => sysmem.brk(frame),
         13 => rt_sigaction(frame),
         16 => sysvfs.ioctl(frame),
         20 => sysvfs.writev(frame),

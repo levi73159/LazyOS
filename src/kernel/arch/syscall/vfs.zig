@@ -23,6 +23,9 @@ pub fn read(frame: *SyscallFrame) i64 {
     };
 
     const n = file.read(ptr[0..count]) catch |err| {
+        if (err == error.PermissionDenied) {
+            return errno.EACCES;
+        }
         log.err("Error reading file: {s}", .{@errorName(err)});
         return errno.EIO;
     };
@@ -46,6 +49,9 @@ pub fn preadv(frame: *SyscallFrame) i64 {
     };
 
     const total = file.readv(iov[0..count]) catch |err| {
+        if (err == error.PermissionDenied) {
+            return errno.EACCES;
+        }
         log.err("Failed to read from file {d}: {s}", .{ fd, @errorName(err) });
         return errno.EIO;
     };
@@ -104,6 +110,9 @@ pub fn write(frame: *SyscallFrame) i64 {
     };
 
     const written = file.write(string) catch |err| {
+        if (err == error.PermissionDenied) {
+            return errno.EACCES;
+        }
         log.err("Failed to write to file {d}: {s}", .{ fd, @errorName(err) });
         return errno.EIO;
     };
@@ -130,9 +139,69 @@ pub fn writev(frame: *SyscallFrame) i64 {
     };
 
     const n = file.writev(iov[0..count]) catch |err| {
+        if (err == error.PermissionDenied) {
+            return errno.EACCES;
+        }
         log.err("Failed to write to file {d}: {s}", .{ fd, @errorName(err) });
         return errno.EIO;
     };
 
     return @intCast(n);
+}
+
+pub const O_RDONLY = 0;
+pub const O_WRONLY = 1;
+pub const O_RDWR = 2;
+pub const O_ACCMODE = 3;
+
+pub fn open(frame: *SyscallFrame) i64 {
+    const path_ptr: [*:0]const u8 = @ptrFromInt(frame.rdi);
+    const path = std.mem.span(path_ptr);
+
+    const flags: std.os.linux.O = @bitCast(@as(u32, @intCast(frame.rsi)));
+    var file = root.fs.FileSystem.getGlobal().open(path) catch |err| {
+        if (err == error.FileNotFound) {
+            return errno.ENOENT;
+        }
+        log.err("Failed to open file {s}: {s}", .{ path, @errorName(err) });
+        return errno.EIO;
+    };
+
+    switch (flags.ACCMODE) {
+        .RDONLY => {
+            file.handle.flags = .{
+                .readable = true,
+                .writable = false,
+                .executable = false,
+                .seekable = true,
+            };
+        },
+        .WRONLY => {
+            file.handle.flags = .{
+                .readable = false,
+                .writable = true,
+                .executable = false,
+                .seekable = true,
+            };
+        },
+        .RDWR => {
+            file.handle.flags = .{
+                .readable = true,
+                .writable = true,
+                .executable = false,
+                .seekable = true,
+            };
+        },
+    }
+
+    const process = scheduler.getCurrentProcess() orelse {
+        log.err("No current process", .{});
+        return errno.EAGAIN;
+    };
+
+    if (process.fd_table.allocAndSet(file)) |fd| {
+        return fd;
+    } else {
+        return errno.EMFILE;
+    }
 }

@@ -11,6 +11,7 @@ int main() {
 
     FILE *f = fopen("/boot/test/test.msg", "r");
     if (f) {
+        printf("opened test.msg\n");
         char buf[256];
         while (fgets(buf, sizeof(buf), f)) {
             printf("%s", buf);

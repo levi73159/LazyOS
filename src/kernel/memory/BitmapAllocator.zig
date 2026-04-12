@@ -12,7 +12,9 @@ pub const PhysRange = struct {
     start: u64,
     length: u64,
 
-    pub fn init(start: u64, length: u64) PhysRange {
+    pub fn init(start: u64, _end: u64) PhysRange {
+        std.debug.assert(start <= _end);
+        const length = _end - start;
         return PhysRange{
             .start = std.mem.alignForward(usize, start, PAGE_SIZE),
             .length = std.mem.alignForward(usize, length, PAGE_SIZE),

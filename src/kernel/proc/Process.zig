@@ -78,6 +78,9 @@ stack_top: u64,
 vmem: VirtualSpace,
 fd_table: FdTable = .empty(),
 
+brk_base: usize,
+brk_current: usize,
+
 regions: std.ArrayList(MemoryRegion),
 
 pub fn getFile(self: *Self, fd: u8) ?*File {
@@ -105,6 +108,8 @@ pub fn loadElf(data: []const u8, allocator: std.mem.Allocator) !Self {
     var phdr_vaddr: u64 = 0;
     var first_load_mapped_addr: usize = 0;
 
+    var end_addr: u64 = 0;
+
     var ph_iter = header.iterateProgramHeadersBuffer(data);
     while (try ph_iter.next()) |ph| {
         switch (ph.p_type) {
@@ -115,6 +120,7 @@ pub fn loadElf(data: []const u8, allocator: std.mem.Allocator) !Self {
                     first_load_seen = true;
                     first_load_mapped_addr = mapped_virt;
                 }
+                end_addr = @max(end_addr, ph.p_vaddr + ph.p_memsz, paging.PAGE_SIZE);
                 try ptLoad(allocator, ph, data, &regions, &vmem);
             },
             else => {},
@@ -148,19 +154,43 @@ pub fn loadElf(data: []const u8, allocator: std.mem.Allocator) !Self {
         .interp_base = 0,
     });
 
+    // we need to align the end address to a page boundary
+    // then we add one page since we will use the first page as a guard page
+    const aligned_end_addr = std.mem.alignForward(u64, end_addr, paging.PAGE_SIZE) + paging.PAGE_SIZE;
+
+    vmem.addGuardPage(allocator, "brk end", aligned_end_addr - paging.PAGE_SIZE);
+
     return Self{
         .entry = header.entry,
         .stack_top = user_sp,
         .regions = regions,
         .vmem = vmem,
+        .brk_base = aligned_end_addr,
+        .brk_current = aligned_end_addr,
     };
 }
 
 pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
     for (self.regions.items) |region| {
+        // should we use user pmem instead?
         pmem.kernel().freePages(region.phys, region.page_count);
     }
     self.regions.deinit(allocator);
+
+    const brksize = self.brk_current - self.brk_base;
+    const pages = brksize / paging.PAGE_SIZE;
+
+    const virt_start = self.brk_base;
+
+    for (0..pages) |i| {
+        const virt = virt_start + (i * paging.PAGE_SIZE);
+        const phys = self.vmem.getPhys(virt) orelse {
+            @branchHint(.cold);
+            log.warn("Failed to get physical address for {x}", .{virt});
+            continue;
+        };
+        pmem.user().freePage(phys);
+    }
 
     self.vmem.safeDeinit();
 }

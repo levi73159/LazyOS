@@ -3,7 +3,7 @@ const bootinfo = @import("bootinfo.zig");
 const pmem = @import("../memory/pmem.zig");
 const paging = @import("paging.zig");
 
-const log = std.log.scoped(.vmem);
+const log = std.log.scoped(._vmem);
 
 const Self = @This();
 
@@ -37,6 +37,8 @@ pub const PageFlags = struct {
 
     pub const user_rw = PageFlags{ .present = true, .writeable = true, .user = true };
     pub const user_ro = PageFlags{ .present = true, .writeable = false, .user = true };
+
+    pub const none = PageFlags{};
 };
 
 const PageEntry = packed struct(u64) {
@@ -95,7 +97,7 @@ pub const Region = struct {
 
 pml4: *PageTable,
 guard_pages: std.ArrayList(GuardPage) = .empty,
-regions: std.ArrayList(Region) = .empty,
+regions: std.StringArrayHashMapUnmanaged(Region) = .empty,
 
 pub fn init() Self {
     const pml4 = createPageTable();
@@ -188,6 +190,24 @@ fn getOrCreatePageTable(table: *PageTable, index: u9, user: bool) *PageTable {
     }
 }
 
+fn getPageTable(table: *PageTable, index: u9, user: bool) ?*PageTable {
+    const entry = &table[index];
+    if (entry.guard) {
+        log.err("Overlapping guard page, return address: 0x{x}", .{@returnAddress()});
+    }
+    if (entry.present) {
+        if (user and !entry.user) {
+            entry.user = true;
+        }
+        if (user and entry.page_size) {
+            log.warn("HUGE PAGE CONFLICT WITH SMALL PAGE at {x}", .{entry.getAddress()});
+        }
+        return @ptrFromInt(bootinfo.toVirtualHHDM(entry.getAddress()));
+    } else {
+        return null;
+    }
+}
+
 // NOTE: virt and phys must be page aligned
 pub fn mapPage(self: *const Self, virt: u64, phys: u64, flags: PageFlags) void {
     const va = VirtualAddress.from(virt);
@@ -207,16 +227,36 @@ pub fn mapPage(self: *const Self, virt: u64, phys: u64, flags: PageFlags) void {
     pt_table[va.pt_index] = PageEntry.init(phys, flags);
 }
 
+pub fn unmapPage(self: *const Self, virt: u64) void {
+    const va = VirtualAddress.from(virt);
+
+    std.debug.assert(virt & 0xFFF == 0);
+
+    const pdpt_table = getPageTable(self.pml4, va.pml4_index, false) orelse return;
+    const pd_table = getPageTable(pdpt_table, va.pdpt_index, false) orelse return;
+    const pt_table = getPageTable(pd_table, va.pd_index, false) orelse return;
+    if (pd_table[va.pd_index].page_size) {
+        log.err("Try to map huge page to small page at {d}", .{va.pd_index});
+        log.err("virt: {x}", .{virt});
+        @panic("Try to map huge page to small page");
+    }
+    pt_table[va.pt_index] = PageEntry.init(0, .none);
+}
+
 /// NOTE: virt and phys must be page aligned
 pub fn mapRange(self: *const Self, virt: u64, phys: u64, size: u64, flags: PageFlags) void {
     var offset: u64 = 0;
     const size_aligned = std.mem.alignForward(u64, size, PAGE_SIZE);
-    if (phys > 0x8348_e589_0000) {
-        log.debug("suspicious phys: {x}, return_address: {x}", .{ phys, @returnAddress() });
-        @breakpoint();
-    }
     while (offset < size_aligned) : (offset += PAGE_SIZE) {
         self.mapPage(virt + offset, phys + offset, flags);
+    }
+}
+
+pub fn unmapRange(self: *const Self, virt: u64, size: u64) void {
+    var offset: u64 = 0;
+    const size_aligned = std.mem.alignForward(u64, size, PAGE_SIZE);
+    while (offset < size_aligned) : (offset += PAGE_SIZE) {
+        self.unmapPage(virt + offset);
     }
 }
 
@@ -285,6 +325,16 @@ pub fn mapHugePage(self: *const Self, virt: u64, phys: u64, flags: PageFlags) vo
     });
 }
 
+pub fn getPhys(self: *const Self, virt: u64) ?u64 {
+    const va = VirtualAddress.from(virt);
+    const pdpt_table = getOrCreatePageTable(self.pml4, va.pml4_index, false);
+    const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index, false);
+    const pt_table = getOrCreatePageTable(pd_table, va.pd_index, false);
+    const entry = pt_table[va.pt_index];
+    if (!entry.present) return null;
+    return entry.getAddress();
+}
+
 pub fn switchTo(self: *const Self) void {
     const phys = bootinfo.toPhysical(@intFromPtr(self.pml4));
     asm volatile (
@@ -303,7 +353,7 @@ pub fn addRegion(
 ) void {
     const end = start + size;
 
-    self.regions.append(allocator, .{
+    self.regions.put(allocator, name, .{
         .name = name,
         .start = start,
         .end = end,
@@ -322,7 +372,7 @@ pub fn addRegion2(
     start: u64,
     end: u64,
 ) void {
-    self.regions.append(allocator, .{
+    self.regions.put(allocator, name, .{
         .name = name,
         .start = start,
         .end = end,
@@ -343,7 +393,7 @@ pub fn getGuardPage(self: *const Self, vaddr: usize) ?GuardPage {
 }
 
 pub fn findRegion(self: *const Self, addr: u64) ?Region {
-    for (self.regions.items) |region| {
+    for (self.regions.values()) |region| {
         if (addr >= region.start and addr < region.end) {
             return region;
         }

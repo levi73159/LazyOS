@@ -89,6 +89,7 @@ const offset_type = u16;
 
 const MIN_SPLIT = HEADER_SIZE + OFFSET_SIZE + 1;
 
+name: ?[]const u8 = null, // name of this heap (used for debugging)
 start: ?*Header = null,
 end: ?*Header = null,
 last_free: ?*Header = null,
@@ -109,6 +110,7 @@ pub fn init(pmem: *BitmapAllocator) Self {
 // NOTE: only to be called by heap.zig when fully init heap and vmem
 pub fn updateRegions(self: *Self, alloc: std.mem.Allocator, comptime name: []const u8) void {
     paging.getKernelVmem().addRegion(alloc, name ++ " heap start", @intFromPtr(self.start.?), self.start.?.trueSize());
+    self.name = name;
 }
 
 pub fn deinit(self: *Self) void {
@@ -162,7 +164,6 @@ fn growHeap(self: *Self, pages: usize) !*Header {
     self.pages_in_heap += @intCast(pages);
     if (extra != null) self.pages_in_heap += EXTRA_GROWTH;
 
-    paging.getKernelVmem().addRegion(self.allocator(), "kernel heap", @intFromPtr(header), header.trueSize());
     return header;
 }
 
@@ -320,7 +321,7 @@ pub fn allocate(self: *Self, size: usize, _alignment: mem.Alignment) ![*]u8 {
         // block_padding is u8 — if the excess exceeds 255 we cannot store it there, so leave
         // the block slightly oversized rather than wrapping and corrupting the free-list geometry.
         const excess = block.getSize() - size;
-        if (excess <= std.math.maxInt(u8)) {
+        if (excess <= std.math.maxInt(u16)) {
             block.block_padding += @intCast(excess);
             block.setSize(size);
         }

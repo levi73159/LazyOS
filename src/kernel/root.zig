@@ -23,6 +23,7 @@ pub const console = graphics.console;
 pub const io = arch.io;
 pub const pmem = memory.pmem;
 pub const heap = memory.heap;
+pub const PAGE_SIZE = arch.paging.PAGE_SIZE;
 
 // boot constants used via @import("root")
 pub const KERNEL_STACK_SIZE = boot.KERNEL_STACK_SIZE;
