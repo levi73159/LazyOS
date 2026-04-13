@@ -1,32 +1,47 @@
 #!/bin/bash
 
-IMG_PATH=$1
-EFI_PATH=$2
-IMG_ROOT=$3
+set -e
 
-dd if=/dev/zero of=$IMG_PATH bs=1M count=10
-gdisk $IMG_PATH < scripts/gdisk.script
+IMG="$1"
+IMG_SIZE="$2" # in MB
+ROOT_FOLDER="$3" # files that will be in root partition
+KERNEL="$4"
 
-offset=$(fdisk -l $IMG_PATH | awk '/disk.img1/ {print $2 * 512}')
-echo "offset: $offset"
+dd if=/dev/zero of="$IMG" bs=1M count="$IMG_SIZE" && sync
 
-# NOTE: is it possible to do this without sudo?
-# mformat -i $IMG_PATH@@$offset ::
-#
-# mmd -i $IMG_PATH@@$offset ::EFI
-# mmd -i $IMG_PATH@@$offset ::EFI/BOOT
-#
-# mcopy -i $IMG_PATH@@$offset $EFI_PATH ::EFI/BOOT/BOOTX64.EFI
-#
-# mcopy -i $IMG_PATH@@$offset $IMG_ROOT/* ::
+parted -s $IMG mklabel gpt
+parted -s $IMG mkpart BIOS "" 1MiB 2MiB      # partition 1 — BIOS boot
+parted -s $IMG set 1 bios_grub on
+parted -s $IMG mkpart ESP fat32 2MiB 32MiB   # partition 2 — EFI/boot
+parted -s $IMG set 2 esp on
+parted -s $IMG mkpart ROOT ext2 32MiB 100%   # partition 3 — root
 
-# sudo losetup -o $offset /dev/loop0 $IMG_PATH
-# sudo mkfs.fat -F32 /dev/loop0
-# sudo losetup -d /dev/loop0
-#
-# mkdir img
-# sudo mount -o loop,offset=$offset $IMG_PATH img
-# sudo mkdir -p img/EFI/BOOT
-# sudo cp $EFI_PATH img/EFI/BOOT/BOOTX64.EFI
-# sudo umount img
-# sudo rm -rf img
+# attach to loop device so we can copy files
+LOOP=$(sudo losetup -fP --show "$IMG")
+
+sudo mkfs.fat -F 16 ${LOOP}p2
+sudo mkfs.ext2 ${LOOP}p3
+
+# 'boot' partition
+sudo mkdir -p /mnt/lazyos_boot
+sudo mount ${LOOP}p2 /mnt/lazyos_boot
+sudo mkdir -p /mnt/lazyos_boot/EFI/BOOT
+sudo cp src/bootloader/limine.conf /mnt/lazyos_boot/
+sudo cp $KERNEL /mnt/lazyos_boot/
+sudo cp limine/BOOTX64.EFI /mnt/lazyos_boot/EFI/BOOT
+sudo umount /mnt/lazyos_boot
+sudo rmdir /mnt/lazyos_boot
+
+# 'root' partition
+sudo mkdir -p /mnt/lazyos_root
+sudo mount ${LOOP}p3 /mnt/lazyos_root
+
+sudo cp -r $ROOT_FOLDER/* /mnt/lazyos_root
+
+sudo umount /mnt/lazyos_root
+sudo rmdir /mnt/lazyos_root
+sudo losetup -d $LOOP
+
+sudo ./limine/limine bios-install $IMG
+
+echo "Done: $IMG"

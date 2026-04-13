@@ -85,6 +85,27 @@ export fn boot_init() callconv(.naked) noreturn {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export fn boot_init_stage2() callconv(.c) noreturn {
+    // raw serial write — no dependencies at all
+    const port: u16 = 0x3F8;
+    for ("boot_init_stage2\r\n") |c| {
+        asm volatile ("outb %[c], %[p]"
+            :
+            : [c] "{al}" (c),
+              [p] "N{dx}" (port),
+        );
+    }
+
+    // now check framebuffer response before unwrapping
+    if (framebuffer_request.response == null) {
+        for ("no framebuffer response!\r\n") |c| {
+            asm volatile ("outb %[c], %[p]"
+                :
+                : [c] "{al}" (c),
+                  [p] "N{dx}" (port),
+            );
+        }
+        while (true) asm volatile ("hlt");
+    }
     const fb = framebuffer_request.response.?.framebuffers[0];
 
     const mmap = memmap_request.response.?.entries;
@@ -101,11 +122,6 @@ export fn boot_init_stage2() callconv(.c) noreturn {
         .size = @intFromPtr(&kernel_size),
     } });
 
-    if (kernel_file_request.response) |response| {
-        const file = response.executable_file;
-        @import("debug/symbols.zig").init(file.address[0..file.size]);
-    }
-
     // Draw a red stripe directly — no abstraction, no page tables, no heap
     // If you see this, framebuffer works
     const pixels: [*]u32 = @ptrCast(@alignCast(fb.address));
@@ -114,6 +130,11 @@ export fn boot_init_stage2() callconv(.c) noreturn {
         for (0..fb.width) |x| {
             pixels[y * stride + x] = 0x00FF0000; // red
         }
+    }
+
+    if (kernel_file_request.response) |response| {
+        const file = response.executable_file;
+        @import("debug/symbols.zig").init(file.address[0..file.size]);
     }
 
     main._start(mb);
