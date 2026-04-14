@@ -1,4 +1,4 @@
-//! start out using the ATA PIO and ATAPI
+//! Disk interface
 
 const std = @import("std");
 const io = @import("root").io;

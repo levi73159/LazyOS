@@ -112,7 +112,7 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
 
     Disk.loadDisks();
 
-    const disk = Disk.get(2);
+    const disk = Disk.get(0);
 
     blk: {
         ui.init(allocator) catch |err| {
@@ -133,10 +133,10 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     }
 
     // init file system on disk
-    if (disk) |d| {
+    if (disk) |d| blk: {
         const fs = FileSystem.init(d) catch |err| {
             log.err("Failed to init file system: {s}", .{@errorName(err)});
-            io.hltNoInt();
+            break :blk;
         };
         FileSystem.setGlobal(fs);
     }

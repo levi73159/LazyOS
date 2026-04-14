@@ -3,10 +3,8 @@ const exit = std.process.exit;
 
 const image_name = "lazyos.img";
 
-var io: std.Io = undefined;
-
 const Image = struct {
-    path: []const u8,
+    path: std.Build.LazyPath,
     step: *std.Build.Step,
 };
 
@@ -87,9 +85,8 @@ pub fn build(b: *std.Build) void {
     // const run_qemu_cmd = b.addSystemCommand(&.{ "qemu-system-x86_64", "-hda", image.path, "-m", "32", "-debugcon", "stdio" });
     // run_qemu_cmd.step.dependOn(image.step);
     const run_qemu_cmd = b.addSystemCommand(&.{"qemu-system-x86_64"});
-    run_qemu_cmd.addArgs(&.{
-        "-hda", image.path,
-    });
+    run_qemu_cmd.addArg("-cdrom");
+    run_qemu_cmd.addFileArg(image.path);
     run_qemu_cmd.addArgs(&.{
         "-machine", "q35,accel=kvm",
         "-cpu",     "host",
@@ -106,7 +103,8 @@ pub fn build(b: *std.Build) void {
 
     run_qemu_cmd.step.dependOn(image.step);
 
-    const debug_cmd = b.addSystemCommand(&.{ "scripts/debug.sh", image.path });
+    const debug_cmd = b.addSystemCommand(&.{"scripts/debug.sh"});
+    debug_cmd.addFileArg(image.path);
     debug_cmd.step.dependOn(image.step);
 
     const run = b.step("run", "Run the operating system");
@@ -168,7 +166,6 @@ pub fn makePrograms(b: *std.Build) Programs {
 
 pub fn makeImage(b: *std.Build, kernel: *std.Build.Step.Compile, programs: Programs) Image {
     const img_root = "root";
-    const out = b.getInstallPath(.bin, image_name);
 
     // Convert all PNGs to TGA into a staging directory, no originals leak in
     const convert = b.addSystemCommand(&.{
@@ -184,18 +181,25 @@ pub fn makeImage(b: *std.Build, kernel: *std.Build.Step.Compile, programs: Progr
     _ = files.addCopyDirectory(b.path("zig-out/ui"), "ui", .{}); // TGAs go in /ui
     _ = files.addCopyDirectory(programs.dir, "bin", .{});
 
-    const make_img = b.addSystemCommand(&.{
-        "bash", "scripts/make_img.sh", out, "64",
-    });
+    const make_img = b.addSystemCommand(&.{ "bash", "scripts/make_img.sh" });
+    // output declared first so Zig tracks it
+    const img_out = make_img.addOutputFileArg(image_name);
+    make_img.addArg("64");
     make_img.addDirectoryArg(files.getDirectory());
     make_img.addFileArg(kernel.getEmittedBin());
     make_img.step.dependOn(&files.step);
     make_img.step.dependOn(&kernel.step);
 
+    // install the tracked output file
+    const install_img = b.addInstallFileWithDir(img_out, .bin, image_name);
+    install_img.step.dependOn(&make_img.step);
+    b.getInstallStep().dependOn(&install_img.step);
+
     const step = b.step("make-image", "Build the ISO image");
     b.getInstallStep().dependOn(step);
     step.dependOn(&make_img.step);
-    return Image{ .path = out, .step = step };
+
+    return Image{ .path = img_out, .step = step };
 }
 
 fn addUACPI(b: *std.Build, mod: *std.Build.Module) void {
