@@ -64,19 +64,16 @@ pub fn parse(disk: *Disk, allocator: std.mem.Allocator) !void {
             continue;
         }
 
-        const uuid = std.mem.bytesToValue(u128, &entry.unique_guid);
-        const guid = std.mem.bytesToValue(u128, &entry.guid);
-
         const partition = Partition{
             .disk = disk,
             .name = entry.name,
-            .uuid = uuid,
-            .type = @enumFromInt(guid),
+            .partuuid = .fromBytes(&entry.unique_guid),
+            .guid = .fromBytes(&entry.guid),
             .start_lba = entry.starting_lba,
             .size_lba = entry.ending_lba - entry.starting_lba,
         };
         disk.partitions[i] = partition;
 
-        log.info("Partion {s} is {s} <{x}>", .{ partition.name, @tagName(partition.type), partition.uuid });
+        log.info("Partion {s} is {s} <{f}>", .{ partition.name, partition.guid.asString(), partition.partuuid });
     }
 }
