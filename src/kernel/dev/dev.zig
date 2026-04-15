@@ -5,5 +5,6 @@ pub const keyboard = @import("keyboard.zig");
 pub const mouse = @import("mouse.zig");
 pub const pci = @import("pci.zig");
 pub const serial = @import("serial.zig");
+pub const Partition = @import("Partition.zig");
 
 pub const disks = @import("disks/disks.zig");

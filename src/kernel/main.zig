@@ -2,6 +2,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const root = @import("root");
 
+const dev = root.dev;
+
 const acpi_oslevel = @import("acpi/osl.zig");
 const acpi = root.acpi;
 const arch = root.arch;
@@ -113,6 +115,11 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     Disk.loadDisks();
 
     const disk = Disk.get(0);
+    if (disk) |d| {
+        root.dev.disks.gpt.parse(d, allocator) catch |err| {
+            log.err("Failed to parse GPT: {s}", .{@errorName(err)});
+        };
+    }
 
     blk: {
         ui.init(allocator) catch |err| {

@@ -85,7 +85,7 @@ pub fn build(b: *std.Build) void {
     // const run_qemu_cmd = b.addSystemCommand(&.{ "qemu-system-x86_64", "-hda", image.path, "-m", "32", "-debugcon", "stdio" });
     // run_qemu_cmd.step.dependOn(image.step);
     const run_qemu_cmd = b.addSystemCommand(&.{"qemu-system-x86_64"});
-    run_qemu_cmd.addArg("-cdrom");
+    run_qemu_cmd.addArg("-hda");
     run_qemu_cmd.addFileArg(image.path);
     run_qemu_cmd.addArgs(&.{
         "-machine", "q35,accel=kvm",
