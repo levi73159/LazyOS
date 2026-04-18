@@ -84,6 +84,28 @@ pub const SuperBlock = extern struct {
     groupid: u16,
 };
 
+pub const ExtendedSuperBlock = extern struct {
+    first_non_reserved_inode: u32,
+    size_of_inode: u16,
+    this_block_group: u16,
+    optional_features: u32,
+    required_features: u32,
+    readonly_features: u32,
+    file_system_id: [16]u8,
+    volume_name: [16]u8,
+    last_mount_path: [64]u8,
+    compression_algorithm_used: u32,
+    /// number of blocks to preallocate for files
+    file_prealloc: u8,
+    /// number of blocks to preallocate for directories
+    dir_prealloc: u8,
+    __unused: u16,
+    journal_id: [16]u8,
+    journal_inode: u32,
+    journal_device: u32,
+    head_orphan_inode_list: u32,
+};
+
 pub const BlockGroupDescriptor = extern struct {
     block_bitmap: u32,
     inode_bitmap: u32,
@@ -182,6 +204,7 @@ const InodeWNumber = struct {
 
 partition: *Parition,
 superblock: SuperBlock,
+ext_superblock: ?ExtendedSuperBlock = null,
 block_size: u32,
 inode_size: u32,
 bgdt: []BlockGroupDescriptor,
@@ -190,13 +213,22 @@ allocator: mem.Allocator,
 inode_cache: std.AutoHashMapUnmanaged(u32, InodeCacheObject),
 
 // returns null if disk filesystem is not ext2
-fn getSuperBlock(partition: *Parition) ?SuperBlock {
+fn getSuperBlocks(partition: *Parition) ?struct { base: SuperBlock, extended: ?ExtendedSuperBlock } {
     var superblock: SuperBlock = undefined;
     partition.readAll(1024, std.mem.asBytes(&superblock)) catch {
         log.err("Failed to read superblock", .{});
         return null;
     };
-    return superblock;
+
+    if (superblock.version_major < 1) return .{ .base = superblock, .extended = null };
+
+    var extended: ExtendedSuperBlock = undefined;
+    partition.readAll(1024 + @sizeOf(SuperBlock), std.mem.asBytes(&extended)) catch {
+        log.err("Failed to read extended superblock", .{});
+        return null;
+    };
+
+    return .{ .base = superblock, .extended = extended };
 }
 
 fn getRootPartition(disk: *Disk) ?*Parition {
@@ -256,25 +288,23 @@ pub fn init(disk: *Disk) !Self {
     };
     log.info("Found filesystem: {s} <{f}>", .{ part.name, part.partuuid });
 
-    const superblock = getSuperBlock(part) orelse {
+    const superblock = getSuperBlocks(part) orelse {
         log.err("No superblock found", .{});
         return error.NoSuperBlock;
     };
 
-    if (superblock.signature != EXT2_SIGNATURE) return error.InvalidExt2;
-    if (superblock.version_major >= 1) return error.UnsupportedExt2Version;
+    if (superblock.base.signature != EXT2_SIGNATURE) return error.InvalidExt2;
 
     const allocator = root.heap.allocator();
-    const bgdt = try getBlockDescriptorTable(part, &superblock, allocator);
+    const bgdt = try getBlockDescriptorTable(part, &superblock.base, allocator);
     errdefer allocator.free(bgdt);
-
-    log.info("Superblock: {any}", .{superblock});
 
     var self = Self{
         .partition = part,
-        .superblock = superblock,
-        .block_size = @as(u32, 1024) << @intCast(superblock.log2_block_size),
-        .inode_size = 128,
+        .superblock = superblock.base,
+        .ext_superblock = superblock.extended,
+        .block_size = @as(u32, 1024) << @intCast(superblock.base.log2_block_size),
+        .inode_size = if (superblock.extended) |ext| ext.size_of_inode else 128,
         .bgdt = bgdt,
         .allocator = allocator,
         .root_inode = undefined,
@@ -370,15 +400,17 @@ pub fn detectExt2(disk: *Disk) bool {
         return false;
     };
 
-    const superblock = getSuperBlock(part) orelse {
+    const superblocks = getSuperBlocks(part) orelse {
         return false;
     };
 
-    if (superblock.signature != EXT2_SIGNATURE) return false;
+    if (superblocks.base.signature != EXT2_SIGNATURE) return false;
     return true;
 }
 
 // ============= IO  functions =============
+// this functions tries to fill buffer with as much data as possible from disk and returns the number of bytes read from disk
+// this function starts reading from the start
 pub fn readFile(self: *Self, inode: *const Inode, buf: []u8) !usize {
     var remaining = buf;
     var bytes_read: usize = 0;
@@ -467,6 +499,49 @@ fn readTriplyIndirect(self: *Self, block_ptr: u32, remaining: *[]u8, bytes_read:
 
         try self.readDoublyIndirect(ptr, remaining, bytes_read, file_size);
     }
+}
+
+fn getBlockPtr(self: *Self, inode: *const Inode, index: u32) !u32 {
+    const ptrs_per_block = self.block_size / @sizeOf(u32);
+
+    // direct blocks 0-11
+    if (index < 12) {
+        const direct_ptrs = [12]u32{
+            inode.direct_ptr0, inode.direct_ptr1,  inode.direct_ptr2,
+            inode.direct_ptr3, inode.direct_ptr4,  inode.direct_ptr5,
+            inode.direct_ptr6, inode.direct_ptr7,  inode.direct_ptr8,
+            inode.direct_ptr9, inode.direct_ptr10, inode.direct_ptr11,
+        };
+        return direct_ptrs[index];
+    }
+
+    // singly indirect
+    const si_base = 12;
+    if (index < si_base + ptrs_per_block) {
+        return self.readIndirectPtr(inode.singly_indirect_ptr, index - si_base);
+    }
+
+    // doubly indirect
+    const di_base = si_base + ptrs_per_block;
+    if (index < di_base + ptrs_per_block * ptrs_per_block) {
+        const di_index = index - di_base;
+        const si_block = try self.readIndirectPtr(inode.doubly_indirect_ptr, di_index / ptrs_per_block);
+        return self.readIndirectPtr(si_block, di_index % ptrs_per_block);
+    }
+
+    // triply indirect
+    const ti_base = di_base + ptrs_per_block * ptrs_per_block;
+    const ti_index = index - ti_base;
+    const di_block = try self.readIndirectPtr(inode.triply_indirect_ptr, ti_index / (ptrs_per_block * ptrs_per_block));
+    const si_block = try self.readIndirectPtr(di_block, (ti_index / ptrs_per_block) % ptrs_per_block);
+    return self.readIndirectPtr(si_block, ti_index % ptrs_per_block);
+}
+
+fn readIndirectPtr(self: *Self, block: u32, index: u32) !u32 {
+    const offset = block * self.block_size + index * @sizeOf(u32);
+    var ptr: u32 = undefined;
+    try self.partition.readAll(offset, std.mem.asBytes(&ptr));
+    return ptr;
 }
 
 fn findInDir(self: *Self, dir_inode: *const Inode, name: []const u8) !?u32 {
@@ -572,22 +647,22 @@ pub const VfsDirIterCtx = struct {
 
     pub fn next(ctx: *anyopaque) anyerror!?FS.DirIterator.Entry {
         const self: *VfsDirIterCtx = @ptrCast(@alignCast(ctx));
-        if (self.offset >= self.data.len) return null;
 
-        const entry: *const DirEntry = @ptrCast(@alignCast(&self.data[self.offset]));
-        const name: []const u8 = self.data[self.offset + @sizeOf(DirEntry) ..][0..entry.name_length];
+        while (self.offset < self.data.len) {
+            const entry: *const DirEntry = @ptrCast(@alignCast(&self.data[self.offset]));
+            if (entry.total_size == 0) return error.CorruptFileSystem;
+            self.offset += entry.total_size;
 
-        if (entry.total_size == 0) return error.CorruptFileSystem;
-        self.offset += entry.total_size;
-        const inode = try self.fs.getInodeNoRef(entry.inode);
+            if (entry.inode == 0) continue; // deleted entry, skip
 
-        return FS.DirIterator.Entry{
-            .name = name,
-            .info = .{
-                .size = inode.size(),
-                .type = if (inode.isDir()) .directory else .file,
-            },
-        };
+            const name = self.data[self.offset - entry.total_size + @sizeOf(DirEntry) ..][0..entry.name_length];
+            const inode = try self.fs.getInodeNoRef(entry.inode);
+            return FS.DirIterator.Entry{
+                .name = name,
+                .info = .{ .size = inode.size(), .type = if (inode.isDir()) .directory else .file },
+            };
+        }
+        return null;
     }
 
     pub fn reset(ctx: *anyopaque) void {
@@ -616,9 +691,33 @@ comptime {
 
 fn vfsReadFile(fs: *FS.AnyFs, handle: *FS.Handle, buf: []u8) !usize {
     const self: *Self = @ptrCast(@alignCast(&fs.state));
+    if (handle.pos >= handle.size) return 0; // EOF
 
     const inode = try self.getInodeNoRef(@intCast(handle.ctx));
-    return self.readFile(&inode, buf);
+    const remaining = handle.size - handle.pos;
+    const to_read = @min(remaining, @as(u32, @intCast(buf.len)));
+
+    var block_buf = try self.allocator.alloc(u8, self.block_size);
+    defer self.allocator.free(block_buf);
+
+    var done: u32 = 0;
+    while (done < to_read) {
+        const abs_pos = handle.pos + done;
+        const block_index = abs_pos / self.block_size;
+        const byte_off = abs_pos % self.block_size;
+
+        const block_ptr = try self.getBlockPtr(&inode, block_index);
+        if (block_ptr == 0) break; // sparse block
+
+        try self.readBlock(block_ptr, block_buf);
+
+        const chunk = @min(self.block_size - byte_off, to_read - done);
+        @memcpy(buf[done..][0..chunk], block_buf[byte_off..][0..chunk]);
+        done += chunk;
+    }
+
+    handle.pos += done;
+    return done;
 }
 
 fn vfsOpenFile(fs: *FS.AnyFs, path: []const u8) !FS.Handle {
