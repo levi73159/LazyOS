@@ -7,6 +7,7 @@ const log = std.log.scoped(._disk);
 const ata = @import("disks/ata.zig");
 const atapi = @import("disks/atapi.zig");
 const ahci = @import("disks/ahci.zig");
+const BlockCache = @import("disks/BlockCache.zig");
 const pci = @import("pci.zig");
 const Partition = @import("Partition.zig");
 
@@ -49,6 +50,7 @@ drive_type: DriveType,
 read_only: bool = false,
 
 partitions: []?Partition = &.{},
+block_cache: BlockCache = .{}, // SCSI doesn't use this block cache (because 512 byte sectors hardcoded when scsi is 2048 byte sectors)
 
 pub const DiskError = error{
     InvalidDisk,
@@ -118,33 +120,69 @@ pub fn initLegacy(disk: u8) DiskError!Self {
     return self;
 }
 
+const DiskReader = struct {
+    disk: *Self,
+
+    pub fn read(self: @This(), lba: u32, buf: *[BlockCache.BLOCK_SIZE]u8) DiskError!void {
+        return self.disk.readSectorRaw(lba, buf);
+    }
+};
+
+// one raw sector directly from hardware, no cache
+fn readSectorRaw(self: *Self, lba: u32, buf: *[BlockCache.BLOCK_SIZE]u8) DiskError!void {
+    switch (self.drive_type) {
+        .ata => {
+            const sectors = std.mem.bytesAsSlice(ata.Sector, buf);
+            try ata.readSectors(self.base.legacy_base, lba, sectors);
+        },
+        .ahci => {
+            const sectors = std.mem.bytesAsSlice(ahci.Sector, buf);
+            _ = try ahci.readSectors(self.base.port, lba, sectors);
+        },
+        .atapi => unreachable, // 2048-byte sectors, never routed here
+    }
+}
+
+fn readCached(self: *Self, lba: u32, buf: *[BlockCache.BLOCK_SIZE]u8) DiskError!void {
+    try self.block_cache.read(lba, buf, DiskReader{ .disk = self });
+}
+
 // much faster if BUFFER_IS_ALIGNED
-pub fn read(self: Self, lba: u32, buf: []u8) DiskError!usize {
+pub fn read(self: *Self, lba: u32, buf: []u8) DiskError!usize {
     if (buf.len == 0) return 0;
 
     switch (self.drive_type) {
-        .ata => {
-            if (buf.len % ata.SECTOR_SIZE != 0) return self.unalignedRead(lba, buf);
-            const sectors = std.mem.bytesAsSlice(ata.Sector, buf);
-            try ata.readSectors(self.base.legacy_base, lba, sectors);
+        .ata, .ahci => {
+            // AHCI SATAPI has 2048-byte sectors, bypass cache
+            if (self.drive_type == .ahci and ahci.sectorSize(self.base.port) != BlockCache.BLOCK_SIZE) {
+                if (buf.len % ahci.SECTOR_SIZE != 0) return self.unalignedRead(lba, buf);
+                const sectors = std.mem.bytesAsSlice(ahci.Sector, buf);
+                return ahci.readSectors(self.base.port, lba, sectors);
+            }
+
+            if (buf.len % BlockCache.BLOCK_SIZE != 0) return self.unalignedRead(lba, buf);
+
+            const sector_count = buf.len / BlockCache.BLOCK_SIZE;
+            for (0..sector_count) |i| {
+                const cur_lba = lba + @as(u32, @intCast(i));
+                const offset = i * BlockCache.BLOCK_SIZE;
+                try self.readCached(cur_lba, buf[offset..][0..BlockCache.BLOCK_SIZE]);
+            }
             return buf.len;
         },
+
+        // 2048-byte sector drives, no cache
         .atapi => {
             if (buf.len % atapi.SECTOR_SIZE != 0) return self.unalignedRead(lba, buf);
             const sectors = std.mem.bytesAsSlice(atapi.Sector, buf);
             try atapi.readSectors(self.base.legacy_base, lba, sectors);
             return buf.len;
         },
-        .ahci => {
-            if (buf.len % ahci.SECTOR_SIZE != 0) return self.unalignedRead(lba, buf);
-            const sectors = std.mem.bytesAsSlice(ahci.Sector, buf);
-            return ahci.readSectors(self.base.port, lba, sectors);
-        },
     }
 }
 
 /// Offset is in bytes
-pub fn readOffset(self: Self, offset: usize, buf: []u8) DiskError!usize {
+pub fn readOffset(self: *Self, offset: usize, buf: []u8) DiskError!usize {
     const sector_size = switch (self.drive_type) {
         .ata => ata.SECTOR_SIZE,
         .atapi => atapi.SECTOR_SIZE,
@@ -184,7 +222,7 @@ pub fn readOffset(self: Self, offset: usize, buf: []u8) DiskError!usize {
     return amount_read;
 }
 
-pub fn readAll(self: Self, lba: u32, buf: []u8) DiskError!void {
+pub fn readAll(self: *Self, lba: u32, buf: []u8) DiskError!void {
     var bytes_read: usize = 0;
     while (bytes_read < buf.len) {
         const real_lba = lba + (@as(u32, @intCast(bytes_read)) / self.sectorSize());
@@ -192,14 +230,14 @@ pub fn readAll(self: Self, lba: u32, buf: []u8) DiskError!void {
     }
 }
 
-pub fn readOffsetAll(self: Self, offset: usize, buf: []u8) DiskError!void {
+pub fn readOffsetAll(self: *Self, offset: usize, buf: []u8) DiskError!void {
     var bytes_read: usize = 0;
     while (bytes_read < buf.len) {
         bytes_read += try self.readOffset(offset + bytes_read, buf[bytes_read..]);
     }
 }
 
-fn unalignedRead(self: Self, lba: u32, buf: []u8) DiskError!usize {
+fn unalignedRead(self: *Self, lba: u32, buf: []u8) DiskError!usize {
     switch (self.drive_type) {
         .ata => {
             var tmp_buf: [ata.SECTOR_SIZE]u8 = undefined;
@@ -246,7 +284,7 @@ fn __inner_unalignedRead(self: Self, lba: u32, tmp_buf: []u8, buf: []u8) DiskErr
 }
 
 /// Warning can only read one sector with offset
-fn unalignedReadOffset(self: Self, lba: u32, offset: usize, buf: []u8) DiskError!usize {
+fn unalignedReadOffset(self: *Self, lba: u32, offset: usize, buf: []u8) DiskError!usize {
     switch (self.drive_type) {
         .ata => {
             var tmp_buf: [ata.SECTOR_SIZE]u8 = undefined;

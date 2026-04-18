@@ -2,8 +2,8 @@
 OUT     ?= hello.bin
 OBJ_DIR ?= .
 
-CC     = /opt/musl-debug/bin/musl-gcc
-CFLAGS = -static -O0 -fno-pie -no-pie
+CC     = musl-gcc
+CFLAGS = -static -O3 -fno-pie -no-pie
 
 all: $(OUT)
 

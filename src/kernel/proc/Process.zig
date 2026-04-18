@@ -144,11 +144,6 @@ pub fn loadElf(data: []const u8, allocator: std.mem.Allocator) !Self {
     vmem.addRegion2(allocator, "user stack", stack_bottom, USER_STACK_TOP);
     vmem.addGuardPage(allocator, "user stack overflow", stack_bottom - 4096);
 
-    const base = first_load_mapped_addr - phdr_vaddr;
-    log.debug("Mapped stack from {x} to {x}", .{ stack_bottom, USER_STACK_TOP });
-    log.debug("Entry point: {x}", .{header.entry});
-    log.debug("Base: {x}", .{base});
-
     const user_sp = loadStack(stack_phys, ElfInfo{
         .entry = header.entry,
         .phdr_vaddr = phdr_vaddr,
@@ -227,11 +222,15 @@ fn ptLoad(allocator: std.mem.Allocator, ph: elf.Elf64_Phdr, data: []const u8, re
 
     if (ph.p_filesz > 0) {
         const src = data[ph.p_offset..][0..ph.p_filesz];
-        @memcpy(memory[offset..][0..src.len], src); // TODO: this is the correct way
+        @memcpy(memory[offset..][0..src.len], src);
     }
 
-    log.debug("Mapped {d} bytes from {x} to {x}", .{ total_size, ph.p_vaddr, virt });
-    log.debug("File size: {d}", .{ph.p_filesz});
+    const bss_start = offset + ph.p_filesz;
+    const bss_size = ph.p_memsz - ph.p_filesz;
+
+    if (bss_size > 0) {
+        @memset(memory[bss_start..][0..bss_size], 0);
+    }
 
     const flags = paging.PageFlags{
         .present = true,

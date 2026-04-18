@@ -18,6 +18,12 @@ pub const VirtualAddress = packed struct(u64) {
     pub fn from(address: u64) VirtualAddress {
         return @bitCast(address);
     }
+
+    pub fn lt(self: VirtualAddress, other: VirtualAddress) bool {
+        const self_addr: usize = @bitCast(self);
+        const other_addr: usize = @bitCast(other);
+        return self_addr < other_addr;
+    }
 };
 
 pub const PageFlags = struct {
@@ -248,10 +254,55 @@ pub fn unmapPage(self: *const Self, virt: u64) void {
 
 /// NOTE: virt and phys must be page aligned
 pub fn mapRange(self: *const Self, virt: u64, phys: u64, size: u64, flags: PageFlags) void {
-    var offset: u64 = 0;
+    std.debug.assert(phys & 0xFFF == 0);
+    std.debug.assert(virt & 0xFFF == 0);
+
     const size_aligned = std.mem.alignForward(u64, size, PAGE_SIZE);
+
+    var va = VirtualAddress.from(virt);
+
+    var pdpt_table = getOrCreatePageTable(self.pml4, va.pml4_index, flags.user);
+    var pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index, flags.user);
+
+    if (pd_table[va.pd_index].page_size) {
+        log.err("Try to map huge page to small page at {d}", .{va.pd_index});
+        log.err("phys: {x}, virt: {x}", .{ phys, virt });
+        @panic("Try to map huge page to small page");
+    }
+    var pt_table = getOrCreatePageTable(pd_table, va.pd_index, flags.user);
+
+    var offset: u64 = 0;
     while (offset < size_aligned) : (offset += PAGE_SIZE) {
-        self.mapPage(virt + offset, phys + offset, flags);
+        if (pt_table[va.pt_index].present) {
+            log.warn("Overwritting page {x}, old phys: {x}, new phys: {x}", .{ virt, pt_table[va.pt_index].getAddress(), phys + offset });
+        }
+
+        pt_table[va.pt_index] = PageEntry.init(phys + offset, flags);
+        va.pt_index += 1;
+        if (va.pt_index == 512) {
+            va.pt_index = 0;
+            va.pd_index += 1;
+
+            if (va.pd_index == 512) {
+                va.pd_index = 0;
+                va.pdpt_index += 1;
+
+                if (va.pdpt_index == 512) {
+                    va.pdpt_index = 0;
+                    va.pml4_index += 1;
+
+                    pdpt_table = getOrCreatePageTable(self.pml4, va.pml4_index, flags.user);
+                }
+
+                pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index, flags.user);
+                if (pd_table[va.pd_index].page_size) {
+                    log.err("Try to map huge page to small page at {d}", .{va.pd_index});
+                    log.err("phys: {x}, virt: {x}", .{ phys, virt });
+                    @panic("Try to map huge page to small page");
+                }
+            }
+            pt_table = getOrCreatePageTable(pd_table, va.pd_index, flags.user);
+        }
     }
 }
 
@@ -330,9 +381,9 @@ pub fn mapHugePage(self: *const Self, virt: u64, phys: u64, flags: PageFlags) vo
 
 pub fn getPhys(self: *const Self, virt: u64, user: bool) ?u64 {
     const va = VirtualAddress.from(virt);
-    const pdpt_table = getOrCreatePageTable(self.pml4, va.pml4_index, false);
-    const pd_table = getOrCreatePageTable(pdpt_table, va.pdpt_index, false);
-    const pt_table = getOrCreatePageTable(pd_table, va.pd_index, false);
+    const pdpt_table = getPageTable(self.pml4, va.pml4_index, false) orelse return null;
+    const pd_table = getPageTable(pdpt_table, va.pdpt_index, false) orelse return null;
+    const pt_table = getPageTable(pd_table, va.pd_index, false) orelse return null;
     const entry = pt_table[va.pt_index];
     if (!entry.present) return null;
     if (!entry.user and user) {
