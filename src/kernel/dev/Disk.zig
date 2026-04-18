@@ -118,10 +118,6 @@ pub fn initLegacy(disk: u8) DiskError!Self {
     return self;
 }
 
-pub fn deinit(self: *Self) void {
-    disks[self.base.legacy_base] = null;
-}
-
 // much faster if BUFFER_IS_ALIGNED
 pub fn read(self: Self, lba: u32, buf: []u8) DiskError!usize {
     if (buf.len == 0) return 0;
@@ -322,4 +318,23 @@ pub fn sectorSize(self: Self) u32 {
         .atapi => return atapi.SECTOR_SIZE,
         .ahci => return ahci.sectorSize(self.base.port),
     }
+}
+
+// if multi is true, return null if multiple partitions are found to match the guid
+pub fn getPartitionFromGUID(self: *Self, guid: Partition.Guid, multi: bool) ?*Partition {
+    var found_part: ?*Partition = null;
+    for (self.partitions) |*maybe_part| if (maybe_part.*) |part| {
+        const match = part.guid.eql(guid);
+        if (match) {
+            if (found_part == null) {
+                found_part = &maybe_part.*.?;
+                if (!multi) break;
+            } else if (found_part != null and multi) {
+                found_part = null;
+                break;
+            }
+        }
+    };
+
+    return found_part;
 }

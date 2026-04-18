@@ -552,8 +552,8 @@ const VfsDirIterCtx = struct {
         return ctx;
     }
 
-    pub fn next(raw: *[4096]u8) anyerror!?FS.DirIterator.Entry {
-        const ctx: *VfsDirIterCtx = @ptrCast(@alignCast(raw));
+    pub fn next(ptr: *anyopaque) anyerror!?FS.DirIterator.Entry {
+        const ctx: *VfsDirIterCtx = @ptrCast(@alignCast(ptr));
 
         while (true) {
             if (ctx.sector >= ctx.sectors) return null;
@@ -584,18 +584,24 @@ const VfsDirIterCtx = struct {
         }
     }
 
-    pub fn reset(raw: *[4096]u8) void {
-        const ctx: *VfsDirIterCtx = @ptrCast(@alignCast(raw));
+    pub fn reset(ptr: *anyopaque) void {
+        const ctx: *VfsDirIterCtx = @ptrCast(@alignCast(ptr));
         ctx.bytes_read = 0;
         ctx.sector = 0;
         ctx.offset = 0;
         ctx.disk.readAll(ctx.lba, &ctx.buf) catch {};
+    }
+
+    pub fn deinit(ptr: *anyopaque) void {
+        const ctx: *VfsDirIterCtx = @ptrCast(@alignCast(ptr));
+        root.heap.allocator().destroy(ctx);
     }
 };
 
 const vfs_dir_iter_vtable = FS.DirIterator.VTable{
     .next = VfsDirIterCtx.next,
     .reset = VfsDirIterCtx.reset,
+    .deinit = VfsDirIterCtx.deinit,
 };
 
 fn vfsIterDir(fs: *FS.AnyFs, path: []const u8) anyerror!FS.DirIterator {
@@ -607,11 +613,13 @@ fn vfsIterDir(fs: *FS.AnyFs, path: []const u8) anyerror!FS.DirIterator {
     var iter = FS.DirIterator{
         .fs = fs,
         .vtable = &vfs_dir_iter_vtable,
+        .ctx = undefined,
     };
 
     // init the context into the iterator's inline storage
-    const ctx: *VfsDirIterCtx = @ptrCast(@alignCast(&iter.ctx));
+    const ctx: *VfsDirIterCtx = try root.heap.allocator().create(VfsDirIterCtx);
     ctx.* = VfsDirIterCtx.init(self.disk, &entry);
+    iter.ctx = ctx;
     return iter;
 }
 

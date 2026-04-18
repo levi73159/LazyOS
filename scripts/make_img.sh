@@ -14,7 +14,7 @@ parted -s $IMG mkpart BIOS "" 1MiB 2MiB      # partition 1 — BIOS boot
 parted -s $IMG set 1 bios_grub on
 parted -s $IMG mkpart ESP fat32 2MiB 32MiB   # partition 2 — EFI/boot
 parted -s $IMG set 2 esp on
-parted -s $IMG mkpart ROOT ext2 32MiB 100%   # partition 3 — root
+parted -s $IMG mkpart primary ext2 32MiB 100%   # partition 3 — root
 
 # attach to loop device so we can copy files
 LOOP=$(sudo losetup -fP --show "$IMG")

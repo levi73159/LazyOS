@@ -3,12 +3,13 @@ const root = @import("root");
 const Disk = root.dev.Disk;
 
 const Iso9660 = @import("Iso9660.zig");
+const Ext2 = @import("Ext2.zig");
 
 pub const File = @import("File.zig");
 
 pub const FileType = enum { file, directory };
 pub const FileInfo = struct {
-    size: u32,
+    size: u64,
     type: FileType,
 };
 
@@ -21,28 +22,31 @@ pub const FileFlags = packed struct {
 
 pub const Handle = struct {
     pos: u32 = 0,
-    size: u32 = 0,
-    ctx: u64 = 0, // LBA for iso9660, cluster for fat32
+    size: u64 = 0,
+    ctx: u64 = 0, // LBA for iso9660, inode for ext2
     opened: bool = false,
     flags: FileFlags = .{},
 };
 
-pub const FileSysetmType = enum { iso9660 }; // TODO: add fat32/fat16
+pub const FileSysetmType = enum { iso9660, ext2 };
 pub const FsVtable = struct {
     read_file: *const fn (fs: *AnyFs, handle: *Handle, buf: []u8) anyerror!usize,
     open_file: *const fn (fs: *AnyFs, path: []const u8) anyerror!Handle,
+    close_file: ?*const fn (fs: *AnyFs, handle: *Handle) void = null,
     stat: *const fn (fs: *AnyFs, path: []const u8) anyerror!FileInfo,
     iter_dir: *const fn (fs: *AnyFs, path: []const u8) anyerror!DirIterator,
 };
 
 pub const DirIterator = struct {
     fs: *AnyFs,
-    ctx: [4096]u8 align(8) = undefined, // filesystem stores its state here
+    ctx: *anyopaque,
     vtable: *const VTable,
 
     pub const VTable = struct {
-        next: *const fn (ctx: *[4096]u8) anyerror!?Entry,
-        reset: *const fn (ctx: *[4096]u8) void,
+        next: *const fn (ctx: *anyopaque) anyerror!?Entry,
+        reset: *const fn (ctx: *anyopaque) void,
+
+        deinit: *const fn (ctx: *anyopaque) void,
     };
 
     pub const Entry = struct {
@@ -51,19 +55,25 @@ pub const DirIterator = struct {
     };
 
     pub fn next(self: *DirIterator) !?Entry {
-        return self.vtable.next(&self.ctx);
+        return self.vtable.next(self.ctx);
     }
 
     pub fn reset(self: *DirIterator) void {
-        self.vtable.reset(&self.ctx);
+        self.vtable.reset(self.ctx);
+    }
+
+    pub fn deinit(self: *DirIterator) void {
+        self.vtable.deinit(self.ctx);
     }
 };
 
 pub const AnyFs = struct {
+    pub const state_size = 4096;
+
     vtable: FsVtable,
     fs_type: FileSysetmType,
 
-    state: [4096]u8 align(8) = undefined, // filesystem state manage by the filesystem
+    state: [state_size]u8 align(8) = undefined, // filesystem state manage by the filesystem
 };
 
 pub const MAX_HANDLES = 256;
@@ -93,8 +103,9 @@ var global: ?Self = null;
 pub fn init(disk: *Disk) Error!Self {
     const anyfs = if (try detectIso9660(disk)) blk: {
         break :blk Iso9660.mount(disk) catch |err| return convertToError(err);
+    } else if (Ext2.detectExt2(disk)) blk: {
+        break :blk Ext2.mount(disk) catch |err| return convertToError(err);
     } else return error.UnknownFileSystem;
-
     return Self{
         .inner = anyfs,
     };
@@ -116,6 +127,8 @@ fn convertToError(err: anyerror) Error {
     inline for (@typeInfo(Error).error_set.?) |f| {
         if (err == @field(Error, f.name)) return @field(Error, f.name);
     }
+
+    std.log.err("Unexpected error: {any}", .{err});
     return error.Unexpected;
 }
 
@@ -175,14 +188,4 @@ fn detectIso9660(disk: *Disk) Disk.DiskError!bool {
     var buf: [2048]u8 = undefined;
     try disk.readAll(16, &buf); // sector 16
     return std.mem.eql(u8, buf[1..6], "CD001");
-}
-
-fn detectFat32(disk: *Disk) !bool {
-    var buf: [512]u8 = undefined;
-    try disk.readAll(0, &buf);
-    // check boot sector signature
-    if (buf[510] != 0x55 or buf[511] != 0xAA) return false;
-
-    // check FAT type string at offset 82
-    return std.mem.eql(u8, buf[82..90], "FAT32   ");
 }

@@ -103,6 +103,23 @@ pub fn readLba(self: *const Self, lba: u64, buf: []u8) Disk.DiskError!usize {
     return self.disk.read(lba, buf);
 }
 
+pub fn readAll(self: *const Self, offset: usize, buf: []u8) Disk.DiskError!void {
+    const start_offset = self.start_lba * self.disk.sectorSize() + offset;
+    const size_bytes = self.size_lba * self.disk.sectorSize();
+
+    std.debug.assert(buf.len <= size_bytes); // on the user to ensure this but assert here for safety
+
+    return self.disk.readOffsetAll(start_offset, buf);
+}
+
+pub fn readLbaAll(self: *const Self, lba: u64, buf: []u8) Disk.DiskError!void {
+    const size_bytes = self.size_lba * self.disk.sectorSize();
+
+    std.debug.assert(buf.len <= size_bytes); // on the user to ensure this but assert here for safety
+
+    return self.disk.readAll(lba, buf);
+}
+
 pub fn deinit(self: *const Self, allocator: std.mem.Allocator) void {
     allocator.free(self.name);
 }
