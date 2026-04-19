@@ -48,6 +48,15 @@ pub const Guid = extern struct {
         };
     }
 
+    pub fn toBytes(self: Guid) [16]u8 {
+        var bytes: [16]u8 = undefined;
+        std.mem.writeInt(u32, bytes[0..4], self.data1, .little);
+        std.mem.writeInt(u16, bytes[4..6], self.data2, .little);
+        std.mem.writeInt(u16, bytes[6..8], self.data3, .little);
+        bytes[8..16].* = self.data4;
+        return bytes;
+    }
+
     pub fn eql(a: Guid, b: Guid) bool {
         return std.mem.eql(u8, std.mem.asBytes(&a), std.mem.asBytes(&b));
     }
@@ -80,7 +89,21 @@ pub const Guid = extern struct {
 };
 
 disk: *Disk,
-name: [72]u8, // UTF-16
+name: struct {
+    buf: [36]u8 = [_]u8{0} ** 36,
+    len: u8,
+
+    pub fn slice(self: *const @This()) []const u8 {
+        return self.buf[0..self.len];
+    }
+
+    pub fn format(
+        self: @This(),
+        writer: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
+        try writer.print("{s}", .{self.buf[0..self.len]});
+    }
+},
 partuuid: Guid,
 guid: Guid,
 start_lba: u64,

@@ -145,6 +145,8 @@ const Scancode = enum(u8) {
             .enter => '\n',
             .tilde => '`',
             .slash => '/',
+            .minus => '-',
+            .comma => ',',
             else => null,
         };
     }
@@ -196,6 +198,7 @@ const Scancode = enum(u8) {
             .comma => '<',
             .period => '>',
             .slash => '?',
+            .minus => '_',
             else => self.getChar(),
         };
     }

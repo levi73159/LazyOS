@@ -286,7 +286,7 @@ pub fn init(disk: *Disk) !Self {
         log.err("No root partition found", .{});
         return error.NoRootPartition;
     };
-    log.info("Found filesystem: {s} <{f}>", .{ part.name, part.partuuid });
+    log.info("Found filesystem: {f} <{f}>", .{ part.name, part.partuuid });
 
     const superblock = getSuperBlocks(part) orelse {
         log.err("No superblock found", .{});

@@ -42,7 +42,7 @@ const AHCIPortArray = struct {
     }
 };
 
-var disks: [32]?Self = .{null} ** 32;
+pub var disks: [32 + 2]?Self = .{null} ** (32 + 2);
 
 base: BaseUnion,
 drive_info: [256]u16,
@@ -55,6 +55,7 @@ block_cache: BlockCache = .{}, // SCSI doesn't use this block cache (because 512
 pub const DiskError = error{
     InvalidDisk,
     UnalignedBuffer,
+    ReadOnlyDisk,
 } || ata.DriveError || ahci.DiskError;
 
 pub const DiskInitError = error{
@@ -71,11 +72,26 @@ pub fn loadDisks() void {
             };
         }
     }
+
+    disks[32] = Self.initLegacy(0) catch |err| blk: {
+        log.err("Failed to init disk {d}: {s}", .{ 32, @errorName(err) });
+        break :blk null;
+    };
+    disks[33] = Self.initLegacy(1) catch |err| blk: {
+        log.err("Failed to init disk {d}: {s}", .{ 33, @errorName(err) });
+        break :blk null;
+    };
+
+    log.debug("Disks loaded with legacy disks", .{});
 }
 
 pub fn get(disk: u8) ?*Self {
-    if (disk >= disks.len) return null;
-    if (disks[disk] == null) return null;
+    if (disk >= disks.len) {
+        return null;
+    }
+    if (disks[disk] == null) {
+        return null;
+    }
     return &disks[disk].?;
 }
 
@@ -117,6 +133,7 @@ pub fn initLegacy(disk: u8) DiskError!Self {
             return err;
         }
     };
+    log.info("Init legacy disk {d}", .{disk});
     return self;
 }
 
@@ -324,24 +341,116 @@ fn __inner_unalignedReadOffset(self: Self, lba: u32, offset: usize, tmp_buf: []u
     return len; // how much we read/copy into buf
 }
 
-pub fn write(self: Self, lba: u32, data: []const u8) DiskError!void {
-    if (data.len == 0) return;
+pub fn writeAll(self: *Self, lba: u32, data: []const u8) DiskError!void {
+    var written: usize = 0;
+    while (written < data.len) {
+        const n = try self.write(lba + @as(u32, @intCast(written / self.sectorSize())), data[written..]);
+        written += n;
+    }
+}
+
+pub fn write(self: *Self, lba: u32, data: []const u8) DiskError!usize {
+    if (data.len == 0) return 0;
     if (self.read_only) return error.ReadOnlyDisk;
 
+    var r = data.len;
     switch (self.drive_type) {
         .ata => {
-            if (data.len % ata.SECTOR_SIZE != 0) return error.UnalignedBuffer;
-            const sectors = std.mem.bytesAsSlice(ata.Sector, data);
-            try ata.writeSectors(self.base, lba, sectors);
+            if (data.len % ata.SECTOR_SIZE != 0) {
+                r = try self.unalignedWrite(lba, data);
+            } else {
+                const sectors = std.mem.bytesAsSlice(ata.Sector, data);
+                try ata.writeSectors(self.base.legacy_base, lba, sectors);
+                r = data.len;
+            }
         },
         .atapi => {
             return error.ReadOnlyDisk; // atapi is read-only because it is cdrom
         },
         .ahci => {
-            // TODO
-            @panic("TODO: ahci write");
+            if (data.len % ahci.sectorSize(self.base.port) != 0) {
+                r = try self.unalignedWrite(lba, data);
+            } else {
+                const sectors = std.mem.bytesAsSlice(ahci.Sector, data);
+                r = try ahci.writeSectors(self.base.port, lba, sectors);
+            }
         },
     }
+
+    // invalidate cache
+    var ilba = lba;
+    const end = lba + @as(u32, @intCast(r / self.sectorSize()));
+    while (ilba < end) : (ilba += 1) {
+        self.block_cache.invalidate(ilba);
+    }
+
+    return r;
+}
+
+fn unalignedWrite(self: *Self, lba: u32, data: []const u8) DiskError!usize {
+    switch (self.drive_type) {
+        .ata => {
+            var buf: [ata.SECTOR_SIZE]u8 = undefined;
+            return self.__inner_unalignedWrite(lba, &buf, data);
+        },
+        .atapi => {
+            return error.ReadOnlyDisk; // atapi is read-only because it is cdrom
+        },
+        .ahci => {
+            var buf_max: [ahci.MAX_SECTOR_SIZE]u8 = undefined;
+            const buf = buf_max[0..ahci.sectorSize(self.base.port)];
+            return self.__inner_unalignedWrite(lba, buf, data);
+        },
+    }
+}
+
+fn __inner_unalignedWrite(self: *Self, lba: u32, tmp_buf: []u8, buf: []const u8) DiskError!usize {
+    // see how many sectors we can write without going to unaligned
+    const end_aligned = std.mem.alignBackward(usize, buf.len, tmp_buf.len); // how many bytes we can write without going to unaligned
+
+    var r: usize = 0;
+    switch (self.drive_type) {
+        .ata => {
+            const sectors = std.mem.bytesAsSlice(ata.Sector, buf[0..end_aligned]);
+            try ata.writeSectors(self.base.legacy_base, lba, sectors);
+            r = end_aligned;
+        },
+        .atapi => {
+            return error.ReadOnlyDisk; // atapi is read-only because it is cdrom
+        },
+        .ahci => {
+            const sectors = std.mem.bytesAsSlice(ahci.Sector, buf[0..end_aligned]);
+            r = try ahci.writeSectors(self.base.port, lba, sectors);
+        },
+    }
+
+    if (r != end_aligned) return r;
+    if (buf.len == end_aligned) return r;
+
+    const written_lba = r / tmp_buf.len;
+
+    // now we want to read the sector
+    try self.readAll(@intCast(lba + written_lba), tmp_buf);
+
+    const rest = buf[end_aligned..];
+    @memcpy(tmp_buf[0..rest.len], rest);
+
+    switch (self.drive_type) {
+        .ata => {
+            const sectors = std.mem.bytesAsSlice(ata.Sector, tmp_buf);
+            try ata.writeSectors(self.base.legacy_base, lba, sectors);
+            r += tmp_buf.len;
+        },
+        .atapi => {
+            return error.ReadOnlyDisk; // atapi is read-only because it is cdrom
+        },
+        .ahci => {
+            const sectors = std.mem.bytesAsSlice(ahci.Sector, tmp_buf);
+            r += try ahci.writeSectors(self.base.port, lba, sectors);
+        },
+    }
+
+    return r;
 }
 
 // copies the ports to a internal struct
@@ -375,4 +484,102 @@ pub fn getPartitionFromGUID(self: *Self, guid: Partition.Guid, multi: bool) ?*Pa
     };
 
     return found_part;
+}
+
+fn extractAtaString(buf: []const u16, out: []u8) []const u8 {
+    var i: usize = 0;
+    while (i < buf.len and (i * 2 + 1) < out.len) : (i += 1) {
+        const word = buf[i];
+        out[i * 2] = @intCast((word >> 8) & 0xFF);
+        out[i * 2 + 1] = @intCast(word & 0xFF);
+    }
+
+    // trim trailing spaces
+    var end = out.len;
+    while (end > 0 and out[end - 1] == ' ') : (end -= 1) {}
+
+    return out[0..end];
+}
+
+pub fn getModelNumber(self: Self, model_buf: *[40]u8) []const u8 {
+    return extractAtaString(self.drive_info[27..47], model_buf);
+}
+
+pub fn getSerialNumber(self: Self, serial_buf: *[20]u8) []const u8 {
+    return extractAtaString(self.drive_info[10..20], serial_buf);
+}
+
+pub fn getFirmwareRevision(self: Self, fw_buf: *[8]u8) []const u8 {
+    return extractAtaString(self.drive_info[23..27], fw_buf);
+}
+
+pub fn getTotalLBA28(self: Self) u32 {
+    const w = self.drive_info;
+    return @as(u32, w[60]) |
+        (@as(u32, w[61]) << 16);
+}
+
+pub fn getTotalLBA48(self: Self) ?u64 {
+    if (!self.supportsLBA48()) return null;
+
+    const w = self.drive_info;
+
+    return (@as(u64, w[100])) |
+        (@as(u64, w[101]) << 16) |
+        (@as(u64, w[102]) << 32) |
+        (@as(u64, w[103]) << 48);
+}
+
+pub fn getTotalSectors(self: Self) u64 {
+    if (self.supportsLBA48()) {
+        return self.getTotalLBA48().?;
+    }
+
+    return self.getTotalLBA28();
+}
+
+pub fn getSectorSize(self: Self) u32 {
+    const word = self.drive_info[106];
+
+    log.debug("LBA28: {x}", .{self.getTotalLBA28()});
+    log.debug("LBA48: {?x}", .{self.getTotalLBA48()});
+    log.debug("word83: {x}", .{self.drive_info[83]});
+    log.debug("word60: {x}", .{self.drive_info[60]});
+    log.debug("word61: {x}", .{self.drive_info[61]});
+
+    if ((word & (1 << 12)) != 0) {
+        const size_low = self.drive_info[117];
+        const size_high = self.drive_info[118];
+        const size = (@as(u32, size_high) << 16) | size_low;
+        if (size != 0) return size;
+    }
+
+    return 512;
+}
+
+pub fn supportsLBA48(self: Self) bool {
+    return ((self.drive_info[83] & (1 << 10)) != 0) and
+        ((self.drive_info[86] & (1 << 10)) != 0);
+}
+
+pub fn supportsDMA(self: Self) bool {
+    return (self.drive_info[49] & (1 << 8)) != 0;
+}
+
+pub fn capabilities(self: Self) u16 {
+    return self.drive_info[49];
+}
+
+pub fn getTotalSize(self: Self) u64 {
+    return self.getTotalSectors() * self.getSectorSize();
+}
+
+// save the partition table from gpt to disk as gpt format
+pub fn savePartitions(self: *Self) void {
+    const gpt = @import("disks/gpt.zig");
+    const allocator = @import("root").heap.allocator();
+
+    gpt.savePartitions(self, allocator) catch {
+        log.err("gpt Failed to save partitions", .{});
+    };
 }

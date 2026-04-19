@@ -152,6 +152,7 @@ pub fn putchar(c: u8) void {
             terminal_row += 1;
         }
     } else {
+        if (!std.ascii.isPrint(c)) return;
         drawChar(c, terminal_column, terminal_row);
         terminal_column += 1;
         if (terminal_column == getTextWidth()) {

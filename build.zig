@@ -93,6 +93,7 @@ pub fn build(b: *std.Build) void {
         "-display", display,
         "-serial",  "stdio",
     });
+
     if (stal) {
         run_qemu_cmd.addArgs(&.{ "-no-reboot", "-no-shutdown" });
     }

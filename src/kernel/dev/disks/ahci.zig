@@ -51,6 +51,9 @@ const ATA_DEV_BUSY = 0x80;
 const ATA_DEV_DRQ = 0x08;
 const MAX_MEMORY_READABLE = 16 * 1024 * 1024; // we can read up to 16MB, 4 MB per PRDT entry
 
+const ATA_READ_DMA_EXT = 0x25;
+const ATA_WRITE_DMA_EXT = 0x35;
+
 const BUS_MASTER = 1 << 2;
 const MEMORY_SPACE = 1 << 1;
 const IO_SPACE = 1 << 0;
@@ -337,7 +340,7 @@ pub fn readSectors(port: *const Port, lba: u48, buf: []Sector) DiskError!usize {
     }
 
     switch (port.type) {
-        .sata => sendCommandATA(table, lba, buf),
+        .sata => sendCommandATA(table, ATA_READ_DMA_EXT, lba, buf),
         .satapi => sendCommandATAPI(table, lba, buf),
         else => {
             log.err("Unsupported disk type: {s}", .{@tagName(port.type)});
@@ -350,13 +353,97 @@ pub fn readSectors(port: *const Port, lba: u48, buf: []Sector) DiskError!usize {
     return total_bytes;
 }
 
-fn sendCommandATA(table: *CommandTable, lba: u48, buf: []Sector) void {
+fn writeSectorsChunk(port: *const Port, lba: u48, buf: []const Sector) DiskError!usize {
+    if (buf.len == 0) return 0;
+
+    port.hba.int_status = @bitCast(@as(i32, -1)); // clear pending interrupts
+
+    const total_bytes = buf.len * SECTOR_SIZE;
+
+    const slot = findCmdSlot(port.hba, port.num_of_slots) orelse return error.NoFreeCommandList;
+
+    const cmd_list_virt = bootinfo.toVirtualHHDM(port.hba.cmd_list_base);
+    const headers: [*]CommandHeader = @ptrFromInt(cmd_list_virt);
+    const header = &headers[slot];
+
+    const MAX_MEM_PER_ENTRY = 4 * 1024 * 1024; // 4MB per PRDT entry
+
+    const prdt_count: u16 = @intCast((total_bytes + MAX_MEM_PER_ENTRY - 1) / MAX_MEM_PER_ENTRY);
+    header.fis_len = @sizeOf(fis.RegH2D) / 4; // in DWRODS
+    header.write = true;
+    header.prdtl = prdt_count;
+    header.prdbc = 0;
+    header.atapi = port.type == .satapi;
+
+    const table_virt = bootinfo.toVirtualHHDM(header.command_table_base);
+    const table: *CommandTable = @ptrFromInt(table_virt);
+
+    @memset(
+        @as([*]u8, @ptrCast(table))[0 .. @sizeOf(CommandTable) + prdt_count * @sizeOf(PrdtEntry)],
+        0,
+    );
+
+    const prdt = table.prdtSlice(prdt_count);
+    var remaining_bytes = buf.len * SECTOR_SIZE;
+    var buf_phys = bootinfo.toPhysical(@intFromPtr(buf.ptr));
+
+    for (prdt) |*entry| {
+        const chunk = @min(remaining_bytes, MAX_MEM_PER_ENTRY);
+
+        entry.* = .{
+            .data_base = buf_phys,
+            .__reserved = 0,
+            .byte_count = @intCast(chunk - 1),
+            .__reserved2 = 0,
+            .interrupt_on_completion = false, // we are polling rn (TODO: add interrupt driven IO)
+        };
+
+        buf_phys += chunk;
+        remaining_bytes -= chunk;
+    }
+
+    switch (port.type) {
+        .sata => sendCommandATA(table, ATA_WRITE_DMA_EXT, lba, buf),
+        .satapi => return error.UnsupportedDiskType,
+        else => return error.UnsupportedDiskType,
+    }
+
+    try issueCommand(port.hba, slot);
+
+    return total_bytes;
+}
+
+pub fn writeSectors(port: *const Port, lba: u48, buf: []const Sector) DiskError!usize {
+    var remaining_sectors = buf.len;
+    var current_lba = lba;
+    var offset: usize = 0;
+
+    var total_written: usize = 0;
+
+    while (remaining_sectors > 0) {
+        const max_sectors = MAX_MEMORY_READABLE / SECTOR_SIZE;
+        const chunk_sectors = @min(remaining_sectors, max_sectors);
+
+        const chunk = buf[offset .. offset + chunk_sectors];
+
+        const written = try writeSectorsChunk(port, current_lba, chunk);
+
+        total_written += written;
+        remaining_sectors -= chunk_sectors;
+        offset += chunk_sectors;
+        current_lba += chunk_sectors;
+    }
+
+    return total_written;
+}
+
+fn sendCommandATA(table: *CommandTable, cmd: u8, lba: u48, buf: []const Sector) void {
     // ATA READ DMA EXT
     const cmdfis: *fis.RegH2D = @ptrCast(@alignCast(&table.cmd_fis));
     cmdfis.* = .{
         .fis_type = .reg_h2d,
         .c = .command,
-        .command = 0x25, // READ DMA EXT
+        .command = cmd, // READ DMA EXT
         .device = 1 << 6, // LBA mode
         .lba_low = @truncate(lba),
         .lba_high = @truncate(lba >> 24),
