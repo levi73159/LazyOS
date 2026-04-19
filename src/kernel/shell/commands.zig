@@ -298,6 +298,7 @@ fn partSubcmd(disk: *root.dev.Disk, args: []const []const u8) anyerror!void {
     if (std.mem.eql(u8, "set", part_cmd)) {
         if (args.len < 3) {
             std.log.err("Usage: disk drive part set [id: -n{{name}} -u{{uuid}} -i{{index}}] [root,filesystem]", .{});
+            return;
         }
         const identifier = args[1];
         const partition = getPart(disk, identifier) orelse {
@@ -309,8 +310,13 @@ fn partSubcmd(disk: *root.dev.Disk, args: []const []const u8) anyerror!void {
         if (std.mem.eql(u8, what, "root")) {
             partition.guid = .linux_root_x86_64;
             disk.savePartitions(); // writes to disk
+        } else {
+            std.log.err("Invalid partition flag!", .{});
         }
+        return;
     }
+
+    std.log.err("Invalid partition command: {s}", .{part_cmd});
 }
 
 fn getPart(disk: *root.dev.Disk, identifier: []const u8) ?*root.dev.Partition {

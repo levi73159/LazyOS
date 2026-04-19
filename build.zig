@@ -49,7 +49,6 @@ pub fn build(b: *std.Build) void {
         .dwarf_format = .@"64",
         .pic = false,
         .strip = false,
-        .error_tracing = true,
         .omit_frame_pointer = false,
     });
     const kernel = b.addExecutable(.{
@@ -182,7 +181,11 @@ pub fn makeImage(b: *std.Build, kernel: *std.Build.Step.Compile, programs: Progr
     _ = files.addCopyDirectory(b.path("zig-out/ui"), "ui", .{}); // TGAs go in /ui
     _ = files.addCopyDirectory(programs.dir, "bin", .{});
 
+    const ask_sudo = b.addSystemCommand(&.{ "sudo", "-v" });
+    ask_sudo.stdio = .inherit;
+
     const make_img = b.addSystemCommand(&.{ "bash", "scripts/make_img.sh" });
+    make_img.step.dependOn(&ask_sudo.step);
     // output declared first so Zig tracks it
     const img_out = make_img.addOutputFileArg(image_name);
     make_img.addArg("64");
@@ -194,11 +197,10 @@ pub fn makeImage(b: *std.Build, kernel: *std.Build.Step.Compile, programs: Progr
     // install the tracked output file
     const install_img = b.addInstallFileWithDir(img_out, .bin, image_name);
     install_img.step.dependOn(&make_img.step);
-    b.getInstallStep().dependOn(&install_img.step);
 
     const step = b.step("make-image", "Build the ISO image");
     b.getInstallStep().dependOn(step);
-    step.dependOn(&make_img.step);
+    step.dependOn(&install_img.step);
 
     return Image{ .path = img_out, .step = step };
 }

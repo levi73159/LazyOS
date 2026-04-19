@@ -1,6 +1,7 @@
 #!/bin/bash
 
 set -e
+sudo -v
 
 IMG="$1"
 IMG_SIZE="$2" # in MB
