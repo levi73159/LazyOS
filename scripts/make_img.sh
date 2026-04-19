@@ -27,7 +27,7 @@ sudo mkfs.ext2 ${LOOP}p3
 sudo mkdir -p /mnt/lazyos_boot
 sudo mount ${LOOP}p2 /mnt/lazyos_boot
 sudo mkdir -p /mnt/lazyos_boot/EFI/BOOT
-sudo cp src/bootloader/limine.conf /mnt/lazyos_boot/
+sudo cp bootloader/limine.conf /mnt/lazyos_boot/
 sudo cp $KERNEL /mnt/lazyos_boot/
 sudo cp limine/BOOTX64.EFI /mnt/lazyos_boot/EFI/BOOT
 sudo umount /mnt/lazyos_boot
