@@ -124,6 +124,10 @@ fn handleError(frame: *InterruptFrame) noreturn {
     console.printB("Unhandled exception {d} {s}\n", .{ frame.interrupt_number, @tagName(exception) });
 
     console.printB("{f}\n", .{frame});
+    const address = asm volatile ("mov %%cr2, %[addr]\n"
+        : [addr] "=r" (-> u64),
+    );
+    console.printB("CR2: 0x{x}\n", .{address});
 
     @panic("Unhandled exception");
 }

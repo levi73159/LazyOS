@@ -689,31 +689,121 @@ comptime {
     std.debug.assert(@sizeOf(Self) <= FS.AnyFs.state_size);
 }
 
+const MAX_PTRS_PER_BLOCK = 4096 / @sizeOf(u32); // 1024 — max for any supported block size
+
+const IndirectCache = struct {
+    // singly-indirect level
+    si_block: u32 = 0,
+    si_data: [MAX_PTRS_PER_BLOCK]u32 = undefined,
+    si_valid: bool = false,
+
+    // doubly-indirect level: the top-level DI table
+    di_block: u32 = 0,
+    di_data: [MAX_PTRS_PER_BLOCK]u32 = undefined,
+    di_valid: bool = false,
+};
+
+fn getBlockPtrCached(self: *Self, inode: *const Inode, index: u32, cache: *IndirectCache) !u32 {
+    const ptrs_per_block = self.block_size / @sizeOf(u32);
+    const si_base: u32 = 12;
+    const di_base: u32 = si_base + ptrs_per_block;
+
+    // direct
+    if (index < 12) {
+        const direct_ptrs = [12]u32{
+            inode.direct_ptr0, inode.direct_ptr1,  inode.direct_ptr2,
+            inode.direct_ptr3, inode.direct_ptr4,  inode.direct_ptr5,
+            inode.direct_ptr6, inode.direct_ptr7,  inode.direct_ptr8,
+            inode.direct_ptr9, inode.direct_ptr10, inode.direct_ptr11,
+        };
+        return direct_ptrs[index];
+    }
+
+    // singly indirect
+    if (index < di_base) {
+        const si_index = index - si_base;
+        const si_block = inode.singly_indirect_ptr;
+
+        if (!cache.si_valid or cache.si_block != si_block) {
+            const bytes = std.mem.sliceAsBytes(cache.si_data[0..ptrs_per_block]);
+            try self.partition.readAll(si_block * self.block_size, bytes);
+            cache.si_block = si_block;
+            cache.si_valid = true;
+        }
+        return cache.si_data[si_index];
+    }
+
+    // doubly indirect
+    const di_index = index - di_base;
+    const di_table_block = inode.doubly_indirect_ptr;
+
+    // cache the top-level DI table
+    if (!cache.di_valid or cache.di_block != di_table_block) {
+        const bytes = std.mem.sliceAsBytes(cache.di_data[0..ptrs_per_block]);
+        try self.partition.readAll(di_table_block * self.block_size, bytes);
+        cache.di_block = di_table_block;
+        cache.di_valid = true;
+    }
+
+    // the SI sub-block for this DI entry
+    const si_sub_block = cache.di_data[di_index / ptrs_per_block];
+    const si_offset = di_index % ptrs_per_block;
+
+    // reuse si cache for the sub-block
+    if (!cache.si_valid or cache.si_block != si_sub_block) {
+        const bytes = std.mem.sliceAsBytes(cache.si_data[0..ptrs_per_block]);
+        try self.partition.readAll(si_sub_block * self.block_size, bytes);
+        cache.si_block = si_sub_block;
+        cache.si_valid = true;
+    }
+    return cache.si_data[si_offset];
+}
+
 fn vfsReadFile(fs: *FS.AnyFs, handle: *FS.Handle, buf: []u8) !usize {
     const self: *Self = @ptrCast(@alignCast(&fs.state));
-    if (handle.pos >= handle.size) return 0; // EOF
+    if (handle.pos >= handle.size) return 0;
 
     const inode = try self.getInodeNoRef(@intCast(handle.ctx));
     const remaining = handle.size - handle.pos;
-    const to_read = @min(remaining, @as(u32, @intCast(buf.len)));
+    const to_read: u32 = @intCast(@min(remaining, buf.len));
 
-    var block_buf = try self.allocator.alloc(u8, self.block_size);
-    defer self.allocator.free(block_buf);
-
+    var indirect_cache: IndirectCache = .{};
     var done: u32 = 0;
+    var scratch: [4096]u8 = undefined; // for unaligned starts only
+
     while (done < to_read) {
-        const abs_pos = handle.pos + done;
-        const block_index = abs_pos / self.block_size;
-        const byte_off = abs_pos % self.block_size;
+        const abs_pos: u64 = handle.pos + done;
+        const block_index: u32 = @intCast(abs_pos / self.block_size);
+        const byte_off: u32 = @intCast(abs_pos % self.block_size);
 
-        const block_ptr = try self.getBlockPtr(&inode, block_index);
-        if (block_ptr == 0) break; // sparse block
+        const first_ptr = try self.getBlockPtrCached(&inode, block_index, &indirect_cache);
+        if (first_ptr == 0) break; // sparse block
 
-        try self.readBlock(block_ptr, block_buf);
+        // unaligned start: read one block into scratch, copy what we need
+        if (byte_off != 0) {
+            try self.partition.readAll(@as(u64, first_ptr) * self.block_size, scratch[0..self.block_size]);
+            const chunk = @min(self.block_size - byte_off, to_read - done);
+            @memcpy(buf[done..][0..chunk], scratch[byte_off..][0..chunk]);
+            done += chunk;
+            continue;
+        }
 
-        const chunk = @min(self.block_size - byte_off, to_read - done);
-        @memcpy(buf[done..][0..chunk], block_buf[byte_off..][0..chunk]);
-        done += chunk;
+        // aligned — detect run of consecutive blocks on disk
+        const max_run_blocks = @min(
+            (to_read - done + self.block_size - 1) / self.block_size,
+            @as(u32, 256), // max 256KB at 1KB blocks = one big DMA op
+        );
+
+        var run: u32 = 1;
+        while (run < max_run_blocks) : (run += 1) {
+            const next_ptr = self.getBlockPtrCached(&inode, block_index + run, &indirect_cache) catch break;
+            if (next_ptr == 0 or next_ptr != first_ptr + run) break; // gap or sparse
+        }
+
+        // read the whole run in ONE disk call
+        const run_bytes = @min(run * self.block_size, to_read - done);
+        try self.partition.readAll(@as(u64, first_ptr) * self.block_size, buf[done..][0..run_bytes]);
+        done += run_bytes;
     }
 
     handle.pos += done;

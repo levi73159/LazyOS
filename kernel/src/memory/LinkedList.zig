@@ -93,18 +93,23 @@ name: ?[]const u8 = null, // name of this heap (used for debugging)
 start: ?*Header = null,
 end: ?*Header = null,
 last_free: ?*Header = null,
+base: usize,
+limit: usize,
 pages_in_heap: u32 = 0,
 pmem: *BitmapAllocator = undefined,
 
-pub fn init(pmem: *BitmapAllocator) Self {
+pub fn init(pmem: *BitmapAllocator, base: usize, limit: usize) Self {
     log.debug("HEADER SIZE: {d}", .{@sizeOf(Header)});
-    const page = pmem.allocPagesV(HEAP_PAGES) catch @panic("out of memory cannot init heap");
+    const page_phys = pmem.allocPages(HEAP_PAGES) catch @panic("out of memory cannot init heap");
+    paging.getKernelVmem().mapRange(base, page_phys, HEAP_PAGES * PAGE_SIZE, .rw);
+
+    const page = base;
     const header: *Header = @ptrFromInt(page);
     header.* = .{
         .flags = .init(HEAP_SIZE - HEADER_SIZE - OFFSET_SIZE, true),
         .next = null,
     };
-    return Self{ .start = header, .end = header, .last_free = header, .pages_in_heap = HEAP_PAGES, .pmem = pmem };
+    return Self{ .start = header, .end = header, .last_free = header, .pages_in_heap = HEAP_PAGES, .pmem = pmem, .base = base, .limit = limit };
 }
 
 // NOTE: only to be called by heap.zig when fully init heap and vmem
@@ -136,14 +141,27 @@ fn findPrev(self: *Self, block: *Header) ?*Header {
 }
 
 fn allocPage(self: *Self, pages: usize) !*Header {
-    const page = try self.pmem.allocPagesV(pages);
-    const header: *Header = @ptrFromInt(page);
+    const base_start = self.base + (self.pages_in_heap * PAGE_SIZE);
+    const end = base_start + (pages * PAGE_SIZE);
+
+    if (end > self.base + self.limit) {
+        return error.OutOfMemory;
+    }
+    for (0..pages) |i| {
+        const virt = base_start + (i * PAGE_SIZE);
+        const phys = self.pmem.allocPage() catch return error.OutOfMemory;
+
+        paging.getKernelVmem().mapPage(virt, phys, .rw);
+    }
+    const header: *Header = @ptrFromInt(base_start);
 
     const size = pages * PAGE_SIZE;
     header.* = .{
         .flags = .init(size - HEADER_SIZE - OFFSET_SIZE, true),
         .next = null,
     };
+
+    self.pages_in_heap += @intCast(pages);
 
     return header;
 }
@@ -160,9 +178,6 @@ fn growHeap(self: *Self, pages: usize) !*Header {
 
     self.end = extra orelse header;
     self.last_free = header;
-
-    self.pages_in_heap += @intCast(pages);
-    if (extra != null) self.pages_in_heap += EXTRA_GROWTH;
 
     return header;
 }

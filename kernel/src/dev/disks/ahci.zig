@@ -242,31 +242,32 @@ fn stopCmd(port: *volatile hba.Port) void {
     }
 }
 
-fn portRebase(port: *volatile hba.Port, nums_of_slots: u16, allocator: mem.Allocator) !void {
+// portRebase — allocate from pmem for physical contiguity
+fn portRebase(port: *volatile hba.Port, nums_of_slots: u16, _: mem.Allocator) !void {
     stopCmd(port);
 
-    const cmd_list = try allocator.alignedAlloc(u8, .fromByteUnits(1024), 1024); // 1024 bytes, 1K alignment
-    @memset(cmd_list, 0);
-
-    const cmd_list_phys = bootinfo.toPhysical(@intFromPtr(cmd_list.ptr));
+    // cmd list: 1KB, 1KB aligned
+    const cmd_list_phys = try pmem.kernel().allocPages(1);
+    const cmd_list_virt = bootinfo.toVirtualHHDM(cmd_list_phys);
+    @memset(@as([*]u8, @ptrFromInt(cmd_list_virt))[0..4096], 0);
     port.cmd_list_base = cmd_list_phys;
 
-    const fis_mem = try allocator.alignedAlloc(u8, .fromByteUnits(256), 256); // 256 bytes, 256 alignment
-    @memset(fis_mem, 0);
-
-    const fis_phys = bootinfo.toPhysical(@intFromPtr(fis_mem.ptr));
+    // FIS receive area: 256 bytes, fits in one page
+    const fis_phys = try pmem.kernel().allocPages(1);
+    const fis_virt = bootinfo.toVirtualHHDM(fis_phys);
+    @memset(@as([*]u8, @ptrFromInt(fis_virt))[0..4096], 0);
     port.fis_base = fis_phys;
 
-    const prdt_count = 4; // 1 PRDT describes 4MB of memory (4 * 4MB = 16MB)
+    const prdt_count = 4;
     const table_size = @sizeOf(CommandTable) + prdt_count * @sizeOf(PrdtEntry);
+    const table_pages = (table_size + 4095) / 4096;
 
-    const cmd_headers: [*]CommandHeader = @ptrCast(@alignCast(cmd_list.ptr));
+    const cmd_headers: [*]CommandHeader = @ptrFromInt(cmd_list_virt);
 
     for (0..nums_of_slots) |i| {
-        const table_mem = try allocator.alignedAlloc(u8, .fromByteUnits(128), table_size);
-        @memset(table_mem, 0);
-
-        const table_phys = bootinfo.toPhysical(@intFromPtr(table_mem.ptr));
+        const table_phys = try pmem.kernel().allocPages(table_pages);
+        const table_virt = bootinfo.toVirtualHHDM(table_phys);
+        @memset(@as([*]u8, @ptrFromInt(table_virt))[0 .. table_pages * 4096], 0);
 
         cmd_headers[i].prdtl = prdt_count;
         cmd_headers[i].command_table_base = table_phys;

@@ -24,6 +24,7 @@ extern const __bss_start: u8;
 extern const __bss_end: u8;
 
 var kernel_vmem: VirtualSpace = undefined;
+var is_initialized: bool = false;
 
 const FRAMEBUFFER_BASE = 0xFFFF_C000_0000_0000;
 
@@ -44,7 +45,6 @@ fn mapFramebuffer(vmem: *VirtualSpace, fb: bootinfo.Framebuffer) void {
     while (offset < size) : (offset += VirtualSpace.HUGE_PAGE_SIZE) {
         vmem.mapHugePage(virt + offset, phys + offset, flags);
     }
-    vmem.addRegion2(heap.allocator(), "Framebuffer", virt - 4096, virt + offset + 4096);
 
     // update screen
     const Screen = @import("../graphics/Screen.zig");
@@ -82,7 +82,6 @@ pub fn init(mb: *const bootinfo.BootInfo) *VirtualSpace {
         const flags = getKernelFlags(virt);
         kernel_vmem.mapPage(virt, physical, flags);
     }
-    addKernelRegions(&kernel_vmem, mb.kernel.virt_addr, mb.kernel.size);
 
     mapFramebuffer(&kernel_vmem, mb.framebuffer);
 
@@ -91,6 +90,7 @@ pub fn init(mb: *const bootinfo.BootInfo) *VirtualSpace {
     @import("isr.zig").register(14, &pageFaultHandler);
     log.debug("Paging initialized", .{});
 
+    is_initialized = true;
     return &kernel_vmem;
 }
 
@@ -116,9 +116,12 @@ fn getKernelFlags(virt: u64) VirtualSpace.PageFlags {
         return .rw;
 }
 
-fn addKernelRegions(vmem: *VirtualSpace, start: usize, size: usize) void {
+pub fn addKernelRegions(vmem: *VirtualSpace, mb: *const bootinfo.BootInfo) void {
     const allocator = heap.allocator();
     const boot = @import("root");
+
+    const start = mb.kernel.virt_addr;
+    const size = mb.kernel.size;
 
     const text_start = @intFromPtr(&__text_start);
     const text_end = @intFromPtr(&__text_end);
@@ -135,6 +138,11 @@ fn addKernelRegions(vmem: *VirtualSpace, start: usize, size: usize) void {
     vmem.addRegion2(allocator, "Kernel .bss", bss_start, bss_end);
     vmem.addRegion2(allocator, "Kernel .rodata", rodata_start, rodata_end);
     vmem.addRegion(allocator, "Kernel data/code unmapped", start, size);
+
+    const frame_buffer = mb.framebuffer;
+    const virt = FRAMEBUFFER_BASE;
+    const offset = frame_buffer.width * frame_buffer.height * frame_buffer.bpp / 8;
+    vmem.addRegion2(heap.allocator(), "Framebuffer", virt - 4096, virt + offset + 4096);
 }
 
 pub fn getPageTable(table: *VirtualSpace.PageTable, index: u9) ?*VirtualSpace.PageTable {
@@ -145,6 +153,7 @@ pub fn getPageTable(table: *VirtualSpace.PageTable, index: u9) ?*VirtualSpace.Pa
 }
 
 pub fn getKernelVmem() *VirtualSpace {
+    if (!is_initialized) @panic("Paging not initialized");
     return &kernel_vmem;
 }
 

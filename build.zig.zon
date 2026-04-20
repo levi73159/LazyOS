@@ -10,6 +10,7 @@
     // internet connectivity.
     .dependencies = .{
         .kernel = .{ .path = "kernel" },
+        .shell = .{ .path = "userland/shell" },
     },
     // Specifies the set of files and directories that are included in this package.
     // Only files and directories listed here are included in the `hash` that
@@ -22,13 +23,13 @@
     .paths = .{
         "build.zig",
         "build.zig.zon",
-        "src",
-        "bootloader",
+        "kernel/",
+        "scripts/",
+        "bootloader/",
         "README.md",
-        "linker.ld",
         "root/",
-        // For example...
-        //"LICENSE",
-        //"README.md",
+        "userland/",
+        "assets/",
+        "build/",
     },
 }

@@ -10,9 +10,14 @@ var acpi_heap: LinkedList = undefined; // strictly use for ACPI purposes (small)
 
 var has_initialized = false;
 
+const KERNEL_HEAP_BASE = 0xffff910000000000;
+const ACPI_HEAP_BASE = 0xffff900000000000;
+
+const KERNEL_HEAP_END = 0xffff920000000000;
+
 pub fn init() void {
-    heap = LinkedList.init(pmem.kernel());
-    acpi_heap = LinkedList.init(pmem.acpi());
+    heap = LinkedList.init(pmem.kernel(), KERNEL_HEAP_BASE, KERNEL_HEAP_END - KERNEL_HEAP_BASE);
+    acpi_heap = LinkedList.init(pmem.acpi(), ACPI_HEAP_BASE, KERNEL_HEAP_BASE - ACPI_HEAP_BASE);
     has_initialized = true;
 }
 

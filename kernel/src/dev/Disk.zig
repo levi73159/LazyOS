@@ -1,6 +1,8 @@
 //! Disk interface
 
 const std = @import("std");
+const root = @import("root");
+const bootinfo = root.arch.bootinfo;
 const io = @import("root").io;
 const log = std.log.scoped(._disk);
 
@@ -44,10 +46,15 @@ const AHCIPortArray = struct {
 
 pub var disks: [32 + 2]?Self = .{null} ** (32 + 2);
 
+pub const DMA_BUF_SECTORS: usize = 128;
+pub const MAX_SECTOR_SIZE: usize = 512;
+pub const DMA_BUF_PAGES: usize = (DMA_BUF_SECTORS * MAX_SECTOR_SIZE) / 0x1000;
+
 base: BaseUnion,
 drive_info: [256]u16,
 drive_type: DriveType,
 read_only: bool = false,
+dma_buf: usize = 0,
 
 partitions: []?Partition = &.{},
 block_cache: BlockCache = .{}, // SCSI doesn't use this block cache (because 512 byte sectors hardcoded when scsi is 2048 byte sectors)
@@ -104,11 +111,17 @@ pub fn init(disk: u8) DiskInitError!Self {
             return err;
         };
 
+        const dma_buf = root.pmem.kernel().allocPagesV(DMA_BUF_PAGES) catch |err| {
+            log.err("Failed to allocate DMA buffer for disk {d}: {s}", .{ disk, @errorName(err) });
+            return error.PortNotFound;
+        };
+
         return Self{
             .drive_info = drive_info,
             .drive_type = .ahci,
             .base = .{ .port = port },
             .read_only = false,
+            .dma_buf = dma_buf,
         };
     } else {
         return DiskInitError.UnusedPort;
@@ -153,8 +166,10 @@ fn readSectorRaw(self: *Self, lba: u32, buf: *[BlockCache.BLOCK_SIZE]u8) DiskErr
             try ata.readSectors(self.base.legacy_base, lba, sectors);
         },
         .ahci => {
-            const sectors = std.mem.bytesAsSlice(ahci.Sector, buf);
+            const dma_virt: *[BlockCache.BLOCK_SIZE]u8 = @ptrFromInt(self.dma_buf);
+            const sectors = std.mem.bytesAsSlice(ahci.Sector, dma_virt);
             _ = try ahci.readSectors(self.base.port, lba, sectors);
+            @memcpy(buf, dma_virt);
         },
         .atapi => unreachable, // 2048-byte sectors, never routed here
     }
@@ -169,16 +184,18 @@ pub fn read(self: *Self, lba: u32, buf: []u8) DiskError!usize {
     if (buf.len == 0) return 0;
 
     switch (self.drive_type) {
-        .ata, .ahci => {
-            // AHCI SATAPI has 2048-byte sectors, bypass cache
-            if (self.drive_type == .ahci and ahci.sectorSize(self.base.port) != BlockCache.BLOCK_SIZE) {
+        .ahci => {
+            // SATAPI: 2048-byte sectors, old path
+            if (ahci.sectorSize(self.base.port) != BlockCache.BLOCK_SIZE) {
                 if (buf.len % ahci.SECTOR_SIZE != 0) return self.unalignedRead(lba, buf);
                 const sectors = std.mem.bytesAsSlice(ahci.Sector, buf);
                 return ahci.readSectors(self.base.port, lba, sectors);
             }
-
+            // bulk path — read through large DMA bounce buffer
+            return self.readBulkAHCI(lba, buf);
+        },
+        .ata => {
             if (buf.len % BlockCache.BLOCK_SIZE != 0) return self.unalignedRead(lba, buf);
-
             const sector_count = buf.len / BlockCache.BLOCK_SIZE;
             for (0..sector_count) |i| {
                 const cur_lba = lba + @as(u32, @intCast(i));
@@ -187,8 +204,6 @@ pub fn read(self: *Self, lba: u32, buf: []u8) DiskError!usize {
             }
             return buf.len;
         },
-
-        // 2048-byte sector drives, no cache
         .atapi => {
             if (buf.len % atapi.SECTOR_SIZE != 0) return self.unalignedRead(lba, buf);
             const sectors = std.mem.bytesAsSlice(atapi.Sector, buf);
@@ -196,6 +211,35 @@ pub fn read(self: *Self, lba: u32, buf: []u8) DiskError!usize {
             return buf.len;
         },
     }
+}
+
+fn readBulkAHCI(self: *Self, lba: u32, buf: []u8) DiskError!usize {
+    const dma_capacity = DMA_BUF_SECTORS * ahci.SECTOR_SIZE; // 64KB
+    const dma_virt = self.dma_buf;
+
+    var offset: usize = 0;
+    var cur_lba = lba;
+
+    while (offset < buf.len) {
+        const remaining = buf.len - offset;
+        const chunk_bytes = std.mem.alignBackward(usize, @min(remaining, dma_capacity), ahci.SECTOR_SIZE);
+        if (chunk_bytes == 0) {
+            // sub-sector tail — use unaligned path
+            const r = try self.unalignedRead(cur_lba, buf[offset..]);
+            offset += r;
+            break;
+        }
+        const chunk_sectors = chunk_bytes / ahci.SECTOR_SIZE;
+
+        const dma_slice: []ahci.Sector = @as([*]ahci.Sector, @ptrFromInt(dma_virt))[0..chunk_sectors];
+        _ = try ahci.readSectors(self.base.port, cur_lba, dma_slice);
+
+        @memcpy(buf[offset..][0..chunk_bytes], @as([*]u8, @ptrFromInt(dma_virt))[0..chunk_bytes]);
+        offset += chunk_bytes;
+        cur_lba += @intCast(chunk_sectors);
+    }
+
+    return buf.len;
 }
 
 /// Offset is in bytes
@@ -273,7 +317,7 @@ fn unalignedRead(self: *Self, lba: u32, buf: []u8) DiskError!usize {
 }
 
 fn __inner_unalignedRead(self: Self, lba: u32, tmp_buf: []u8, buf: []u8) DiskError!usize {
-    const sector_count = (buf.len + tmp_buf.len - 1) / tmp_buf.len; // round up to nearest sector
+    const sector_count = (buf.len + tmp_buf.len - 1) / tmp_buf.len;
     for (0..sector_count) |i| {
         const sector_offset = i * tmp_buf.len;
         const actual_lba: u32 = @intCast(lba + i);
@@ -288,8 +332,11 @@ fn __inner_unalignedRead(self: Self, lba: u32, tmp_buf: []u8, buf: []u8) DiskErr
                 try atapi.readSectors(self.base.legacy_base, actual_lba, sectors);
             },
             .ahci => {
-                const sectors = std.mem.bytesAsSlice(ahci.Sector, tmp_buf);
+                // bounce through DMA-safe buffer
+                const dma_virt: *[ahci.SECTOR_SIZE]u8 = @ptrFromInt(self.dma_buf);
+                const sectors = std.mem.bytesAsSlice(ahci.Sector, dma_virt);
                 _ = try ahci.readSectors(self.base.port, actual_lba, sectors);
+                @memcpy(tmp_buf, dma_virt[0..tmp_buf.len]);
             },
         }
 
@@ -405,8 +452,7 @@ fn unalignedWrite(self: *Self, lba: u32, data: []const u8) DiskError!usize {
 }
 
 fn __inner_unalignedWrite(self: *Self, lba: u32, tmp_buf: []u8, buf: []const u8) DiskError!usize {
-    // see how many sectors we can write without going to unaligned
-    const end_aligned = std.mem.alignBackward(usize, buf.len, tmp_buf.len); // how many bytes we can write without going to unaligned
+    const end_aligned = std.mem.alignBackward(usize, buf.len, tmp_buf.len);
 
     var r: usize = 0;
     switch (self.drive_type) {
@@ -415,12 +461,17 @@ fn __inner_unalignedWrite(self: *Self, lba: u32, tmp_buf: []u8, buf: []const u8)
             try ata.writeSectors(self.base.legacy_base, lba, sectors);
             r = end_aligned;
         },
-        .atapi => {
-            return error.ReadOnlyDisk; // atapi is read-only because it is cdrom
-        },
+        .atapi => return error.ReadOnlyDisk,
         .ahci => {
-            const sectors = std.mem.bytesAsSlice(ahci.Sector, buf[0..end_aligned]);
-            r = try ahci.writeSectors(self.base.port, lba, sectors);
+            // write aligned portion through DMA bounce buffer, one sector at a time
+            var written: usize = 0;
+            while (written < end_aligned) : (written += ahci.SECTOR_SIZE) {
+                const dma_virt: *[ahci.SECTOR_SIZE]u8 = @ptrFromInt(self.dma_buf);
+                @memcpy(dma_virt, buf[written..][0..ahci.SECTOR_SIZE]);
+                const sectors = std.mem.bytesAsSlice(ahci.Sector, dma_virt);
+                _ = try ahci.writeSectors(self.base.port, lba + @as(u32, @intCast(written / ahci.SECTOR_SIZE)), sectors);
+            }
+            r = end_aligned;
         },
     }
 
@@ -428,8 +479,6 @@ fn __inner_unalignedWrite(self: *Self, lba: u32, tmp_buf: []u8, buf: []const u8)
     if (buf.len == end_aligned) return r;
 
     const written_lba = r / tmp_buf.len;
-
-    // now we want to read the sector
     try self.readAll(@intCast(lba + written_lba), tmp_buf);
 
     const rest = buf[end_aligned..];
@@ -441,12 +490,12 @@ fn __inner_unalignedWrite(self: *Self, lba: u32, tmp_buf: []u8, buf: []const u8)
             try ata.writeSectors(self.base.legacy_base, lba, sectors);
             r += tmp_buf.len;
         },
-        .atapi => {
-            return error.ReadOnlyDisk; // atapi is read-only because it is cdrom
-        },
+        .atapi => return error.ReadOnlyDisk,
         .ahci => {
-            const sectors = std.mem.bytesAsSlice(ahci.Sector, tmp_buf);
-            r += try ahci.writeSectors(self.base.port, lba, sectors);
+            const dma_virt: *[ahci.SECTOR_SIZE]u8 = @ptrFromInt(self.dma_buf);
+            @memcpy(dma_virt, tmp_buf[0..ahci.SECTOR_SIZE]);
+            const sectors = std.mem.bytesAsSlice(ahci.Sector, dma_virt);
+            r += try ahci.writeSectors(self.base.port, lba + @as(u32, @intCast(end_aligned / ahci.SECTOR_SIZE)), sectors);
         },
     }
 

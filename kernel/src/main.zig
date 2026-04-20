@@ -61,9 +61,11 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     log.debug("Kerenl location: physical 0x{x} virtual 0x{x}", .{ mb.kernel.phys_addr, mb.kernel.virt_addr });
 
     pmem.init(mb);
-    heap.init();
     const vmem = paging.init(mb);
+    heap.init();
     heap.addRegions();
+
+    paging.addKernelRegions(vmem, mb);
 
     log.debug("Framebuffer address: {x}", .{@intFromPtr(screen.buffer.ptr)});
 
