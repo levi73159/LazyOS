@@ -1,48 +1,29 @@
 #!/bin/bash
-
 set -e
-sudo -v
 
-IMG="$1"
-IMG_SIZE="$2" # in MB
-ROOT_FOLDER="$3" # files that will be in root partition
-KERNEL="$4"
+BOOT_IMG="$1"
+ROOT_IMG="$2"
+OUTPUT="$3"
+TOTAL_MB="${4:-64}"
 
-dd if=/dev/zero of="$IMG" bs=1M count="$IMG_SIZE" && sync
+BOOT_START_SECTOR=4096    # 2MiB in 512-byte sectors
+ROOT_START_SECTOR=65536   # 32MiB in 512-byte sectors
 
-parted -s $IMG mklabel gpt
-parted -s $IMG mkpart BIOS "" 1MiB 2MiB      # partition 1 — BIOS boot
-parted -s $IMG set 1 bios_grub on
-parted -s $IMG mkpart ESP fat32 2MiB 32MiB   # partition 2 — EFI/boot
-parted -s $IMG set 2 esp on
-parted -s $IMG mkpart primary ext2 32MiB 100%   # partition 3 — root
+# blank image + GPT
+dd if=/dev/zero of="$OUTPUT" bs=1M count="$TOTAL_MB"
+parted -s "$OUTPUT" mklabel gpt
+parted -s "$OUTPUT" mkpart BIOS  ""    1MiB  2MiB
+parted -s "$OUTPUT" set 1 bios_grub on
+parted -s "$OUTPUT" mkpart ESP fat32   2MiB  32MiB
+parted -s "$OUTPUT" set 2 esp on
+parted -s "$OUTPUT" mkpart primary ext2 32MiB 100%
 
-# attach to loop device so we can copy files
-LOOP=$(sudo losetup -fP --show "$IMG")
+# write partition images at correct offsets
+dd if="$BOOT_IMG" of="$OUTPUT" bs=512 seek=$BOOT_START_SECTOR conv=notrunc
+dd if="$ROOT_IMG" of="$OUTPUT" bs=512 seek=$ROOT_START_SECTOR  conv=notrunc
 
-sudo mkfs.fat -F 16 ${LOOP}p2
-sudo mkfs.ext2 ${LOOP}p3
+# root.ext2 clobbered the backup GPT — move it back to where it belongs
+sgdisk --move-second-header "$OUTPUT"
 
-# 'boot' partition
-sudo mkdir -p /mnt/lazyos_boot
-sudo mount ${LOOP}p2 /mnt/lazyos_boot
-sudo mkdir -p /mnt/lazyos_boot/EFI/BOOT
-sudo cp bootloader/limine.conf /mnt/lazyos_boot/
-sudo cp $KERNEL /mnt/lazyos_boot/
-sudo cp limine/BOOTX64.EFI /mnt/lazyos_boot/EFI/BOOT
-sudo umount /mnt/lazyos_boot
-sudo rmdir /mnt/lazyos_boot
-
-# 'root' partition
-sudo mkdir -p /mnt/lazyos_root
-sudo mount ${LOOP}p3 /mnt/lazyos_root
-
-sudo cp -r $ROOT_FOLDER/* /mnt/lazyos_root
-
-sudo umount /mnt/lazyos_root
-sudo rmdir /mnt/lazyos_root
-sudo losetup -d $LOOP
-
-sudo ./limine/limine bios-install $IMG
-
-echo "Done: $IMG"
+./limine/limine bios-install "$OUTPUT"
+echo "Done: $OUTPUT"
