@@ -11,7 +11,7 @@ const boot = root.boot;
 
 const PAGE_SIZE = heap.PAGE_SIZE;
 
-const STACK_SIZE = 16 * 1024; // or 4 pages
+const STACK_SIZE = 64 * 1024; // or 4 pages
 
 const log = std.log.scoped(._scheduler);
 

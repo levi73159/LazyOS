@@ -26,6 +26,8 @@ pub fn build(b: *std.Build) void {
         .pic = false,
         .strip = false,
         .omit_frame_pointer = false,
+        .stack_check = false,
+        .stack_protector = false,
     });
     const kernel = b.addExecutable(.{
         .name = "kernel",

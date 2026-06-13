@@ -6,7 +6,7 @@ if [ "$#" -le 0 ]; then
     exit 1
 fi
 
-QEMU_ARGS="-S -gdb stdio -hda $1 --machine q35,accel=kvm --cpu host -bios /usr/share/ovmf/x64/OVMF.4m.fd"
+QEMU_ARGS="-S -gdb stdio -hda $1 --machine q35,accel=kvm --cpu host -bios /usr/share/ovmf/x64/OVMF.4m.fd --no-reboot --no-shutdown"
 
 # kernel starts at 1M aka 0x100000
 # layout asm

@@ -767,16 +767,19 @@ fn vfsReadFile(fs: *FS.AnyFs, handle: *FS.Handle, buf: []u8) !usize {
     const remaining = handle.size - handle.pos;
     const to_read: u32 = @intCast(@min(remaining, buf.len));
 
-    var indirect_cache: IndirectCache = .{};
+    const indirect_cache: *IndirectCache = try self.allocator.create(IndirectCache);
+    defer self.allocator.destroy(indirect_cache);
+
     var done: u32 = 0;
-    var scratch: [4096]u8 = undefined; // for unaligned starts only
+    const scratch: []u8 = try self.allocator.alloc(u8, 4096);
+    defer self.allocator.free(scratch);
 
     while (done < to_read) {
         const abs_pos: u64 = handle.pos + done;
         const block_index: u32 = @intCast(abs_pos / self.block_size);
         const byte_off: u32 = @intCast(abs_pos % self.block_size);
 
-        const first_ptr = try self.getBlockPtrCached(&inode, block_index, &indirect_cache);
+        const first_ptr = try self.getBlockPtrCached(&inode, block_index, indirect_cache);
         if (first_ptr == 0) break; // sparse block
 
         // unaligned start: read one block into scratch, copy what we need
@@ -796,7 +799,7 @@ fn vfsReadFile(fs: *FS.AnyFs, handle: *FS.Handle, buf: []u8) !usize {
 
         var run: u32 = 1;
         while (run < max_run_blocks) : (run += 1) {
-            const next_ptr = self.getBlockPtrCached(&inode, block_index + run, &indirect_cache) catch break;
+            const next_ptr = self.getBlockPtrCached(&inode, block_index + run, indirect_cache) catch break;
             if (next_ptr == 0 or next_ptr != first_ptr + run) break; // gap or sparse
         }
 

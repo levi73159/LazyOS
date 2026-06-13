@@ -45,16 +45,16 @@ pub fn make(b: *std.Build, opts: Options) Programs {
 fn buildC(b: *std.Build, out: []const u8) *std.Build.Step {
     const programs = "userland/programs";
 
-    var dir = b.build_root.handle.openDir(programs, .{ .iterate = true }) catch |err| {
+    var dir = b.build_root.handle.openDir(b.graph.io, programs, .{ .iterate = true }) catch |err| {
         std.log.err("Failed to open {s}: {s}", .{ programs, @errorName(err) });
         exit(1);
     };
-    defer dir.close();
+    defer dir.close(b.graph.io);
 
     const step = b.step("make-c-programs", "Build all C programs (userland/programs)");
 
     var it = dir.iterate();
-    while (it.next() catch |err| @panic(@errorName(err))) |entry| {
+    while (it.next(b.graph.io) catch |err| @panic(@errorName(err))) |entry| {
         if (entry.kind != .directory) continue;
 
         const name = entry.name;
@@ -64,14 +64,14 @@ fn buildC(b: *std.Build, out: []const u8) *std.Build.Step {
         cmd.addDirectoryArg(b.path(path));
 
         // iterate contents and add it as input to cmd args
-        var program_dir = dir.openDir(name, .{ .iterate = true }) catch |err| {
+        var program_dir = dir.openDir(b.graph.io, name, .{ .iterate = true }) catch |err| {
             std.log.err("Failed to open {s}: {s}", .{ name, @errorName(err) });
             exit(1);
         };
-        defer program_dir.close();
+        defer program_dir.close(b.graph.io);
 
         var program_it = program_dir.iterate();
-        while (program_it.next() catch |err| @panic(@errorName(err))) |program_entry| {
+        while (program_it.next(b.graph.io) catch |err| @panic(@errorName(err))) |program_entry| {
             if (program_entry.kind != .file) continue;
             cmd.addFileInput(b.path(b.pathJoin(&.{ path, program_entry.name })));
         }
