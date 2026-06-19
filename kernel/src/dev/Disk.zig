@@ -57,12 +57,15 @@ read_only: bool = false,
 dma_buf: usize = 0,
 
 partitions: []?Partition = &.{},
-block_cache: BlockCache = .{}, // SCSI doesn't use this block cache (because 512 byte sectors hardcoded when scsi is 2048 byte sectors)
+// SCSI doesn't use this block cache (because 512 byte sectors hardcoded when scsi is 2048 byte sectors)
+// Heap-allocated: BlockCache is ~67 KiB, so keeping it out of line keeps `Self` small and cheap to pass/copy.
+block_cache: *BlockCache,
 
 pub const DiskError = error{
     InvalidDisk,
     UnalignedBuffer,
     ReadOnlyDisk,
+    OutOfMemory,
 } || ata.DriveError || ahci.DiskError;
 
 pub const DiskInitError = error{
@@ -102,6 +105,10 @@ pub fn get(disk: u8) ?*Self {
     return &disks[disk].?;
 }
 
+pub fn deinit(self: *Self) void {
+    root.heap.allocator().destroy(self.block_cache);
+}
+
 pub fn init(disk: u8) DiskInitError!Self {
     if (disk >= ports.len) return DiskInitError.PortNotFound;
     if (ports.get(disk)) |port| {
@@ -116,12 +123,16 @@ pub fn init(disk: u8) DiskInitError!Self {
             return error.PortNotFound;
         };
 
+        const cache = try root.heap.allocator().create(BlockCache);
+        cache.* = .{};
+
         return Self{
             .drive_info = drive_info,
             .drive_type = .ahci,
             .base = .{ .port = port },
             .read_only = false,
             .dma_buf = dma_buf,
+            .block_cache = cache,
         };
     } else {
         return DiskInitError.UnusedPort;
@@ -130,11 +141,17 @@ pub fn init(disk: u8) DiskInitError!Self {
 
 pub fn initLegacy(disk: u8) DiskError!Self {
     const base: u16 = if (disk == 0) DISK_0 else if (disk == 1) DISK_1 else return error.InvalidDisk;
+
+    const cache = try root.heap.allocator().create(BlockCache);
+    errdefer root.heap.allocator().destroy(cache);
+    cache.* = .{};
+
     var self = Self{
         .base = .{ .legacy_base = base },
         .drive_info = undefined,
         .drive_type = .ata,
         .read_only = false,
+        .block_cache = cache,
     };
 
     ata.identify(self.base.legacy_base, &self.drive_info) catch |err| {
