@@ -24,7 +24,7 @@ var initialized: bool = false;
 var echo_to_host: bool = false;
 var no_swap: bool = false;
 
-var log_debug: bool = false; // set true if we want to print debug messages to CON
+pub var log_debug: bool = false; // set true if we want to print debug messages to CON
 
 const pixels_per_scanline = 32;
 

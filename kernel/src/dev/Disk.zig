@@ -316,7 +316,7 @@ fn unalignedRead(self: *Self, lba: u32, buf: []u8) DiskError!usize {
     }
 }
 
-fn __inner_unalignedRead(self: Self, lba: u32, tmp_buf: []u8, buf: []u8) DiskError!usize {
+fn __inner_unalignedRead(self: *const Self, lba: u32, tmp_buf: []u8, buf: []u8) DiskError!usize {
     const sector_count = (buf.len + tmp_buf.len - 1) / tmp_buf.len;
     for (0..sector_count) |i| {
         const sector_offset = i * tmp_buf.len;
@@ -366,7 +366,7 @@ fn unalignedReadOffset(self: *Self, lba: u32, offset: usize, buf: []u8) DiskErro
     }
 }
 
-fn __inner_unalignedReadOffset(self: Self, lba: u32, offset: usize, tmp_buf: []u8, buf: []u8) DiskError!usize {
+fn __inner_unalignedReadOffset(self: *const Self, lba: u32, offset: usize, tmp_buf: []u8, buf: []u8) DiskError!usize {
     var r: usize = 0;
     switch (self.drive_type) {
         .ata => {
@@ -508,7 +508,7 @@ pub fn loadAHCIPorts(p: *[32]?ahci.Port, len: usize) void {
     ports.len = len;
 }
 
-pub fn sectorSize(self: Self) u32 {
+pub fn sectorSize(self: *const Self) u32 {
     switch (self.drive_type) {
         .ata => return ata.SECTOR_SIZE,
         .atapi => return atapi.SECTOR_SIZE,
@@ -550,25 +550,25 @@ fn extractAtaString(buf: []const u16, out: []u8) []const u8 {
     return out[0..end];
 }
 
-pub fn getModelNumber(self: Self, model_buf: *[40]u8) []const u8 {
+pub fn getModelNumber(self: *const Self, model_buf: *[40]u8) []const u8 {
     return extractAtaString(self.drive_info[27..47], model_buf);
 }
 
-pub fn getSerialNumber(self: Self, serial_buf: *[20]u8) []const u8 {
+pub fn getSerialNumber(self: *const Self, serial_buf: *[20]u8) []const u8 {
     return extractAtaString(self.drive_info[10..20], serial_buf);
 }
 
-pub fn getFirmwareRevision(self: Self, fw_buf: *[8]u8) []const u8 {
+pub fn getFirmwareRevision(self: *const Self, fw_buf: *[8]u8) []const u8 {
     return extractAtaString(self.drive_info[23..27], fw_buf);
 }
 
-pub fn getTotalLBA28(self: Self) u32 {
+pub fn getTotalLBA28(self: *const Self) u32 {
     const w = self.drive_info;
     return @as(u32, w[60]) |
         (@as(u32, w[61]) << 16);
 }
 
-pub fn getTotalLBA48(self: Self) ?u64 {
+pub fn getTotalLBA48(self: *const Self) ?u64 {
     if (!self.supportsLBA48()) return null;
 
     const w = self.drive_info;
@@ -579,7 +579,7 @@ pub fn getTotalLBA48(self: Self) ?u64 {
         (@as(u64, w[103]) << 48);
 }
 
-pub fn getTotalSectors(self: Self) u64 {
+pub fn getTotalSectors(self: *const Self) u64 {
     if (self.supportsLBA48()) {
         return self.getTotalLBA48().?;
     }
@@ -587,7 +587,7 @@ pub fn getTotalSectors(self: Self) u64 {
     return self.getTotalLBA28();
 }
 
-pub fn getSectorSize(self: Self) u32 {
+pub fn getSectorSize(self: *const Self) u32 {
     const word = self.drive_info[106];
 
     log.debug("LBA28: {x}", .{self.getTotalLBA28()});
@@ -606,20 +606,20 @@ pub fn getSectorSize(self: Self) u32 {
     return 512;
 }
 
-pub fn supportsLBA48(self: Self) bool {
+pub fn supportsLBA48(self: *const Self) bool {
     return ((self.drive_info[83] & (1 << 10)) != 0) and
         ((self.drive_info[86] & (1 << 10)) != 0);
 }
 
-pub fn supportsDMA(self: Self) bool {
+pub fn supportsDMA(self: *const Self) bool {
     return (self.drive_info[49] & (1 << 8)) != 0;
 }
 
-pub fn capabilities(self: Self) u16 {
+pub fn capabilities(self: *const Self) u16 {
     return self.drive_info[49];
 }
 
-pub fn getTotalSize(self: Self) u64 {
+pub fn getTotalSize(self: *const Self) u64 {
     return self.getTotalSectors() * self.getSectorSize();
 }
 

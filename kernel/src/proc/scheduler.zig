@@ -115,6 +115,9 @@ pub fn schedule(frame: *arch.registers.InterruptFrame) void {
 
         if (next == current or (next == task_list and current == null)) {
             if (current == null or current.?.state != .ready) {
+                log.debug("SWITCH->idle: rip={x} cs={x} ss={x} rsp={x} rflags={x}", .{
+                    idle_frame.?.rip, idle_frame.?.cs, idle_frame.?.ss, idle_frame.?.rsp, idle_frame.?.rflags,
+                });
                 frame.* = idle_frame.?;
                 current = null; // no current tasks
                 arch.paging.getKernelVmem().switchTo();
@@ -359,9 +362,10 @@ fn appendTask(task: *Task) void {
         task.next = null;
 
         task.id = current_node.id + 1;
+        log.debug("Adding task with id: {d}", .{task.id});
     } else {
         task_list = task;
-        task.id = 0;
+        task.id = 1;
         task.next = null;
     }
 }
