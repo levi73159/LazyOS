@@ -571,6 +571,10 @@ fn find(self: *Self, path: []const u8) !?InodeWNumber {
     var inode_num: u32 = 2;
     var it = std.mem.splitScalar(u8, path, '/');
 
+    log.debug("find('{s}') start: root inode={d} type=0x{x} isDir={}", .{
+        path, ROOT_INODE, current_inode.type_and_perms, current_inode.isDir(),
+    });
+
     while (it.next()) |component| {
         if (component.len == 0) continue;
         if (!current_inode.isDir()) {
@@ -582,6 +586,9 @@ fn find(self: *Self, path: []const u8) !?InodeWNumber {
             return null;
         };
         current_inode = try self.getInodeNoRef(inode_num);
+        log.debug("  '{s}' -> inode={d} type=0x{x} isDir={} size={d}", .{
+            component, inode_num, current_inode.type_and_perms, current_inode.isDir(), current_inode.size(),
+        });
     }
 
     if (inode_num == ROOT_INODE) log.warn("Root inode found", .{});

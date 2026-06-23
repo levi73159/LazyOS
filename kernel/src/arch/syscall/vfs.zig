@@ -163,6 +163,8 @@ pub fn open(frame: *SyscallFrame) i64 {
     const path_ptr: [*:0]const u8 = @ptrFromInt(frame.rdi);
     const path = std.mem.span(path_ptr);
 
+    log.info("Opening file: {s}", .{path});
+
     const flags: std.os.linux.O = @bitCast(@as(u32, @intCast(frame.rsi)));
     var file = root.fs.FileSystem.getGlobal().open(path) catch |err| {
         if (err == error.FileNotFound) {

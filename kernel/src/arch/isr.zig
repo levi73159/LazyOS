@@ -8,6 +8,7 @@ const console = @import("root").console;
 const host = @import("std").log.scoped(.host);
 const io = @import("io.zig");
 const scheduler = @import("root").proc.scheduler;
+const root = @import("root");
 
 const InterruptFn = *const fn () callconv(.naked) noreturn;
 pub const Handler = *const fn (frame: *InterruptFrame) void;
@@ -112,6 +113,23 @@ fn handleError(frame: *InterruptFrame) noreturn {
             writer.print("!!! UNHANDLED USER EXCEPTION !!!\n", .{}) catch {};
             writer.print("Unhandled exception {d} {s}\n", .{ frame.interrupt_number, @tagName(exception) }) catch {};
             writer.print("{f}\n", .{frame}) catch {};
+
+            const fsbase = root.arch.msr.read(root.arch.msr.MSR_FSBASE);
+            writer.print("fsbase={x}\n", .{fsbase}) catch {};
+
+            const tls_ptr_addr = fsbase - 0x40010;
+            writer.print("tls ptr addr={x}\n", .{tls_ptr_addr}) catch {};
+
+            const vmem = scheduler.getVmem();
+
+            if (vmem.getPhys(tls_ptr_addr, true)) |phys| {
+                writer.print("mapped phys={x}\n", .{phys}) catch {};
+
+                const ptr: *const u64 = @ptrFromInt(root.arch.bootinfo.toVirtualHHDM(phys + (tls_ptr_addr & 0xfff)));
+
+                writer.print("value={x}\n", .{ptr.*}) catch {};
+            }
+
             writer.print("\x1b[0m", .{}) catch {};
 
             scheduler.taskExit(255); // 255 means crash due to exception

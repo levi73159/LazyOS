@@ -339,10 +339,12 @@ pub fn spawnProcess(process: *Process) !u32 {
         .registers = frame,
         .next = null,
         .process = process,
+        .fs_base = process.tcb_base,
     };
 
     root.dev.tty0.fdInit(&process.fd_table);
 
+    log.info("fs_base={x}", .{task.fs_base});
     appendTask(task);
 
     log.debug("Spawned process task {d} entry={x} ustack={x} kstack={x}", .{ task.id, process.entry, process.stack_top, kstack_top });
@@ -521,4 +523,8 @@ fn idleLoop() callconv(.c) noreturn {
     while (true) {
         asm volatile ("sti; hlt");
     }
+}
+
+pub fn getVmem() *arch.VirtualSpace {
+    return if (getCurrentProcess()) |proc| &proc.vmem else arch.paging.getKernelVmem();
 }

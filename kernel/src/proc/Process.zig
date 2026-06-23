@@ -7,18 +7,23 @@ const bootinfo = root.arch.bootinfo;
 const VirtualSpace = root.arch.VirtualSpace;
 const File = root.fs.File;
 
-const log = std.log.scoped(.process);
+const log = std.log.scoped(._process);
 
 pub const USER_STACK_TOP = 0x0000_7FFF_FFFF_E000;
 pub const USER_STACK_SIZE = 1024 * 1024; // 1MB
 pub const USER_STACK_USABLE = USER_STACK_TOP - 0x1000; // rsp starts here
 pub const USER_MEM_MAP_BASE = 0x0000_7000_0000_0000; // MMAP base grows down
+pub const USER_TLS_BASE = 0x0000_6000_0000_0000;
 
 const Self = @This();
 
 const MemoryRegion = struct {
     phys: u64,
     page_count: u64,
+};
+
+const Tcb = extern struct {
+    self: usize,
 };
 
 pub const FD_TABLE_SIZE = 256;
@@ -82,6 +87,10 @@ fd_table: FdTable = .empty(),
 brk_base: usize,
 brk_current: usize,
 
+tls_base: usize,
+tls_size: usize,
+tcb_base: usize,
+
 mmap_current: u64 = USER_MEM_MAP_BASE,
 
 regions: std.ArrayList(MemoryRegion),
@@ -111,6 +120,12 @@ pub fn loadElf(data: []const u8, allocator: std.mem.Allocator) !Self {
     var phdr_vaddr: u64 = 0;
     var first_load_mapped_addr: usize = 0;
 
+    var tls_memz: u64 = 0;
+    var tls_align: u64 = 0;
+    var tls_filesz: u64 = 0;
+    var tls_offset: u64 = 0;
+    var tls_vaddr: u64 = 0;
+
     var end_addr: u64 = 0;
 
     var ph_iter = header.iterateProgramHeadersBuffer(data);
@@ -119,12 +134,25 @@ pub fn loadElf(data: []const u8, allocator: std.mem.Allocator) !Self {
             elf.PT_LOAD => {
                 if (!first_load_seen) {
                     const mapped_virt = std.mem.alignBackward(u64, ph.p_vaddr, paging.PAGE_SIZE);
-                    phdr_vaddr = ph.p_vaddr;
+                    phdr_vaddr = (ph.p_vaddr - ph.p_offset) + header.phoff;
                     first_load_seen = true;
                     first_load_mapped_addr = mapped_virt;
                 }
                 end_addr = @max(end_addr, ph.p_vaddr + ph.p_memsz, paging.PAGE_SIZE);
                 try ptLoad(allocator, ph, data, &regions, &vmem);
+            },
+            elf.PT_TLS => {
+                log.info("Tls segment found at V{x}, phys {x}", .{ ph.p_vaddr, ph.p_paddr });
+                log.info("TLS memsz={x} filesz={x} align={x}", .{
+                    ph.p_memsz,
+                    ph.p_filesz,
+                    ph.p_align,
+                });
+                tls_memz = ph.p_memsz;
+                tls_filesz = ph.p_filesz;
+                tls_align = ph.p_align;
+                tls_offset = ph.p_offset;
+                tls_vaddr = ph.p_vaddr;
             },
             else => {},
         }
@@ -158,6 +186,44 @@ pub fn loadElf(data: []const u8, allocator: std.mem.Allocator) !Self {
 
     vmem.addGuardPage(allocator, "brk end", aligned_end_addr - paging.PAGE_SIZE);
 
+    // // allocate tls:
+    const tls_size = tls_memz;
+    const tcb_offset = std.mem.alignForward(usize, tls_size, @alignOf(Tcb));
+    const tls_total_size = std.mem.alignForward(usize, tcb_offset + @sizeOf(Tcb), root.PAGE_SIZE);
+
+    const tls_pages = tls_total_size / paging.PAGE_SIZE;
+    const tls_phys = try pmem.kernel().allocPages(tls_pages);
+
+    try regions.append(allocator, .{
+        .phys = tls_phys,
+        .page_count = tls_pages,
+    });
+
+    const tls_virt = bootinfo.toVirtualHHDM(tls_phys);
+    const tls_mem_ptr: [*]u8 = @ptrFromInt(tls_virt);
+
+    const tls_memory = tls_mem_ptr[0..tls_total_size];
+
+    @memset(tls_memory, 0);
+
+    if (tls_filesz > 0) {
+        const src = data[tls_offset..][0..tls_filesz];
+        @memcpy(tls_memory[0..src.len], src);
+    }
+
+    vmem.mapRange(USER_TLS_BASE, tls_phys, tls_total_size, .{ .present = true, .user = true, .writeable = true, .execute_disable = true });
+
+    const tcb_phys = tls_phys + tcb_offset;
+    const tcb_addr = USER_TLS_BASE + tcb_offset;
+    const tcb: *Tcb = @ptrFromInt(bootinfo.toVirtualHHDM(tcb_phys));
+    tcb.self = tcb_addr;
+
+    log.info("tls_vaddr={x}", .{tls_vaddr});
+    log.info("tls_base={x}", .{USER_TLS_BASE});
+    log.info("tls_size={x}", .{tls_size});
+    log.info("tcb_offset={x}", .{tcb_offset});
+    log.info("tcb_addr={x}", .{tcb_addr});
+
     return Self{
         .entry = header.entry,
         .stack_top = user_sp,
@@ -165,6 +231,9 @@ pub fn loadElf(data: []const u8, allocator: std.mem.Allocator) !Self {
         .vmem = vmem,
         .brk_base = aligned_end_addr,
         .brk_current = aligned_end_addr,
+        .tls_base = USER_TLS_BASE,
+        .tls_size = tls_total_size,
+        .tcb_base = tcb_addr,
     };
 }
 
@@ -249,6 +318,8 @@ fn ptLoad(allocator: std.mem.Allocator, ph: elf.Elf64_Phdr, data: []const u8, re
     };
 
     vmem.addRegion(allocator, section_name, user_virt, total_size);
+
+    log.info("loaded {s} at vaddr: {x}, phys: {x}, size: {x}", .{ section_name, user_virt, phys, total_size });
 }
 
 const AT_NULL: u64 = 0;
@@ -357,6 +428,13 @@ fn loadStack(
     pushU64(&sp, 0); // envp NULL terminator
     pushU64(&sp, 0); // argv NULL terminator
     pushU64(&sp, 0); // argc = 0
+
+    // SysV ABI requires RSP to be 16-byte aligned at process entry.
+    // The argc/argv/envp/auxv block above pushes an odd number of qwords,
+    // so pad by one word if needed.
+    if (sp % 16 != 0) {
+        sp -= 8;
+    }
 
     return toUser(hhdm_top, sp);
 }

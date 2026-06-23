@@ -274,7 +274,7 @@ pub fn mapRange(self: *const Self, virt: u64, phys: u64, size: u64, flags: PageF
     var offset: u64 = 0;
     while (offset < size_aligned) : (offset += PAGE_SIZE) {
         if (pt_table[va.pt_index].present) {
-            log.warn("Overwritting page {x}, old phys: {x}, new phys: {x}", .{ virt, pt_table[va.pt_index].getAddress(), phys + offset });
+            log.warn("Overwritting page {x}, old phys: {x}, new phys: {x}", .{ virt + offset, pt_table[va.pt_index].getAddress(), phys + offset });
         }
 
         pt_table[va.pt_index] = PageEntry.init(phys + offset, flags);

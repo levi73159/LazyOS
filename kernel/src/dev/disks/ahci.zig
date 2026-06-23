@@ -8,6 +8,7 @@ const pmem = root.pmem;
 const bootinfo = root.arch.bootinfo;
 const ata = @import("ata.zig");
 const pit = root.pit;
+const io = root.io;
 
 const commands = @import("ahci/commands.zig");
 const CommandHeader = commands.CommandHeader;
@@ -293,6 +294,9 @@ pub const Sector = [SECTOR_SIZE]u8;
 
 pub fn readSectors(port: *const Port, lba: u48, buf: []Sector) DiskError!usize {
     if (buf.len == 0) return 0;
+    const flags = io.disableInterrupts();
+    defer io.restoreFlags(flags);
+
     port.hba.int_status = @bitCast(@as(i32, -1)); // clear pending interrupts
 
     const total_bytes = blk: {
@@ -356,6 +360,9 @@ pub fn readSectors(port: *const Port, lba: u48, buf: []Sector) DiskError!usize {
 
 fn writeSectorsChunk(port: *const Port, lba: u48, buf: []const Sector) DiskError!usize {
     if (buf.len == 0) return 0;
+
+    const flags = io.disableInterrupts();
+    defer io.restoreFlags(flags);
 
     port.hba.int_status = @bitCast(@as(i32, -1)); // clear pending interrupts
 

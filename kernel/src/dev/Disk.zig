@@ -383,7 +383,7 @@ fn unalignedReadOffset(self: *Self, lba: u32, offset: usize, buf: []u8) DiskErro
     }
 }
 
-fn __inner_unalignedReadOffset(self: *const Self, lba: u32, offset: usize, tmp_buf: []u8, buf: []u8) DiskError!usize {
+fn __inner_unalignedReadOffset(self: Self, lba: u32, offset: usize, tmp_buf: []u8, buf: []u8) DiskError!usize {
     var r: usize = 0;
     switch (self.drive_type) {
         .ata => {
@@ -395,14 +395,19 @@ fn __inner_unalignedReadOffset(self: *const Self, lba: u32, offset: usize, tmp_b
             r = tmp_buf.len;
         },
         .ahci => {
-            r = try ahci.readSectors(self.base.port, lba, std.mem.bytesAsSlice(ahci.Sector, tmp_buf));
+            // bounce through the HHDM-safe DMA buffer — tmp_buf may live on a
+            // heap-allocated (non-HHDM) kernel stack and is NOT safe to DMA into directly.
+            const dma_bytes: [*]u8 = @ptrFromInt(self.dma_buf);
+            const sectors = std.mem.bytesAsSlice(ahci.Sector, dma_bytes[0..tmp_buf.len]);
+            r = try ahci.readSectors(self.base.port, lba, sectors);
+            @memcpy(tmp_buf[0..r], dma_bytes[0..r]);
         },
     }
 
     const len = @min(r - offset, buf.len);
     @memcpy(buf[0..len], tmp_buf[offset..][0..len]);
 
-    return len; // how much we read/copy into buf
+    return len;
 }
 
 pub fn writeAll(self: *Self, lba: u32, data: []const u8) DiskError!void {

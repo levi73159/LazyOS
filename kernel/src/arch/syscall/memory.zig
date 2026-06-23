@@ -77,9 +77,6 @@ pub fn mmap(frame: *SyscallFrame) i64 {
     const fd = frame.r8;
     const offset = frame.r9;
 
-    _ = fd;
-    _ = offset;
-
     const MAP_ANONYMOUS = 0x20;
     const MAP_SHARED = 0x02;
     _ = MAP_SHARED; // autofix
@@ -89,6 +86,8 @@ pub fn mmap(frame: *SyscallFrame) i64 {
     _ = PROT_READ; // autofix
     const PROT_WRITE = 0x2; // — writable
     const PROT_EXEC = 0x4; // — executable
+
+    log.debug("Calling mmap with addr, len, prot, flags, fd, offset: {}, {}, {}, {}, {}, {}", .{ addr, len, prot, flags, fd, offset });
 
     if (flags & MAP_ANONYMOUS == 0) {
         log.err("Only MAP_ANONYMOUS is supported", .{});
