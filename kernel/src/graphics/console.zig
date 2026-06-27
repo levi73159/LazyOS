@@ -7,6 +7,8 @@ const Screen = @import("Screen.zig");
 const Color = @import("Color.zig");
 const font = @import("fonts/Basic.zig");
 const SerialWriter = root.dev.serial.SerialWriter;
+const dev = root.dev;
+const tty0 = dev.tty0;
 
 const charmap = @import("fonts/charmap.zig");
 
@@ -375,7 +377,7 @@ pub fn setFgBg(fg: vga.Color, bg: vga.Color) void {
     terminal_background = bg.to32bitColor();
 }
 
-fn setAnsiColor(code: u8) void {
+pub fn setAnsiColor(code: u8) void {
     switch (code) {
         // Reset
         0 => setFgBg(.light_grey, .black),

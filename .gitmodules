@@ -8,3 +8,6 @@
 [submodule "vendor/uACPI"]
 	path = vendor/uACPI
 	url = https://github.com/uACPI/uACPI.git
+[submodule "vendor/coreutils"]
+	path = vendor/coreutils
+	url = https://github.com/coreutils/coreutils

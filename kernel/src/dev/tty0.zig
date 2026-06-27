@@ -5,7 +5,7 @@ const File = root.fs.File;
 
 var tty: TTY = .{};
 
-const stdout: File = .{
+pub const stdout: File = .{
     .private = &tty,
     .handle = .{
         .flags = .{ .writable = true, .readable = false, .seekable = false, .executable = false },
@@ -17,7 +17,7 @@ const stdout: File = .{
     .f_ops = &TTY.vtable,
 };
 
-const stdin: File = .{
+pub const stdin: File = .{
     .private = &tty,
     .handle = .{
         .flags = .{ .writable = false, .readable = true, .seekable = false, .executable = false },
@@ -29,7 +29,7 @@ const stdin: File = .{
     .f_ops = &TTY.vtable,
 };
 
-const stderr: File = .{
+pub const stderr: File = .{
     .private = &tty,
     .handle = .{
         .flags = .{ .writable = true, .readable = false, .seekable = false, .executable = false },

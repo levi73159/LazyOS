@@ -15,6 +15,12 @@ const BUF_SIZE = 4096;
 
 const Self = @This();
 
+const AnsiState = enum {
+    normal,
+    escape,
+    csi,
+};
+
 input_buf: [BUF_SIZE]u8 = undefined,
 read_pos: usize = 0,
 write_pos: usize = 0,
@@ -27,6 +33,10 @@ winsize: std.posix.winsize = .{
     .xpixel = 0,
     .ypixel = 0,
 },
+
+state: AnsiState = .normal,
+ansi_buf: [32]u8 = undefined,
+ansi_len: usize = 0,
 
 pub fn hasData(self: *Self) bool {
     return self.line_ready or self.read_pos != self.write_pos;
@@ -143,6 +153,57 @@ pub fn waitAndRead(self: *Self, buf: []u8) usize {
     return self.read(buf);
 }
 
+fn processReg(self: *Self, c: u8) void {
+    switch (self.state) {
+        .normal => {
+            if (c == '\x1b') {
+                self.state = .escape;
+                self.ansi_len = 0;
+                return;
+            }
+            console.putchar(c);
+        },
+
+        .escape => {
+            if (c == '[') {
+                self.state = .csi;
+                return;
+            }
+            self.state = .normal;
+            console.putchar(c);
+        },
+
+        .csi => {
+            if (self.ansi_len < self.ansi_buf.len) {
+                self.ansi_buf[self.ansi_len] = c;
+                self.ansi_len += 1;
+            }
+
+            // end of CSI sequence
+            if (c >= '@' and c <= '~') {
+                handleAnsi(self.ansi_buf[0..self.ansi_len]);
+                self.state = .normal;
+            }
+        },
+    }
+}
+
+fn handleAnsi(seq: []u8) void {
+    // very small subset first
+    // example: "31m"
+    if (seq.len == 0) return;
+
+    var num: u32 = 0;
+    for (seq) |c| {
+        if (c >= '0' and c <= '9') {
+            num = num * 10 + (c - '0');
+        } else if (c == 'm') {
+            console.setAnsiColor(@intCast(num));
+            num = 0;
+        }
+    }
+}
+
 pub fn processOutput(self: *Self, c: u8) void {
     // OPOST — if not set, raw output, no processing
     if (!self.termios.oflag.OPOST) {
@@ -198,7 +259,7 @@ pub fn processOutput(self: *Self, c: u8) void {
             if (self.col > 0) self.col -= 1;
         },
         else => {
-            console.putchar(c);
+            self.processReg(c);
         },
     }
 
