@@ -28,7 +28,7 @@ computer architecture, kernels, memory management, and low-level programming.
 ## Screenshots
 
 ![LazyOS Boot](screenshots/lazyos-boot.png)
-![LazyOS Program Run](screenshots/programruning.png)
+![LazyOS Program Run](screenshots/programrunning.png)
 
 ## Goals
 
