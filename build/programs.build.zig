@@ -29,9 +29,9 @@ pub fn make(b: *std.Build, opts: Options) Programs {
     });
 
     const shell_exe = shell_dep.artifact("shell");
-    const install = b.addInstallArtifact(shell_exe, .{ .dest_dir = .{ .override = .{ .custom = "programs" } } });
-    install.step.dependOn(&shell_exe.step);
-    step.dependOn(&install.step);
+    const install_shell = b.addInstallArtifact(shell_exe, .{ .dest_dir = .{ .override = .{ .custom = rel_path } } });
+    install_shell.step.dependOn(&shell_exe.step);
+    step.dependOn(&install_shell.step);
 
     const c_step = buildC(b, rel_path);
     step.dependOn(c_step);

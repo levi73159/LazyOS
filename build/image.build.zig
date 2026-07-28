@@ -19,11 +19,13 @@ pub fn make(b: *std.Build, kernel: *std.Build.Step.Compile, programs: Programs, 
     _ = files.addCopyDirectory(b.path("zig-out/ui"), "ui", .{}); // TGAs go in /ui
     _ = files.addCopyDirectory(programs.dir, "bin", .{});
 
+    // make a bootable fat image
     const make_boot = b.addSystemCommand(&.{"scripts/make_boot.sh"});
     make_boot.addFileArg(kernel.getEmittedBin());
     const boot_fat = make_boot.addOutputFileArg("boot.fat");
     make_boot.step.dependOn(&kernel.step);
 
+    // make a root ext2
     const make_root = b.addSystemCommand(&.{"scripts/make_root.sh"});
     make_root.addDirectoryArg(files.getDirectory());
     const root_ext2 = make_root.addOutputFileArg("root.ext2");
