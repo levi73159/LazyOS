@@ -381,17 +381,11 @@ pub fn mapHugePage(self: *const Self, virt: u64, phys: u64, flags: PageFlags) vo
 }
 
 pub fn getPhys(self: *const Self, virt: u64, user: bool) ?u64 {
-    const va = VirtualAddress.from(virt);
-    const pdpt_table = getPageTable(self.pml4, va.pml4_index, false) orelse return null;
-    const pd_table = getPageTable(pdpt_table, va.pdpt_index, false) orelse return null;
-    const pt_table = getPageTable(pd_table, va.pd_index, false) orelse return null;
-    const entry = pt_table[va.pt_index];
-    if (!entry.present) return null;
-    if (!entry.user and user) {
-        log.warn("User process try to get privilege page at {x}", .{virt});
-        return null;
-    }
-    return entry.getAddress();
+    const mapping = self.lookup(virt, user, false) orelse return null;
+    // Preserve the page-aligned return contract, including within huge pages.
+    // Masking also excludes the huge-page PAT bit at physical-address bit 12.
+    const base = mapping.entry.getAddress() & ~(mapping.size - 1);
+    return base + ((virt & (mapping.size - 1)) & ~@as(u64, PAGE_SIZE - 1));
 }
 
 pub fn switchTo(self: *const Self) void {
@@ -449,6 +443,59 @@ pub fn getGuardPage(self: *const Self, vaddr: usize) ?GuardPage {
         if (guard.virt == aligned_vaddr) return guard;
     }
     return null;
+}
+
+const Mapping = struct {
+    entry: PageEntry,
+    size: usize,
+};
+
+// Look up existing tables without changing their permissions.
+fn lookup(self: *const Self, vaddr: usize, user: bool, writeable: bool) ?Mapping {
+    const va = VirtualAddress.from(vaddr);
+
+    const pml4_entry = self.pml4[va.pml4_index];
+
+    const pdpt_table = paging.getPageTable(self.pml4, va.pml4_index) orelse return null;
+    var pdpt_entry = pdpt_table[va.pdpt_index];
+    if (!pdpt_entry.present) return null;
+    pdpt_entry.user = pdpt_entry.user and pml4_entry.user;
+    pdpt_entry.writeable = pdpt_entry.writeable and pml4_entry.writeable;
+    pdpt_entry.execute_disable = pdpt_entry.execute_disable or pml4_entry.execute_disable;
+
+    if (pdpt_entry.page_size) {
+        return .{ .entry = pdpt_entry, .size = 1024 * 1024 * 1024 };
+    }
+
+    const pd_table = paging.getPageTable(pdpt_table, va.pdpt_index) orelse return null;
+    var pd_entry = pd_table[va.pd_index];
+    if (!pd_entry.present) return null;
+    pd_entry.user = pd_entry.user and pdpt_entry.user;
+    pd_entry.writeable = pd_entry.writeable and pdpt_entry.writeable;
+    pd_entry.execute_disable = pd_entry.execute_disable or pdpt_entry.execute_disable;
+    if (user and !pd_entry.user) return null;
+    if (writeable and !pd_entry.writeable) return null;
+
+    if (pd_entry.page_size) {
+        return .{ .entry = pd_entry, .size = HUGE_PAGE_SIZE };
+    }
+
+    const pt_table = paging.getPageTable(pd_table, va.pd_index) orelse return null;
+    var entry = pt_table[va.pt_index];
+    if (!entry.present) return null;
+    entry.user = entry.user and pd_entry.user;
+    entry.writeable = entry.writeable and pd_entry.writeable;
+    entry.execute_disable = entry.execute_disable or pd_entry.execute_disable;
+    if (user and !entry.user) return null;
+    if (writeable and !entry.writeable) return null;
+
+    return .{ .entry = entry, .size = PAGE_SIZE };
+}
+
+/// Return the leaf entry with effective permissions across the entire walk.
+pub fn get(self: *const Self, vaddr: usize, user: bool, writeable: bool) ?PageEntry {
+    const mapping = self.lookup(vaddr, user, writeable) orelse return null;
+    return mapping.entry;
 }
 
 pub fn findRegion(self: *const Self, addr: u64) ?Region {

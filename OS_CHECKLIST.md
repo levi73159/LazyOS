@@ -1,12 +1,12 @@
 # LazyOs stability checklist
 
-Created: 2026-10-18. Based on a targeted source review, not a complete audit.
+Created: 2026-10-18. Based on a targeted source review, not a complete audit oh also ai created this checklist but i am going through and fixing the problems to the best of my ability.
 
 ## Kernel fixes
 
-- [ ] Fix dead-task cleanup: save task.next before freeing task.
-- [ ] Validate user pointers: check buffers, strings, and vectors; return EFAULT for invalid memory.
-- [ ] Validate file descriptors: reject oversized values before casting to u8.
+- [X] Fix dead-task cleanup: save task.next before freeing task.
+- [-] Validate user pointers: check buffers, strings, and vectors; return EFAULT for invalid memory.
+- [X] Validate file descriptors: reject oversized values before casting to u8.
 - [ ] Validate memory ranges: check alignment, overflow, user-space boundaries, and collisions in mmap, munmap, and ELF loading.
 - [ ] Zero anonymous memory: clear newly allocated mmap and brk pages before exposing them to a process.
 - [ ] Track mapping ownership: record which allocator owns each allocation.
