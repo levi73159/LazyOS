@@ -22,6 +22,9 @@ pub fn make(b: *std.Build, opts: Options) Programs {
 
     const step = b.step("build-userland", "Build userland programs");
 
+    const coreutils = b.addSystemCommand(&.{ "bash", "scripts/build_coreutils.sh" });
+    step.dependOn(&coreutils.step);
+
     // pull the artifact into ROOT's builder and install it there
     const shell_dep = b.dependency("shell", .{
         .target = target,

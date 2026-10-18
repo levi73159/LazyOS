@@ -171,7 +171,9 @@ fn removeDeadTasks() void {
     if (current_node.?.state != .dead) {
         task_has_died = false;
     }
-    while (current_node) |task| : (current_node = task.next) {
+    while (current_node) |task| {
+        current_node = task.next;
+
         if (current == task) continue; // do not remove current task even if it is dead
         if (task.state == .dead) {
             removeTask(task);

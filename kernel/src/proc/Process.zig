@@ -99,7 +99,7 @@ pub fn getFile(self: *Self, fd: u8) ?*File {
     return self.fd_table.getFile(fd);
 }
 
-pub fn loadElf(data: []const u8, allocator: std.mem.Allocator) !Self {
+pub fn loadElf(data: []const u8, allocator: std.mem.Allocator, args: []const []const u8) !Self {
     log.debug("Loading, elf", .{});
     var reader: std.Io.Reader = std.Io.Reader.fixed(data);
     const header = try elf.Header.read(&reader);
@@ -178,7 +178,7 @@ pub fn loadElf(data: []const u8, allocator: std.mem.Allocator) !Self {
         .phent = header.phentsize,
         .phnum = header.phnum,
         .interp_base = 0,
-    });
+    }, allocator, args);
 
     // we need to align the end address to a page boundary
     // then we add one page since we will use the first page as a guard page
@@ -346,10 +346,7 @@ pub const ElfInfo = struct {
     entry: u64,
 };
 
-fn loadStack(
-    stack_phys: usize,
-    info: ElfInfo,
-) usize {
+fn loadStack(stack_phys: usize, info: ElfInfo, alloactor: std.mem.Allocator, args: []const []const u8) usize {
     const hhdm_base: usize = bootinfo.toVirtualHHDM(stack_phys);
     const hhdm_top: usize = hhdm_base + USER_STACK_SIZE - 0x1000;
 
@@ -370,7 +367,7 @@ fn loadStack(
         }
 
         fn toUser(top: u64, stack: u64) u64 {
-            return USER_STACK_TOP - (top - stack);
+            return USER_STACK_USABLE - (top - stack);
         }
     };
 
@@ -389,7 +386,22 @@ fn loadStack(
     @memcpy(@as([*]u8, @ptrFromInt(sp))[0..16], &random_data);
     const at_random_addr = toUser(hhdm_top, sp);
 
+    const argv = alloactor.alloc(u64, args.len) catch @panic("OOM");
+    defer alloactor.free(argv);
+
+    for (args, 0..) |arg, i| {
+        pushBytes(&sp, "\x00");
+        pushBytes(&sp, arg);
+        argv[i] = toUser(hhdm_top, sp);
+    }
     sp &= ~@as(usize, 0xF); // align to 16
+
+    // Your auxiliary vector has 15 pairs = 30 words.
+    // Also account for argc, argv pointers, and two terminators.
+    const startup_words = 30 + args.len + 3;
+    if (startup_words % 2 != 0) {
+        sp -= 8;
+    }
 
     pushU64(&sp, 0);
     pushU64(&sp, AT_NULL);
@@ -426,15 +438,14 @@ fn loadStack(
     pushU64(&sp, AT_PAGESZ);
 
     pushU64(&sp, 0); // envp NULL terminator
-    pushU64(&sp, 0); // argv NULL terminator
-    pushU64(&sp, 0); // argc = 0
+    pushU64(&sp, 0); // argv term
 
-    // SysV ABI requires RSP to be 16-byte aligned at process entry.
-    // The argc/argv/envp/auxv block above pushes an odd number of qwords,
-    // so pad by one word if needed.
-    if (sp % 16 != 0) {
-        sp -= 8;
+    var i: usize = args.len;
+    while (i > 0) {
+        i -= 1;
+        pushU64(&sp, argv[i]);
     }
+    pushU64(&sp, args.len); // argc = 0
 
     return toUser(hhdm_top, sp);
 }

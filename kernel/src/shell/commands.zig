@@ -177,7 +177,7 @@ fn run(s: *Shell, args: []const []const u8) anyerror!void {
     errdefer s.allocator.destroy(process);
 
     std.log.debug("process created", .{});
-    process.* = try Process.loadElf(data, s.allocator);
+    process.* = try Process.loadElf(data, s.allocator, args);
     errdefer process.deinit(s.allocator);
 
     std.log.debug("elf loaded", .{});
