@@ -142,6 +142,13 @@ fn handleError(frame: *InterruptFrame) noreturn {
     console.printB("Unhandled exception {d} {s}\n", .{ frame.interrupt_number, @tagName(exception) });
 
     console.printB("{f}\n", .{frame});
+    if (exception == .general_protection_fault and frame.rip == @intFromPtr(&interruptReturn)) {
+        // The fault frame describes kernel IRET, not its rejected destination.
+        const pending: *const [5]u64 = @ptrFromInt(frame.rsp);
+        console.printB("Rejected IRET: rip={x} cs={x} rflags={x} rsp={x} ss={x}\n", .{
+            pending[0], pending[1], pending[2], pending[3], pending[4],
+        });
+    }
     const address = asm volatile ("mov %%cr2, %[addr]\n"
         : [addr] "=r" (-> u64),
     );
@@ -186,3 +193,4 @@ pub fn getVector(comptime number: u8) ?InterruptFn {
 }
 
 extern fn interruptCommon() callconv(.naked) noreturn; // define in arch.s
+extern fn interruptReturn() callconv(.naked) noreturn;

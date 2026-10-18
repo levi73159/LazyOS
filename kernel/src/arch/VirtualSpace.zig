@@ -137,17 +137,18 @@ pub fn safeDeinit(self: *Self) void {
     self.deinit();
 }
 
-// pml4 -> pdpt -> pd -> pt
+// Levels: PDPT=3, PD=2, PT=1. Leaf mappings belong to the caller;
+// only page-table allocations are released here.
 fn freePageTableEntry(table: *PageTable, level: u8) void {
-    for (table) |entry| {
-        if (entry.present) {
-            if (level != 0 and !entry.page_size) {
-                const next: *PageTable = @ptrFromInt(bootinfo.toVirtualHHDM(entry.getAddress()));
-                freePageTableEntry(next, level - 1);
-                pmem.kernel().freePage(entry.getAddress());
-            }
+    std.debug.assert(level >= 1 and level <= 3);
+    if (level > 1) {
+        for (table) |entry| {
+            if (!entry.present or entry.page_size) continue;
+            const next: *PageTable = @ptrFromInt(bootinfo.toVirtualHHDM(entry.getAddress()));
+            freePageTableEntry(next, level - 1);
         }
     }
+    pmem.kernel().freePageV(@intFromPtr(table));
 }
 
 pub fn addGuardPage(self: *Self, allocator: std.mem.Allocator, name: []const u8, virt: u64) void {

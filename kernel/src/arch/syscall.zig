@@ -68,7 +68,7 @@ export fn syscallHandler(frame: *SyscallFrame) callconv(.c) void {
         257 => sysvfs.openat(frame), // openat — needs real impl for stack traces
         else => errno.ENOSYS,
     };
-    log.debug("syscall {d} -> {x}, user_rip={x}", .{ num, val, frame.user_rip });
+    log.debug("syscall {d} -> {d}, user_rip={x}", .{ num, val, frame.user_rip });
     frame.rax = @bitCast(val);
 }
 
@@ -117,10 +117,15 @@ pub fn init() void {
     const efer = msr.read(msr.MSR_EFER);
     msr.write(msr.MSR_EFER, efer | 1); // enable SCE
 
-    // STAR: kernel CS at bits 47:32 user CS at bits 63:48
+    // SYSRET derives CS = base + 16 and SS = base + 8.
+    // Include RPL 3 explicitly: AMD can preserve these bits for SS.
+    const user_selector_base: u64 = @intFromEnum(gdt.Segment.user_data) - 8;
+    comptime {
+        std.debug.assert(@intFromEnum(gdt.Segment.user_code) == @intFromEnum(gdt.Segment.user_data) + 8);
+    }
     const star: u64 =
         (@as(u64, @intFromEnum(gdt.Selector.kernel_code)) << 32) |
-        (@as(u64, @intFromEnum(gdt.Selector.kernel_data)) << 48);
+        (user_selector_base << 48);
     msr.write(msr.MSR_STAR, star);
 
     // LSTAR: syscall entry point

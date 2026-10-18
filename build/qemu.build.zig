@@ -12,6 +12,7 @@ pub fn addSteps(b: *std.Build, opts: Options, img: Image) void {
         "-cpu",     "host",
         "-display", opts.display,
         "-serial",  "stdio",
+        "-m",       "4G",
         "-bios",    "/usr/share/ovmf/x64/OVMF.4m.fd",
     });
     if (opts.stal) {

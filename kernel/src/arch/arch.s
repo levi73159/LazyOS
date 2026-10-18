@@ -13,9 +13,6 @@ asm_loadGDT:
 
 .global interruptCommon
 interruptCommon:
-    testb $3, 24(%rsp)
-    jz .Lno_swapgs_entry
-    swapgs
 
 .Lno_swapgs_entry:
     push %rax
@@ -36,7 +33,7 @@ interruptCommon:
 
     mov $0, %rax
     mov %ds, %ax
-    push %rax
+    push %rax 
 
     mov $0x10, %ax
     mov %ax, %ds
@@ -68,10 +65,9 @@ interruptCommon:
     pop %rax
     add $16, %rsp
 
-    testb $3, 8(%rsp)
-    jz .Lno_swapgs_exit
-    swapgs
 .Lno_swapgs_exit:
+.global interruptReturn
+interruptReturn:
     iretq
 
 .global syscallEntry
@@ -108,6 +104,11 @@ syscallEntry:
     sub $8, %rsp
     call syscallHandler
     add $8, %rsp
+
+    # AMD SYSRET can preserve cached SS attributes. Reload a valid
+    # kernel data descriptor before restoring the user registers.
+    mov $0x10, %ax
+    mov %ax, %ss
 
     pop %rbp
     pop %rsi

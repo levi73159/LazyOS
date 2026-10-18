@@ -13,7 +13,7 @@ install_apt() {
   echo ">> Installing packages with apt..."
   $SUDO apt-get update
   $SUDO apt-get install -y \
-    nasm musl-tools mtools dosfstools genext2fs xorriso imagemagick qemu-system-x86 ovmf
+    nasm musl-tools mtools dosfstools genext2fs xorriso imagemagick qemu-system-x86 qemu-desktop ovmf gptfdisk
   # ImageMagick 6 ships `convert` but the build scripts call `magick`.
   if ! command -v magick >/dev/null 2>&1 && command -v convert >/dev/null 2>&1; then
     echo ">> Adding 'magick' shim -> convert"
@@ -24,7 +24,7 @@ install_apt() {
 install_arch() {
   echo ">> Installing packages with pacman..."
   $SUDO pacman -S --needed --noconfirm \
-    nasm musl mtools dosfstools libisoburn imagemagick qemu-system-x86 edk2-ovmf
+    nasm musl mtools dosfstools libisoburn imagemagick qemu-system-x86 qemu-desktop edk2-ovmf gptfdisk
   # genext2fs is in the AUR.
   if command -v yay >/dev/null 2>&1; then
     yay -S --needed --noconfirm genext2fs
