@@ -227,6 +227,12 @@ fn comptimeEql(comptime a: anytype, comptime b: anytype) void {
     }
 }
 
+pub const FoundEntry = struct {
+    entry: DirEntry,
+    record_block: u32,
+    record_offset: u32,
+};
+
 comptime {
     comptimeEql(@sizeOf(GenericVolumeDescriptor), 2048);
     comptimeEql(@sizeOf(BootRecord), 2048);
@@ -240,6 +246,7 @@ comptime {
 
 const Self = @This();
 
+device_id: u64,
 disk: *Disk,
 pvd: PrimaryVolumeDescriptor,
 
@@ -256,6 +263,7 @@ pub fn init(disk: *Disk) !Self {
     log.info("Volume id: {s}", .{pvd.volume_id});
 
     return Self{
+        .device_id = FS.allocateDeviceId(),
         .disk = disk,
         .pvd = pvd.*,
     };
@@ -374,27 +382,31 @@ pub fn walk(self: *const Self, dir: *const DirEntry, ctx: anytype, callback: *co
 }
 
 // memory used here will be freed
-pub fn find(self: *const Self, path: []const u8) !?DirEntry {
+pub fn find(self: *const Self, path: []const u8) !?FoundEntry {
     return vfsFind(self.disk, &self.pvd, path);
 }
 
 // VFS compatiable find
-fn vfsFind(disk: *Disk, pvd: *const PrimaryVolumeDescriptor, path: []const u8) !?DirEntry {
-    var current = pvd.dir_entry;
+fn vfsFind(disk: *Disk, pvd: *const PrimaryVolumeDescriptor, path: []const u8) !?FoundEntry {
+    var current = FoundEntry{
+        .entry = pvd.dir_entry,
+        .record_block = pvd.dir_entry.location_of_extent.value(),
+        .record_offset = 0,
+    };
     var remaining = path;
 
     remaining = std.mem.trim(u8, remaining, "/");
     if (remaining.len == 0) return current;
 
     while (remaining.len > 0) {
-        if (!current.isDirectory()) {
+        if (!current.entry.isDirectory()) {
             log.err("File is not a directory", .{});
             return error.NotDirectory;
         }
 
         const slash = std.mem.indexOfScalar(u8, remaining, '/') orelse remaining.len;
         const name = remaining[0..slash];
-        const entry = try vfsFindEntry(disk, &current, name) orelse return null;
+        const entry = try vfsFindEntry(disk, &current.entry, name) orelse return null;
         current = entry;
 
         if (slash == remaining.len) break;
@@ -405,8 +417,13 @@ fn vfsFind(disk: *Disk, pvd: *const PrimaryVolumeDescriptor, path: []const u8) !
 }
 
 // FIND A FILE IN DIRECTORY, and only in that directory, make sure to to not pass a path to it
-fn vfsFindEntry(disk: *Disk, dir: *const DirEntry, name: []const u8) !?DirEntry {
-    if (name.len == 1 and name[0] == '.') return dir.*;
+fn vfsFindEntry(disk: *Disk, dir: *const DirEntry, name: []const u8) !?FoundEntry {
+    if (name.len == 1 and name[0] == '.') return FoundEntry{
+        .entry = dir.*,
+        .record_block = dir.location_of_extent.value() +
+            @as(u32, dir.extended_attribute_length),
+        .record_offset = 0,
+    };
 
     const lba = dir.location_of_extent.value();
     const size = dir.data_length.value();
@@ -425,11 +442,19 @@ fn vfsFindEntry(disk: *Disk, dir: *const DirEntry, name: []const u8) !?DirEntry 
             const entry: *const DirEntry = @ptrCast(@alignCast(&buf[offset]));
             if (entry.length == 0) break; // end of entries sectors
             if (std.mem.eql(u8, name, "..") and entry.isParentDir()) {
-                return entry.*;
+                return FoundEntry{
+                    .entry = entry.*,
+                    .record_block = lba + s,
+                    .record_offset = @intCast(offset),
+                };
             }
             if (!entry.isCurrentDir() and !entry.isParentDir()) {
                 if (std.ascii.eqlIgnoreCase(entry.fileNameClean(), name)) {
-                    return entry.*;
+                    return FoundEntry{
+                        .entry = entry.*,
+                        .record_block = lba + s,
+                        .record_offset = @intCast(offset),
+                    };
                 }
             }
             offset += entry.length;
@@ -473,13 +498,13 @@ pub fn readFile(self: *const Self, entry: *const DirEntry, buf: []u8) ![]u8 {
 fn vfsOpenFile(fs: *FS.AnyFs, path: []const u8) anyerror!FS.Handle {
     const self: *const Self = @ptrCast(&fs.state);
 
-    const entry = try self.find(path) orelse return error.FileNotFound;
-    if (entry.isDirectory()) return error.NotFile;
+    const found = try self.find(path) orelse return error.FileNotFound;
+    if (found.entry.isDirectory()) return error.NotFile;
 
     return FS.Handle{
         .pos = 0,
-        .size = entry.data_length.value(),
-        .ctx = entry.location_of_extent.value(),
+        .size = found.entry.data_length.value(),
+        .ctx = found.entry.location_of_extent.value(),
         .opened = true,
         .flags = .{
             .readable = true,
@@ -487,6 +512,7 @@ fn vfsOpenFile(fs: *FS.AnyFs, path: []const u8) anyerror!FS.Handle {
             .writable = false,
             .seekable = true,
         },
+        .metadata = try self.extractMetadata(&found),
     };
 }
 
@@ -518,18 +544,53 @@ fn vfsReadFile(fs: *FS.AnyFs, handle: *FS.Handle, buf: []u8) anyerror!usize {
     return done;
 }
 
-fn vfsStat(fs: *FS.AnyFs, path: []const u8) anyerror!FS.FileInfo {
+fn vfsStat(fs: *FS.AnyFs, path: []const u8) anyerror!FS.Metadata {
     const self: *const Self = @ptrCast(&fs.state);
 
-    const entry = try self.find(path) orelse return error.FileNotFound;
+    const found = try self.find(path) orelse return error.FileNotFound;
 
-    return FS.FileInfo{
-        .size = entry.data_length.value(),
-        .type = if (entry.isDirectory()) .directory else .file,
+    return self.extractMetadata(&found);
+}
+
+fn extractMetadata(self: *const Self, found: *const FoundEntry) anyerror!FS.Metadata {
+    const logblocksize = self.pvd.logical_block_size.value();
+    // Directory aliases share the identity of the directory's own '.' record.
+    const record_block: u64 = if (found.entry.isDirectory())
+        @as(u64, found.entry.location_of_extent.value()) + found.entry.extended_attribute_length
+    else
+        found.record_block;
+    const record_offset: u64 = if (found.entry.isDirectory()) 0 else found.record_offset;
+    const inode = record_block * logblocksize + record_offset + 1;
+    const size: u64 = found.entry.data_length.value();
+
+    // TODO: Convert the ISO9660 recording date to a Unix timestamp. (never will get done since ISO9660 is hardly used)
+    const unknown_time = FS.Timestep{ .seconds = 0, .nanoseconds = 0 };
+    return FS.Metadata{
+        .device_id = self.device_id,
+        .inode = inode,
+        .size = size,
+        .kind = if (found.entry.isDirectory()) .directory else .regular,
+        .perm = 0o555,
+        .uid = 0,
+        .gid = 0,
+        .link_count = 1, // Synthetic until directory link counts are implemented.
+        .block_size = logblocksize,
+        // Extent allocation rounded to logical blocks, expressed in 512-byte units.
+        .blocks = (try std.math.divCeil(u64, size, logblocksize)) * (logblocksize / 512),
+        .special_device_id = 0,
+        .accessed = unknown_time,
+        .modified = unknown_time,
+        .changed = unknown_time,
     };
 }
 
+fn vfsStatFile(_: *FS.AnyFs, handle: *FS.Handle) anyerror!FS.Metadata {
+    if (!handle.opened) return error.BadFileHandle;
+    return handle.metadata;
+}
+
 const VfsDirIterCtx = struct {
+    fs: *const Self,
     disk: *Disk,
     lba: u32,
     size: u32,
@@ -539,16 +600,17 @@ const VfsDirIterCtx = struct {
     sector: u32,
     offset: u32,
 
-    pub fn init(disk: *Disk, entry: *const DirEntry) VfsDirIterCtx {
+    pub fn init(fs: *const Self, entry: *const DirEntry) !VfsDirIterCtx {
         var ctx: VfsDirIterCtx = undefined;
-        ctx.disk = disk;
-        ctx.lba = entry.location_of_extent.value();
+        ctx.fs = fs;
+        ctx.disk = fs.disk;
+        ctx.lba = entry.location_of_extent.value() + @as(u32, entry.extended_attribute_length);
         ctx.size = entry.data_length.value();
         ctx.sectors = std.math.divCeil(u32, ctx.size, 2048) catch unreachable;
         ctx.bytes_read = 0;
         ctx.sector = 0;
         ctx.offset = 0;
-        disk.readAll(ctx.lba, &ctx.buf) catch {};
+        if (ctx.size != 0) try ctx.disk.readAll(ctx.lba, &ctx.buf);
         return ctx;
     }
 
@@ -566,20 +628,33 @@ const VfsDirIterCtx = struct {
                 try ctx.disk.readAll(ctx.lba + ctx.sector, &ctx.buf);
             }
 
+            const record_offset = ctx.offset;
             const entry: *const DirEntry = @ptrCast(@alignCast(&ctx.buf[ctx.offset]));
-            if (entry.length == 0) return null;
+            if (entry.length == 0) {
+                // Padding ends this block, not the entire directory.
+                ctx.bytes_read += @min(ctx.size - ctx.bytes_read, @as(u32, @intCast(ctx.buf.len)) - ctx.offset);
+                ctx.offset = @intCast(ctx.buf.len);
+                continue;
+            }
+            if (entry.length < @sizeOf(DirEntry) or
+                entry.length > ctx.buf.len - ctx.offset or
+                entry.length > ctx.size - ctx.bytes_read or
+                @as(usize, entry.len_of_file_name) + @offsetOf(DirEntry, "name_first_byte") > entry.length)
+                return error.CorruptFileSystem;
 
             ctx.bytes_read += entry.length;
             ctx.offset += entry.length;
 
             if (entry.isCurrentDir() or entry.isParentDir()) continue;
 
+            const found = FoundEntry{
+                .entry = entry.*,
+                .record_block = ctx.lba + ctx.sector,
+                .record_offset = record_offset,
+            };
             return FS.DirIterator.Entry{
                 .name = entry.fileNameClean(),
-                .info = .{
-                    .size = entry.data_length.value(),
-                    .type = if (entry.isDirectory()) .directory else .file,
-                },
+                .info = try ctx.fs.extractMetadata(&found),
             };
         }
     }
@@ -608,7 +683,7 @@ fn vfsIterDir(fs: *FS.AnyFs, path: []const u8) anyerror!FS.DirIterator {
     const self: *const Self = @ptrCast(@alignCast(&fs.state));
 
     const entry = try self.find(path) orelse return error.FileNotFound;
-    if (!entry.isDirectory()) return error.NotDirectory;
+    if (!entry.entry.isDirectory()) return error.NotDirectory;
 
     var iter = FS.DirIterator{
         .fs = fs,
@@ -618,7 +693,8 @@ fn vfsIterDir(fs: *FS.AnyFs, path: []const u8) anyerror!FS.DirIterator {
 
     // init the context into the iterator's inline storage
     const ctx: *VfsDirIterCtx = try root.heap.allocator().create(VfsDirIterCtx);
-    ctx.* = VfsDirIterCtx.init(self.disk, &entry);
+    errdefer root.heap.allocator().destroy(ctx);
+    ctx.* = try VfsDirIterCtx.init(self, &entry.entry);
     iter.ctx = ctx;
     return iter;
 }
@@ -629,6 +705,7 @@ pub fn mount(disk: *Disk) !FS.AnyFs {
         .read_file = &vfsReadFile,
         .open_file = &vfsOpenFile,
         .stat = &vfsStat,
+        .stat_file = &vfsStatFile,
         .iter_dir = &vfsIterDir,
     }, .fs_type = .iso9660 };
     const bytes = std.mem.asBytes(&iso9660);

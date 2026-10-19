@@ -11,61 +11,76 @@ const errno = @import("errno.zig");
 
 const log = std.log.scoped(._sysmem);
 
-pub fn brk(frame: *SyscallFrame) i64 {
-    const addr = std.mem.alignForward(usize, frame.rdi, root.PAGE_SIZE);
-
-    const process = proc.scheduler.getCurrentProcess() orelse {
-        @branchHint(.cold);
-        log.err("No current process", .{});
-        return errno.EAGAIN;
+// Allocate and zero all data frames before replacing any existing mapping.
+// Reservations have ownership records too, but no physical allocation.
+fn mapAnonymous(process: *proc.Process, addr: usize, size: usize, flags: VirtualSpace.PageFlags, kind: enum { mmap, brk }, replace: bool) !void {
+    const allocator = root.heap.allocator();
+    const pages = size / root.PAGE_SIZE;
+    try process.anonymous_pages.ensureUnusedCapacity(allocator, pages);
+    const frames = try allocator.alloc(?u64, pages);
+    defer allocator.free(frames);
+    @memset(frames, null);
+    var committed = false;
+    defer if (!committed) {
+        for (frames) |frame| {
+            if (frame) |phys| pmem.user().freePage(phys);
+        }
     };
 
-    if (addr == 0) {
-        return @intCast(process.brk_current);
-    }
-
-    if (addr < process.brk_base) {
-        log.err("Invalid address: addr({x}) < brk_base({x})", .{ addr, process.brk_base });
-        return errno.ENOMEM;
-    }
-
-    const old_break = process.brk_current;
-
-    const vmem = &process.vmem;
-    const mem_size: isize = @as(isize, @intCast(addr)) - @as(isize, @intCast(old_break)); // how much memory to add
-    const pages: usize = (@as(usize, @abs(mem_size)) + root.PAGE_SIZE - 1) / root.PAGE_SIZE; // how many pages to alloc/dealloc if mem_size is positive/negative
-    if (mem_size > 0) {
-        // alloc path
-        const phys = pmem.user().allocPages(pages) catch {
-            return errno.ENOMEM;
-        };
-
-        // assumes range brk_base to brk_current is already mapped so it only maps brk_current to add4
-        vmem.mapRange(old_break, phys, pages * root.PAGE_SIZE, .{ .present = true, .user = true, .writeable = true });
-        vmem.addGuardPage(root.heap.allocator(), "brk start", addr + root.PAGE_SIZE);
-        vmem.addRegion2(root.heap.allocator(), "user brk", process.brk_base, addr);
-    } else {
-        // dealloc path
-        const start_virt = addr;
-
-        for (0..pages) |i| {
-            const virt = start_virt + (i * root.PAGE_SIZE);
-            const phys = vmem.getPhys(virt, true) orelse {
-                // here just in case but it should never happen since we or deallocating only mapped pages, (only happens if somthing gets currupted or very wrong)
-                // may be smarter to just do `.?`
-                @branchHint(.cold);
-                log.warn("Virtual address not mapped: {x}", .{virt});
-                continue;
-            };
-
-            pmem.user().freePage(phys); // we don't do freePages since it may not be contiguous
+    if (flags.present) {
+        for (frames) |*frame| {
+            const phys = try pmem.user().allocPage();
+            frame.* = phys;
+            const ptr: [*]u8 = @ptrFromInt(root.arch.bootinfo.toVirtualHHDM(phys));
+            @memset(ptr[0..root.PAGE_SIZE], 0);
         }
-
-        vmem.unmapRange(start_virt, pages * root.PAGE_SIZE); // unmap the range
     }
+    for (frames, 0..) |frame, i| {
+        const virt = addr + i * root.PAGE_SIZE;
+        if (replace) {
+            if (process.anonymousPageIndex(virt)) |index| process.freeAnonymousPage(index);
+        }
+        if (frame) |phys| process.vmem.mapPage(virt, phys, flags);
+        process.anonymous_pages.appendAssumeCapacity(.{
+            .virt = virt,
+            .phys = frame,
+            .kind = if (kind == .mmap) .mmap else .brk,
+        });
+    }
+    committed = true;
+}
 
+pub fn brk(frame: *SyscallFrame) i64 {
+    const process = proc.scheduler.getCurrentProcess() orelse return errno.EAGAIN;
+    if (frame.rdi == 0) return @intCast(process.brk_current);
+    if (frame.rdi > std.math.maxInt(usize) - (root.PAGE_SIZE - 1)) return errno.ENOMEM;
+    const addr = std.mem.alignForward(usize, frame.rdi, root.PAGE_SIZE);
+    if (addr < process.brk_base or addr >= 0x0000_8000_0000_0000) return errno.ENOMEM;
+    const old_break = process.brk_current;
+    if (addr == old_break) return @intCast(addr);
+
+    if (addr > old_break) {
+        var virt = old_break;
+        while (virt < addr) : (virt += root.PAGE_SIZE) {
+            if (process.anonymousPageIndex(virt) != null or
+                process.vmem.get(virt, false, false) != null or
+                process.vmem.getGuardPage(virt) != null) return errno.ENOMEM;
+        }
+        mapAnonymous(process, old_break, addr - old_break, .user_rw, .brk, false) catch return errno.ENOMEM;
+    } else {
+        // Check every page before freeing any; never free a frame owned by
+        // the ELF loader or an mmap request through this heap-shrink path.
+        var virt = addr;
+        while (virt < old_break) : (virt += root.PAGE_SIZE) {
+            const index = process.anonymousPageIndex(virt) orelse return errno.EINVAL;
+            if (process.anonymous_pages.items[index].kind != .brk) return errno.EINVAL;
+        }
+        virt = addr;
+        while (virt < old_break) : (virt += root.PAGE_SIZE) {
+            process.freeAnonymousPage(process.anonymousPageIndex(virt).?);
+        }
+    }
     process.brk_current = addr;
-
     return @intCast(addr);
 }
 
@@ -79,9 +94,9 @@ pub fn mmap(frame: *SyscallFrame) i64 {
 
     const MAP_ANONYMOUS = 0x20;
     const MAP_SHARED = 0x02;
+    const MAP_FIXED = 0x10;
     _ = MAP_SHARED; // autofix
 
-    const PROT_NONE = 0x0; // — no access
     const PROT_READ = 0x1; // — readable
     _ = PROT_READ; // autofix
     const PROT_WRITE = 0x2; // — writable
@@ -102,43 +117,64 @@ pub fn mmap(frame: *SyscallFrame) i64 {
 
     const vmem = &process.vmem;
 
-    const size = mem.alignForward(usize, len, root.PAGE_SIZE);
+    const PAGE_SIZE = root.PAGE_SIZE;
+    const USER_SPACE_END: usize = 0x0000_8000_0000_0000;
 
-    const va: usize = if (addr == 0) blk: {
-        process.mmap_current -= size; // mmap grows downards (mimics stack, linux does the same)
-        const va = process.mmap_current;
+    if (len == 0) return errno.EINVAL; // len cannot be null/0
+
+    // alignForward adds up to PAGE_SIZE - 1 so we do a bounds check.
+    if (len > std.math.maxInt(usize) - (PAGE_SIZE - 1))
+        return errno.ENOMEM;
+
+    const size = std.mem.alignForward(usize, len, PAGE_SIZE);
+    const fixed = flags & MAP_FIXED != 0;
+
+    if (fixed and addr % PAGE_SIZE != 0) // fixed means can't round page size
+        return errno.EINVAL;
+
+    if (addr != 0 or fixed) {
+        if (addr == 0 or addr >= USER_SPACE_END)
+            return errno.EINVAL;
+
+        if (size > USER_SPACE_END - addr)
+            return errno.ENOMEM;
+    }
+
+    if (addr == 0 and !fixed) {
+        if (process.mmap_current > USER_SPACE_END)
+            return errno.ENOMEM;
+        if (process.mmap_current <= PAGE_SIZE)
+            return errno.ENOMEM;
+        if (size > process.mmap_current - PAGE_SIZE)
+            return errno.ENOMEM;
+    }
+
+    const va: usize = if (addr == 0 and !fixed) blk: {
+        const va = process.mmap_current - size;
         break :blk va;
-    } else addr;
+    } else std.mem.alignBackward(usize, addr, PAGE_SIZE);
 
-    if (prot == PROT_NONE) {
-        log.warn("Prot NONE reseveration, ignoring", .{});
-        return @bitCast(va);
+    // Replacing an anonymous mmap page is supported. Loader pages,
+    // brk pages, and guards must never be freed by this path.
+    var check: usize = 0;
+    while (check < size) : (check += PAGE_SIZE) {
+        const virt = va + check;
+        if (process.anonymousPageIndex(virt)) |index| {
+            if (!fixed or process.anonymous_pages.items[index].kind != .mmap) return errno.ENOMEM;
+        } else if (vmem.get(virt, false, false) != null or vmem.getGuardPage(virt) != null) {
+            return errno.ENOMEM;
+        }
     }
 
     const page_flags = VirtualSpace.PageFlags{
-        .present = true,
+        .present = prot != 0,
         .user = true,
         .writeable = prot & PROT_WRITE != 0,
         .execute_disable = prot & PROT_EXEC == 0,
     };
-    const MAP_FIXED = 0x10;
 
-    var i: u64 = 0;
-    while (i < size) : (i += root.PAGE_SIZE) {
-        // mamp doesn't have to be physically contiguous so we just alloc one page at a time
-        // TODO: add support for lazy mappings (map page, but doesn't allocate physical page until page fault)
-        if (flags & MAP_FIXED != 0) {
-            if (vmem.getPhys(va + i, true)) |old_phys| {
-                pmem.user().freePage(old_phys);
-            }
-        }
-
-        const phys = pmem.user().allocPage() catch {
-            return errno.ENOMEM;
-        };
-
-        vmem.mapPage(va + i, phys, page_flags);
-    }
+    mapAnonymous(process, va, size, page_flags, .mmap, fixed) catch return errno.ENOMEM;
+    if (addr == 0 and !fixed) process.mmap_current = va;
 
     return @bitCast(va);
 }
@@ -153,18 +189,30 @@ pub fn munmap(frame: *SyscallFrame) i64 {
         return errno.EAGAIN;
     };
 
-    const vmem = &process.vmem;
+    const PAGE_SIZE = root.PAGE_SIZE;
+    const USER_SPACE_END: usize = 0x0000_8000_0000_0000;
+    if (addr % PAGE_SIZE != 0 or len == 0) return errno.EINVAL;
+    if (len > std.math.maxInt(usize) - (PAGE_SIZE - 1)) return errno.EINVAL;
+    const size = mem.alignForward(usize, len, PAGE_SIZE);
+    if (addr >= USER_SPACE_END or size > USER_SPACE_END - addr) return errno.EINVAL;
 
-    const size = mem.alignForward(usize, len, root.PAGE_SIZE);
-
-    var i: u64 = 0;
-    while (i < size) : (i += root.PAGE_SIZE) {
-        const va = addr + i;
-        if (vmem.getPhys(va, true)) |phys| {
-            pmem.user().freePage(phys);
-            vmem.unmapPage(va);
+    // Preflight the entire range so a rejected request makes no changes.
+    var offset: usize = 0;
+    while (offset < size) : (offset += PAGE_SIZE) {
+        const virt = addr + offset;
+        if (process.anonymousPageIndex(virt)) |index| {
+            if (process.anonymous_pages.items[index].kind != .mmap) return errno.EINVAL;
+        } else if (process.vmem.get(virt, false, false) != null or process.vmem.getGuardPage(virt) != null) {
+            return errno.EINVAL;
         }
     }
-
+    // Unmapped holes are harmless. Only recorded mmap allocations are freed.
+    var i: usize = 0;
+    while (i < process.anonymous_pages.items.len) {
+        const page = process.anonymous_pages.items[i];
+        if (page.virt >= addr and page.virt - addr < size) {
+            process.freeAnonymousPage(i);
+        } else i += 1;
+    }
     return 0;
 }

@@ -64,6 +64,10 @@ pub fn write(self: *Self, buf: []const u8) Error!usize {
     return self.f_ops.write(self, buf);
 }
 
+pub inline fn stat(self: *Self) FS.Metadata {
+    return self.handle.metadata;
+}
+
 pub const iovec = struct {
     base: u64,
     len: u64,

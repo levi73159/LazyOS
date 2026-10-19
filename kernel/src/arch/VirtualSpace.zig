@@ -251,6 +251,11 @@ pub fn unmapPage(self: *const Self, virt: u64) void {
         @panic("Try to map huge page to small page");
     }
     pt_table[va.pt_index] = PageEntry.init(0, .none);
+    // Drop a cached translation before the freed frame is reused.
+    asm volatile ("invlpg (%[v])"
+        :
+        : [v] "r" (virt),
+        : .{ .memory = true });
 }
 
 /// NOTE: virt and phys must be page aligned

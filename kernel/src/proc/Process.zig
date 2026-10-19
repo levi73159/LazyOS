@@ -17,6 +17,12 @@ pub const USER_TLS_BASE = 0x0000_6000_0000_0000;
 
 const Self = @This();
 
+pub const AnonymousPage = struct {
+    virt: usize,
+    phys: ?u64, // null for a PROT_NONE reservation
+    kind: enum { mmap, brk },
+};
+
 const MemoryRegion = struct {
     phys: u64,
     page_count: u64,
@@ -94,6 +100,7 @@ tcb_base: usize,
 mmap_current: u64 = USER_MEM_MAP_BASE,
 
 regions: std.ArrayList(MemoryRegion),
+anonymous_pages: std.ArrayList(AnonymousPage) = .empty,
 
 pub fn getFile(self: *Self, fd: u8) ?*File {
     return self.fd_table.getFile(fd);
@@ -237,27 +244,34 @@ pub fn loadElf(data: []const u8, allocator: std.mem.Allocator, args: []const []c
     };
 }
 
+pub fn anonymousPageIndex(self: *const Self, virt: usize) ?usize {
+    for (self.anonymous_pages.items, 0..) |page, i| {
+        if (page.virt == virt) return i;
+    }
+    return null;
+}
+
+pub fn freeAnonymousPage(self: *Self, index: usize) void {
+    const page = self.anonymous_pages.swapRemove(index);
+    if (page.phys) |phys| {
+        self.vmem.unmapPage(page.virt);
+        pmem.user().freePage(phys);
+    }
+}
+
 pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
     for (self.regions.items) |region| {
-        // should we use user pmem instead?
+        // Loader allocations belong to the kernel physical allocator.
         pmem.kernel().freePages(region.phys, region.page_count);
     }
     self.regions.deinit(allocator);
 
-    const brksize = self.brk_current - self.brk_base;
-    const pages = brksize / paging.PAGE_SIZE;
-
-    const virt_start = self.brk_base;
-
-    for (0..pages) |i| {
-        const virt = virt_start + (i * paging.PAGE_SIZE);
-        const phys = self.vmem.getPhys(virt, true) orelse {
-            @branchHint(.cold);
-            log.warn("Failed to get physical address for {x}", .{virt});
-            continue;
-        };
-        pmem.user().freePage(phys);
+    // ELF, stack, and TLS belong to regions/kernel pmem above. Only
+    // syscall-created anonymous frames belong to user pmem.
+    for (self.anonymous_pages.items) |page| {
+        if (page.phys) |phys| pmem.user().freePage(phys);
     }
+    self.anonymous_pages.deinit(allocator);
 
     self.vmem.safeDeinit();
 }

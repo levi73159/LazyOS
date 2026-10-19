@@ -125,7 +125,7 @@ pub const Inode = extern struct {
     userid: u16,
     size_low: u32,
     last_access_time: u32,
-    creation_time: u32,
+    last_changed_time: u32,
     last_modification_time: u32,
     deletion_time: u32,
     groupid: u16,
@@ -202,6 +202,7 @@ const InodeWNumber = struct {
     number: u32,
 };
 
+device_id: u64,
 partition: *Parition,
 superblock: SuperBlock,
 ext_superblock: ?ExtendedSuperBlock = null,
@@ -300,6 +301,7 @@ pub fn init(disk: *Disk) !Self {
     errdefer allocator.free(bgdt);
 
     var self = Self{
+        .device_id = FS.allocateDeviceId(),
         .partition = part,
         .superblock = superblock.base,
         .ext_superblock = superblock.extended,
@@ -608,6 +610,7 @@ pub fn openFile(self: *Self, path: []const u8) !FileHandle {
             .ctx = inode.number,
             .flags = .{ .readable = true, .executable = true, .writable = true, .seekable = true },
             .opened = true,
+            .metadata = extractMetadata(inode, self.block_size, self.device_id),
         };
     }
 
@@ -666,7 +669,7 @@ pub const VfsDirIterCtx = struct {
             const inode = try self.fs.getInodeNoRef(entry.inode);
             return FS.DirIterator.Entry{
                 .name = name,
-                .info = .{ .size = inode.size(), .type = if (inode.isDir()) .directory else .file },
+                .info = extractMetadata(.{ .inode = inode, .number = entry.inode }, self.fs.block_size, self.fs.device_id),
             };
         }
         return null;
@@ -777,6 +780,8 @@ fn vfsReadFile(fs: *FS.AnyFs, handle: *FS.Handle, buf: []u8) !usize {
     const indirect_cache: *IndirectCache = try self.allocator.create(IndirectCache);
     defer self.allocator.destroy(indirect_cache);
 
+    indirect_cache.* = .{};
+
     var done: u32 = 0;
     const scratch: []u8 = try self.allocator.alloc(u8, 4096);
     defer self.allocator.free(scratch);
@@ -830,15 +835,45 @@ fn vfsCloseFile(fs: *FS.AnyFs, handle: *FS.Handle) void {
     self.closeFile(handle);
 }
 
-fn vfsStat(fs: *FS.AnyFs, path: []const u8) !FS.FileInfo {
+fn extractMetadata(inode: InodeWNumber, blk_size: u32, device_id: u64) FS.Metadata {
+    const ty = inode.inode.type_and_perms & 0xF000;
+    const perms = inode.inode.type_and_perms & 0o777;
+
+    const kind: FS.FileKind = switch (ty) {
+        TYPE_REG => FS.FileKind.regular,
+        TYPE_DIR => FS.FileKind.directory,
+        TYPE_FIFO => FS.FileKind.pipe,
+        TYPE_BLK_DEV => FS.FileKind.block_device,
+        TYPE_CHR_DEV => FS.FileKind.character_device,
+        TYPE_SOCK => FS.FileKind.socket,
+        TYPE_SYMLINK => FS.FileKind.symlink,
+        else => unreachable,
+    };
+
+    return .{
+        .device_id = device_id,
+        .inode = inode.number,
+        .accessed = .fromUNIX(inode.inode.last_access_time),
+        .block_size = blk_size,
+        .size = if (kind == .regular) inode.inode.size() else inode.inode.size_low,
+        .blocks = inode.inode.sector_count,
+        .changed = .fromUNIX(inode.inode.last_changed_time),
+        .modified = .fromUNIX(inode.inode.last_modification_time),
+        .gid = inode.inode.groupid,
+        .uid = inode.inode.userid,
+        .perm = perms,
+        .link_count = inode.inode.hard_links_count,
+        .kind = kind,
+        .special_device_id = 0, // TODO: only 0 for files and directoies
+    };
+}
+
+fn vfsStat(fs: *FS.AnyFs, path: []const u8) !FS.Metadata {
     const self: *Self = @ptrCast(@alignCast(&fs.state));
 
     const inode = try self.find(path) orelse return error.FileNotFound;
 
-    return .{
-        .size = inode.inode.size(),
-        .type = if (inode.inode.isDir()) .directory else .file,
-    };
+    return extractMetadata(inode, self.block_size, self.device_id);
 }
 
 fn vfsIterDir(fs: *FS.AnyFs, path: []const u8) !FS.DirIterator {

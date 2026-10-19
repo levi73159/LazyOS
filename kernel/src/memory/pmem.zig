@@ -52,5 +52,6 @@ pub fn acpi() *BitmapAllocator {
 }
 
 pub fn user() *BitmapAllocator {
-    return &(allocators.?.user orelse allocators.?.kernel);
+    if (allocators.?.user) |*allocator| return allocator;
+    return &allocators.?.kernel;
 }

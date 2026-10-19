@@ -18,6 +18,27 @@ const UserAccess = enum { read, write };
 const MAX_IOVECS = 1024;
 const MAX_PATH = 4096;
 
+const LinuxStat = extern struct {
+    st_dev: u64,
+    st_ino: u64,
+    st_nlink: u64,
+    st_mode: u32,
+    st_uid: u32,
+    st_gid: u32,
+    pad0: u32,
+    st_rdev: u64,
+    st_size: i64,
+    st_blksize: i64,
+    st_blocks: i64,
+    st_atime: u64,
+    st_atime_nsec: u64,
+    st_mtime: u64,
+    st_mtime_nsec: u64,
+    st_ctime: u64,
+    st_ctime_nsec: u64,
+    unused: [3]i64,
+};
+
 fn validateUserRange(addr: usize, len: usize, access: UserAccess) bool {
     const USER_SPACE_END: usize = 0x0000_8000_0000_0000;
     if (len == 0) return true;
@@ -319,6 +340,72 @@ pub fn close(frame: *SyscallFrame) i64 {
     if (process.getFile(@intCast(fd))) |file| {
         file.close();
         process.fd_table.freeHandle(@intCast(fd));
+        return 0;
+    }
+
+    return errno.EBADF;
+}
+
+pub fn fstat(frame: *SyscallFrame) i64 {
+    if (frame.rdi > std.math.maxInt(u8)) {
+        return errno.EBADF;
+    }
+
+    const fd = frame.rdi;
+    const addr = frame.rsi;
+
+    if (!validateUserRange(addr, @sizeOf(LinuxStat), .write)) {
+        return errno.EFAULT;
+    }
+
+    const process = scheduler.getCurrentProcess() orelse {
+        @branchHint(.cold);
+        log.err("No current process", .{});
+        return errno.EAGAIN;
+    };
+
+    if (process.getFile(@intCast(fd))) |file| {
+        const meta = file.stat();
+        const type_bits: u32 = switch (meta.kind) {
+            .regular => 0o100000,
+            .directory => 0o040000,
+            .character_device => 0o020000,
+            .block_device => 0o060000,
+            .symlink => 0o120000,
+            .pipe => 0o010000,
+            .socket => 0o140000,
+        };
+
+        const size = std.math.cast(i64, meta.size) orelse
+            return errno.EOVERFLOW;
+        const block_size = std.math.cast(i64, meta.block_size) orelse
+            return errno.EOVERFLOW;
+        const blocks = std.math.cast(i64, meta.blocks) orelse
+            return errno.EOVERFLOW;
+
+        const result = LinuxStat{
+            .st_ino = meta.inode,
+            .st_mode = type_bits | @as(u32, meta.perm & 0o7777),
+            .st_blksize = block_size,
+            .st_blocks = blocks,
+            .st_gid = meta.gid,
+            .st_uid = meta.uid,
+            .st_size = size,
+            .st_dev = meta.device_id,
+            .st_rdev = meta.special_device_id,
+            .st_atime = @bitCast(meta.accessed.seconds),
+            .st_atime_nsec = meta.accessed.nanoseconds,
+            .st_ctime = @bitCast(meta.changed.seconds),
+            .st_ctime_nsec = meta.changed.nanoseconds,
+            .st_mtime = @bitCast(meta.modified.seconds),
+            .st_mtime_nsec = meta.modified.nanoseconds,
+            .st_nlink = meta.link_count,
+            .pad0 = 0,
+            .unused = std.mem.zeroes([3]i64),
+        };
+
+        const dest: [*]u8 = @ptrFromInt(addr);
+        @memcpy(dest[0..@sizeOf(LinuxStat)], std.mem.asBytes(&result));
         return 0;
     }
 

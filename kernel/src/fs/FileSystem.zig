@@ -8,9 +8,56 @@ const Ext2 = @import("Ext2.zig");
 pub const File = @import("File.zig");
 
 pub const FileType = enum { file, directory };
-pub const FileInfo = struct {
+
+pub const FileKind = enum(u8) {
+    regular,
+    directory,
+    character_device,
+    block_device,
+    symlink,
+    pipe,
+    socket,
+};
+
+pub const Timestep = struct {
+    seconds: i64,
+    nanoseconds: u32,
+
+    pub fn fromUNIX(unix: u32) Timestep {
+        return .{
+            .seconds = unix,
+            .nanoseconds = 0,
+        };
+    }
+};
+
+// Synthetic filesystem identities are stable for this boot. Reserve 1 for TTYs.
+pub const TTY_DEVICE_ID: u64 = 1;
+var next_device_id = std.atomic.Value(u64).init(2);
+
+pub fn allocateDeviceId() u64 {
+    return next_device_id.fetchAdd(1, .monotonic);
+}
+
+pub const Metadata = struct {
+    device_id: u64,
+    inode: u64,
+    perm: u16,
+    uid: u32,
+    gid: u32,
+    link_count: u64,
+
     size: u64,
-    type: FileType,
+    block_size: u64,
+    blocks: u64,
+
+    kind: FileKind,
+
+    special_device_id: u64,
+
+    accessed: Timestep,
+    modified: Timestep,
+    changed: Timestep,
 };
 
 pub const FileFlags = packed struct {
@@ -26,6 +73,7 @@ pub const Handle = struct {
     ctx: u64 = 0, // LBA for iso9660, inode for ext2
     opened: bool = false,
     flags: FileFlags = .{},
+    metadata: Metadata,
 };
 
 pub const FileSysetmType = enum { iso9660, ext2 };
@@ -33,7 +81,8 @@ pub const FsVtable = struct {
     read_file: *const fn (fs: *AnyFs, handle: *Handle, buf: []u8) anyerror!usize,
     open_file: *const fn (fs: *AnyFs, path: []const u8) anyerror!Handle,
     close_file: ?*const fn (fs: *AnyFs, handle: *Handle) void = null,
-    stat: *const fn (fs: *AnyFs, path: []const u8) anyerror!FileInfo,
+    stat: *const fn (fs: *AnyFs, path: []const u8) anyerror!Metadata,
+    stat_file: ?*const fn (fs: *AnyFs, handle: *Handle) anyerror!Metadata = null,
     iter_dir: *const fn (fs: *AnyFs, path: []const u8) anyerror!DirIterator,
 };
 
@@ -51,7 +100,7 @@ pub const DirIterator = struct {
 
     pub const Entry = struct {
         name: []const u8,
-        info: FileInfo,
+        info: Metadata,
     };
 
     pub fn next(self: *DirIterator) !?Entry {
@@ -161,8 +210,20 @@ pub fn write(_: *File, _: []const u8) Error!usize {
     return error.NotImplemented;
 }
 
-pub fn stat(self: *Self, path: []const u8) Error!FileInfo {
+pub fn stat(self: *Self, path: []const u8) Error!Metadata {
     return self.inner.vtable.stat(&self.inner, path) catch |err| return convertToError(err);
+}
+
+pub fn statFile(self: *File) Error!Metadata {
+    const h: *Handle = &self.handle;
+    const any_fs: *AnyFs = @ptrCast(@alignCast(self.private));
+
+    if (any_fs.vtable.stat_file) |func| {
+        @branchHint(.unlikely);
+        return func(any_fs, h) catch |err| return convertToError(err);
+    } else {
+        return h.metadata;
+    }
 }
 
 pub fn seek(self: *File, offset: u32) Error!void {

@@ -7,7 +7,7 @@ Created: 2026-10-18. Based on a targeted source review, not a complete audit oh 
 - [X] Fix dead-task cleanup: save task.next before freeing task.
 - [-] Validate user pointers: check buffers, strings, and vectors; return EFAULT for invalid memory.
 - [X] Validate file descriptors: reject oversized values before casting to u8.
-- [ ] Validate memory ranges: check alignment, overflow, user-space boundaries, and collisions in mmap, munmap, and ELF loading.
+- [X] Validate memory ranges: check alignment, overflow, user-space boundaries, and collisions in mmap, munmap, and ELF loading.
 - [ ] Zero anonymous memory: clear newly allocated mmap and brk pages before exposing them to a process.
 - [ ] Track mapping ownership: record which allocator owns each allocation.
 - [ ] Reclaim process resources: free outstanding mappings and close open files on exit.
