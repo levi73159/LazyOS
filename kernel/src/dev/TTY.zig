@@ -9,7 +9,7 @@ const linux = std.os.linux;
 const T = linux.T;
 const V = linux.V;
 
-const log = std.log.scoped(.tty);
+const log = std.log.scoped(._tty);
 
 const BUF_SIZE = 4096;
 
@@ -37,14 +37,25 @@ winsize: std.posix.winsize = .{
 state: AnsiState = .normal,
 ansi_buf: [32]u8 = undefined,
 ansi_len: usize = 0,
+foreground_task: ?u32 = null,
 
 pub fn hasData(self: *Self) bool {
     return self.line_ready or self.read_pos != self.write_pos;
 }
 
 pub fn putChar(self: *Self, c: u8) void {
-    if (self.termios.lflag.ISIG) {
-        log.err("Signals not supported", .{});
+    if (self.termios.lflag.ISIG) blk: {
+        if (c == self.termios.cc[@intFromEnum(V.INTR)]) {
+            if (self.foreground_task) |task| {
+                if (!scheduler.queueSignal(task, root.proc.signals.SIGINT)) {
+                    log.err("Failed to queue the SIGINT signal for task {d}", .{task});
+                }
+            }
+        } else {
+            break :blk;
+        }
+
+        return;
     }
 
     if (self.termios.lflag.ICANON) {
@@ -145,12 +156,24 @@ pub fn read(self: *Self, buf: []u8) usize {
     return i;
 }
 
-pub fn waitAndRead(self: *Self, buf: []u8) usize {
-    while (!self.line_ready) {
-        scheduler.waitInput();
-    }
+pub fn waitAndRead(self: *Self, buf: []u8) error{Interrupted}!usize {
+    const saved_flags = io.disableInterrupts();
+    defer io.restoreFlags(saved_flags);
 
-    return self.read(buf);
+    while (true) {
+        // Interrupts must be disabled whenever these conditions are checked.
+        if (scheduler.getCurrentProcess()) |process| {
+            if ((process.pending_signals & ~process.blocked_signals) != 0)
+                return error.Interrupted;
+        }
+
+        if (self.line_ready)
+            return self.read(buf);
+
+        scheduler.waitInput(); // marks wait_input, then executes sti; hlt
+
+        io.cli(); // protect the next check after waking
+    }
 }
 
 fn processReg(self: *Self, c: u8) void {
@@ -344,7 +367,7 @@ fn initTermios() linux.termios {
         .oflag = .{ .OPOST = true, .OCRNL = true },
         .cflag = .{ .CSIZE = .CS8, .CREAD = true, .HUPCL = true },
         .lflag = .{
-            .ISIG = false, // We don't have signals yet
+            .ISIG = true, // We don't have signals yet // WE GOT SIGNALS!!! (some)
             .ICANON = true,
             .ECHO = true,
             .ECHOE = true,

@@ -4,6 +4,7 @@ const SyscallFrame = @import("../syscall.zig").SyscallFrame;
 const errno = @import("errno.zig");
 const scheduler = root.proc.scheduler;
 const File = root.fs.File;
+const saftey = @import("safety.zig");
 
 const log = std.log.scoped(._sysvfs);
 
@@ -14,7 +15,6 @@ const log = std.log.scoped(._sysvfs);
 // - access is equal to page access (write for sys_read)
 // returns true for valid
 // false for invalid
-const UserAccess = enum { read, write };
 const MAX_IOVECS = 1024;
 const MAX_PATH = 4096;
 
@@ -37,30 +37,56 @@ const LinuxStat = extern struct {
     st_ctime: u64,
     st_ctime_nsec: u64,
     unused: [3]i64,
+
+    pub fn fromMetadata(meta: *const root.fs.FileSystem.Metadata) error{Overflow}!LinuxStat {
+        const type_bits: u32 = switch (meta.kind) {
+            .regular => 0o100000,
+            .directory => 0o040000,
+            .character_device => 0o020000,
+            .block_device => 0o060000,
+            .symlink => 0o120000,
+            .pipe => 0o010000,
+            .socket => 0o140000,
+        };
+
+        const size = std.math.cast(i64, meta.size) orelse
+            return error.Overflow;
+        const block_size = std.math.cast(i64, meta.block_size) orelse
+            return error.Overflow;
+        const blocks = std.math.cast(i64, meta.blocks) orelse
+            return error.Overflow;
+
+        return LinuxStat{
+            .st_ino = meta.inode,
+            .st_mode = type_bits | @as(u32, meta.perm & 0o7777),
+            .st_blksize = block_size,
+            .st_blocks = blocks,
+            .st_gid = meta.gid,
+            .st_uid = meta.uid,
+            .st_size = size,
+            .st_dev = meta.device_id,
+            .st_rdev = meta.special_device_id,
+            .st_atime = @bitCast(meta.accessed.seconds),
+            .st_atime_nsec = meta.accessed.nanoseconds,
+            .st_ctime = @bitCast(meta.changed.seconds),
+            .st_ctime_nsec = meta.changed.nanoseconds,
+            .st_mtime = @bitCast(meta.modified.seconds),
+            .st_mtime_nsec = meta.modified.nanoseconds,
+            .st_nlink = meta.link_count,
+            .pad0 = 0,
+            .unused = std.mem.zeroes([3]i64),
+        };
+    }
 };
 
-fn validateUserRange(addr: usize, len: usize, access: UserAccess) bool {
-    const USER_SPACE_END: usize = 0x0000_8000_0000_0000;
-    if (len == 0) return true;
-
-    if (addr == 0) return false;
-    if (addr >= USER_SPACE_END) return false;
-    if (len > USER_SPACE_END - addr) return false;
-
-    const lastaddr = addr + len - 1;
-    var page = std.mem.alignBackward(usize, addr, root.PAGE_SIZE);
-    const lastPage = std.mem.alignBackward(usize, lastaddr, root.PAGE_SIZE);
-
-    const current_process = root.proc.scheduler.getCurrentProcess().?;
-    const vmem = &current_process.vmem;
-    while (true) : (page += root.PAGE_SIZE) {
-        _ = vmem.get(page, true, access == .write) orelse return false; // no mapping exist return false
-
-        if (page == lastPage) break;
-    }
-
-    return true;
+comptime {
+    std.debug.assert(@sizeOf(LinuxStat) == 144);
+    std.debug.assert(@offsetOf(LinuxStat, "st_mode") == 24);
+    std.debug.assert(@offsetOf(LinuxStat, "st_size") == 48);
+    std.debug.assert(@offsetOf(LinuxStat, "st_atime") == 72);
 }
+
+const validateUserRange = saftey.validateUserRange;
 
 // Copy only checked bytes; a terminator may occur before an unmapped page.
 fn copyUserPath(addr: usize, buffer: []u8) error{ InvalidAddress, NameTooLong }![]const u8 {
@@ -82,7 +108,7 @@ fn copyUserPath(addr: usize, buffer: []u8) error{ InvalidAddress, NameTooLong }!
     return error.NameTooLong;
 }
 
-fn copyUserIovecs(addr: usize, count: usize, access: UserAccess, buffer: []File.iovec) i64 {
+fn copyUserIovecs(addr: usize, count: usize, access: saftey.UserAccess, buffer: []File.iovec) i64 {
     // Bounds the multiplication and kernel stack usage before accessing memory.
     if (count > MAX_IOVECS or count > buffer.len) return errno.EINVAL;
     if (count == 0) return 0;
@@ -123,12 +149,17 @@ pub fn read(frame: *SyscallFrame) i64 {
     if (!validateUserRange(frame.rsi, count, .write)) return errno.EFAULT;
 
     const ptr: [*]u8 = @ptrFromInt(frame.rsi);
-    const n = file.read(ptr[0..count]) catch |err| {
-        if (err == error.PermissionDenied) {
+    const n = file.read(ptr[0..count]) catch |err| switch (err) {
+        error.PermissionDenied => {
             return errno.EACCES;
-        }
-        log.err("Error reading file: {s}", .{@errorName(err)});
-        return errno.EIO;
+        },
+        error.Interrupted => {
+            return errno.EINTR;
+        },
+        else => {
+            log.err("Error reading file: {s}", .{@errorName(err)});
+            return errno.EIO;
+        },
     };
 
     return @intCast(n);
@@ -366,48 +397,43 @@ pub fn fstat(frame: *SyscallFrame) i64 {
 
     if (process.getFile(@intCast(fd))) |file| {
         const meta = file.stat();
-        const type_bits: u32 = switch (meta.kind) {
-            .regular => 0o100000,
-            .directory => 0o040000,
-            .character_device => 0o020000,
-            .block_device => 0o060000,
-            .symlink => 0o120000,
-            .pipe => 0o010000,
-            .socket => 0o140000,
-        };
-
-        const size = std.math.cast(i64, meta.size) orelse
-            return errno.EOVERFLOW;
-        const block_size = std.math.cast(i64, meta.block_size) orelse
-            return errno.EOVERFLOW;
-        const blocks = std.math.cast(i64, meta.blocks) orelse
-            return errno.EOVERFLOW;
-
-        const result = LinuxStat{
-            .st_ino = meta.inode,
-            .st_mode = type_bits | @as(u32, meta.perm & 0o7777),
-            .st_blksize = block_size,
-            .st_blocks = blocks,
-            .st_gid = meta.gid,
-            .st_uid = meta.uid,
-            .st_size = size,
-            .st_dev = meta.device_id,
-            .st_rdev = meta.special_device_id,
-            .st_atime = @bitCast(meta.accessed.seconds),
-            .st_atime_nsec = meta.accessed.nanoseconds,
-            .st_ctime = @bitCast(meta.changed.seconds),
-            .st_ctime_nsec = meta.changed.nanoseconds,
-            .st_mtime = @bitCast(meta.modified.seconds),
-            .st_mtime_nsec = meta.modified.nanoseconds,
-            .st_nlink = meta.link_count,
-            .pad0 = 0,
-            .unused = std.mem.zeroes([3]i64),
-        };
-
         const dest: [*]u8 = @ptrFromInt(addr);
+        const result = LinuxStat.fromMetadata(&meta) catch return errno.EOVERFLOW;
         @memcpy(dest[0..@sizeOf(LinuxStat)], std.mem.asBytes(&result));
         return 0;
     }
 
     return errno.EBADF;
+}
+
+pub fn lstat(frame: *SyscallFrame) i64 {
+    var path_buffer: [MAX_PATH]u8 = undefined;
+    const path = copyUserPath(frame.rdi, &path_buffer) catch |err| {
+        return if (err == error.NameTooLong)
+            errno.ENAMETOOLONG
+        else
+            errno.EFAULT;
+    };
+
+    const addr = frame.rsi;
+
+    const meta = root.fs.FileSystem.getGlobal().stat(path) catch |err| {
+        return switch (err) {
+            error.FileNotFound => errno.ENOENT,
+            error.PermissionDenied => errno.EACCES,
+            error.NotDirectory => errno.ENOTDIR,
+            error.NotImplemented => errno.ENOSYS,
+            else => errno.EIO,
+        };
+    };
+
+    if (!validateUserRange(addr, @sizeOf(LinuxStat), .write)) {
+        return errno.EFAULT;
+    }
+
+    const result = LinuxStat.fromMetadata(&meta) catch return errno.EOVERFLOW;
+    const dest: [*]u8 = @ptrFromInt(addr);
+    @memcpy(dest[0..@sizeOf(LinuxStat)], std.mem.asBytes(&result));
+
+    return 0;
 }

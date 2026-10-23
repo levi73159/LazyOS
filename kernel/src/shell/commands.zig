@@ -184,6 +184,10 @@ fn run(s: *Shell, args: []const []const u8) anyerror!void {
     const id = try scheduler.spawnProcess(process);
     std.log.debug("Spawned process with id {d}", .{id});
 
+    const tty = root.dev.tty0.get();
+    tty.foreground_task = id;
+    defer tty.foreground_task = null;
+
     const exit_code = scheduler.waitForTaskToExit(id);
     if (exit_code != 0) {
         console.print("Process exited with code {d}\n", .{exit_code});

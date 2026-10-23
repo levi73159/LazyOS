@@ -81,11 +81,11 @@ pub inline fn pause() void {
 }
 
 pub inline fn cli() void {
-    asm volatile ("cli");
+    asm volatile ("cli" ::: .{ .memory = true });
 }
 
 pub inline fn sti() void {
-    asm volatile ("sti");
+    asm volatile ("sti" ::: .{ .memory = true });
 }
 
 pub fn disableInterrupts() usize {
@@ -114,6 +114,8 @@ pub fn wait() void {
 pub fn getFlags() u64 {
     return asm volatile ("pushfq; popq %[flags]"
         : [flags] "=r" (-> u64),
+        :
+        : .{ .memory = true }
     );
 }
 
@@ -122,5 +124,6 @@ pub fn restoreFlags(flags: u64) void {
     asm volatile ("pushq %[flags]; popfq"
         :
         : [flags] "r" (flags),
+        : .{ .memory = true }
     );
 }

@@ -55,13 +55,13 @@ pub fn inputLoop(self: *Self) !void {
 
     while (true) {
         console.print("{s}{s}", .{ self.cwd, self.prompt });
-        var n = tty0.get().waitAndRead(&buf);
+        var n = tty0.get().waitAndRead(&buf) catch @panic("Unhandled sig int");
         const input = if (buf[n - 1] != '\n') buf[0..n] else buf[0 .. n - 1];
         if (input.len == 0) continue;
 
         if (std.mem.eql(u8, input, "exit")) {
             console.print("Are you sure you wanna exit? (y/N)\n", .{});
-            n = tty0.get().waitAndRead(&buf);
+            n = tty0.get().waitAndRead(&buf) catch @panic("Unhandled sig int");
             if (n == 0) continue;
             if (buf[0] != 'y' and buf[0] != 'Y') {
                 continue;

@@ -143,6 +143,7 @@ pub const Error = error{
     Unexpected,
     InvalidSeek,
     NotImplemented,
+    Interrupted,
 } || Disk.DiskError;
 
 inner: AnyFs,

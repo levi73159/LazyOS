@@ -9,6 +9,7 @@ const errno = @import("syscall/errno.zig");
 
 const sysvfs = @import("syscall/vfs.zig");
 const sysmem = @import("syscall/memory.zig");
+const syssig = @import("syscall/signals.zig");
 
 const log = std.log.scoped(._syscall);
 
@@ -47,11 +48,13 @@ export fn syscallHandler(frame: *SyscallFrame) callconv(.c) void {
         1 => sysvfs.write(frame),
         2 => sysvfs.open(frame),
         3 => sysvfs.close(frame),
+        4 => sysvfs.lstat(frame), // TODO: when we add symlink support we need this function to be a new function that will follow the finall symlink
         5 => sysvfs.fstat(frame),
+        6 => sysvfs.lstat(frame),
         9 => sysmem.mmap(frame),
         11 => sysmem.munmap(frame),
         12 => sysmem.brk(frame),
-        13 => rt_sigaction(frame),
+        13 => syssig.rt_sigaction(frame),
         16 => sysvfs.ioctl(frame),
         20 => sysvfs.writev(frame),
         231 => sys_exit_group(frame),
@@ -71,6 +74,8 @@ export fn syscallHandler(frame: *SyscallFrame) callconv(.c) void {
     };
     log.debug("syscall {d} -> {d}, user_rip={x}", .{ num, val, frame.user_rip });
     frame.rax = @bitCast(val);
+
+    frame.user_rip = root.proc.signals.checkPendingSignals(frame.user_rip);
 }
 
 fn sys_getpid(_: *SyscallFrame) i64 {
@@ -79,10 +84,6 @@ fn sys_getpid(_: *SyscallFrame) i64 {
 
 fn sys_gettid(_: *SyscallFrame) i64 {
     return scheduler.currentTask();
-}
-
-fn rt_sigaction(_: *SyscallFrame) i64 {
-    return 0;
 }
 
 fn sys_arch_prctl(frame: *SyscallFrame) i64 {

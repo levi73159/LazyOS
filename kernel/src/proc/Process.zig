@@ -6,6 +6,7 @@ const pmem = root.pmem;
 const bootinfo = root.arch.bootinfo;
 const VirtualSpace = root.arch.VirtualSpace;
 const File = root.fs.File;
+const signals = @import("signals.zig");
 
 const log = std.log.scoped(._process);
 
@@ -101,6 +102,11 @@ mmap_current: u64 = USER_MEM_MAP_BASE,
 
 regions: std.ArrayList(MemoryRegion),
 anonymous_pages: std.ArrayList(AnonymousPage) = .empty,
+
+signal_actions: [64]signals.SignalAction = @splat(.{}),
+
+pending_signals: u64 = 0,
+blocked_signals: u64 = 0,
 
 pub fn getFile(self: *Self, fd: u8) ?*File {
     return self.fd_table.getFile(fd);
@@ -242,6 +248,16 @@ pub fn loadElf(data: []const u8, allocator: std.mem.Allocator, args: []const []c
         .tls_size = tls_total_size,
         .tcb_base = tcb_addr,
     };
+}
+
+// NOTE: should only be called by scheduler
+pub fn queueSignal(self: *Self, signal: u8) bool {
+    if (signal == 0 or signal > 64) {
+        log.err("Signal id to big, counting as invalid and returning false", .{});
+        return false;
+    }
+    self.pending_signals |= @as(u64, 1) << @as(u6, @intCast(signal - 1));
+    return true;
 }
 
 pub fn anonymousPageIndex(self: *const Self, virt: usize) ?usize {

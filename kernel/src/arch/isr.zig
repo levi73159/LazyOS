@@ -102,6 +102,10 @@ export fn interruptHandler(frame: *InterruptFrame) callconv(.c) void {
     } else {
         handleError(frame);
     }
+
+    if ((frame.cs & 3) == 3) {
+        root.proc.signals.handleInterruptReturn(frame);
+    }
 }
 
 fn handleError(frame: *InterruptFrame) noreturn {

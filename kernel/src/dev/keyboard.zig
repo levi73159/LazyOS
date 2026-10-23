@@ -211,7 +211,12 @@ const Key = struct {
     special: bool, // modifier keys like caps lock or shift
 
     pub fn getChar(self: Key) ?u8 {
-        return if (self.modifiers.shift) self.scancode.getShiftChar() else self.scancode.getChar();
+        const c = (if (self.modifiers.shift) self.scancode.getShiftChar() else self.scancode.getChar()) orelse return null;
+
+        if (self.modifiers.ctrl and std.ascii.isAlphabetic(c)) {
+            return c & 0x1f;
+        }
+        return c;
     }
 };
 

@@ -36,6 +36,7 @@ pub const WaitingState = struct {
 };
 
 pub const Task = struct {
+    // saved register state (provied by interrupt handler)
     registers: arch.registers.InterruptFrame,
     stack: []u8, // required to be free
     process: ?*Process = null,
@@ -45,8 +46,6 @@ pub const Task = struct {
     id: u32,
     state: TaskState,
     fs_base: u64 = 0,
-
-    // saved register state (provied by interrupt handler)
 };
 
 // will be stored on the heap
@@ -82,6 +81,8 @@ pub fn init() void {
         .ds = @intFromEnum(gdt.Segment.kernel_data),
         .rflags = 0x202, // IF=1 so interrupts still fire
     };
+
+    arch.isr.register(0x81, schedule); // used for needing to rescedule
 }
 
 pub fn schedule(frame: *arch.registers.InterruptFrame) void {
@@ -433,8 +434,10 @@ pub fn currentTask() u32 {
 pub fn taskExit(code: u64) noreturn {
     io.cli();
     current.?.state = .{ .dead = code };
-    io.sti();
-    io.hlt();
+
+    asm volatile ("int $0x81" ::: .{ .memory = true });
+
+    @panic("Exited task resumed");
 }
 
 pub fn waitForTaskToExit(id: u32) u64 {
@@ -517,7 +520,7 @@ pub fn waitInput() void {
     if (current) |task| {
         task.state = .wait_input;
     }
-    asm volatile ("sti; hlt");
+    asm volatile ("sti; hlt" ::: .{ .memory = true });
 }
 
 // set up once at init
@@ -530,4 +533,33 @@ fn idleLoop() callconv(.c) noreturn {
 
 pub fn getVmem() *arch.VirtualSpace {
     return if (getCurrentProcess()) |proc| &proc.vmem else arch.paging.getKernelVmem();
+}
+
+/// 0 for current task, asserts that a process is running, return false for failed to queue, can be due to task not found or blocked
+pub fn queueSignal(id: u32, sig: u8) bool {
+    const flags = io.disableInterrupts();
+    defer io.restoreFlags(flags);
+
+    if (sig == 0 or sig > 64) return false;
+    const task = if (id == 0) getCurrentTask() else getTask(id) orelse return false;
+    if (task.state == .dead) return false;
+    const process = task.process orelse return false;
+
+    if (process.signal_actions[sig - 1].handler == 1)
+        return true; // ignored: don't queue or wake
+
+    if (!process.queueSignal(sig)) return false;
+
+    const is_blocked = (@as(u64, 1) << @as(u6, @intCast(sig - 1)) & process.blocked_signals) != 0;
+    if (is_blocked) {
+        return true;
+    }
+
+    // wake process
+    switch (task.state) {
+        .wait_input => task.state = .ready,
+        else => {}, // no other interruptable sleeps/waits
+    }
+
+    return true;
 }
