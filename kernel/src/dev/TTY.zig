@@ -318,45 +318,54 @@ pub fn ttyClose(file: *File) void {
     tty.col = 0;
 }
 
+pub fn ttyIoctlInfo(_: *File, request: u32) ?File.IoctlInfo {
+    return switch (request) {
+        T.CGETS => .{ .size = @sizeOf(linux.termios), .access = .write },
+        T.CSETS => .{ .size = @sizeOf(linux.termios), .access = .read },
+        T.IOCGWINSZ => .{ .size = @sizeOf(std.posix.winsize), .access = .write },
+        T.IOCSWINSZ => .{ .size = @sizeOf(std.posix.winsize), .access = .read },
+        T.IOCGPGRP => .{ .size = @sizeOf(u32), .access = .write },
+        else => null,
+    };
+}
+
+// The syscall handler validates the user buffer using ttyIoctlInfo first.
 pub fn ttyIoCtl(file: *File, request: u32, arg: usize) File.Error!i64 {
     const tty: *Self = @ptrCast(@alignCast(file.private));
     switch (request) {
         T.CGETS => {
-            const ptr: *linux.termios = @ptrFromInt(arg);
+            const ptr: *align(1) linux.termios = @ptrFromInt(arg);
             ptr.* = tty.termios;
-            return 0;
         },
         T.CSETS => {
-            const ptr: *linux.termios = @ptrFromInt(arg);
+            const ptr: *align(1) const linux.termios = @ptrFromInt(arg);
             tty.termios = ptr.*;
-            return 0;
         },
         T.IOCGWINSZ => {
-            const ptr: *std.posix.winsize = @ptrFromInt(arg);
+            const ptr: *align(1) std.posix.winsize = @ptrFromInt(arg);
             ptr.* = tty.winsize;
-            return 0;
         },
         T.IOCSWINSZ => {
-            const ptr: *std.posix.winsize = @ptrFromInt(arg);
+            const ptr: *align(1) const std.posix.winsize = @ptrFromInt(arg);
             tty.winsize = ptr.*;
-            return 0;
         },
         T.IOCGPGRP => {
-            const ptr: *u32 = @ptrFromInt(arg);
+            const ptr: *align(1) u32 = @ptrFromInt(arg);
             ptr.* = 1; // WARN: fake process group
-            return 0;
         },
         else => {
             log.warn("TTY: Unsupported ioctl: {x}", .{request});
             return -25; // ENOTTY
         },
     }
+    return 0;
 }
 
 pub const vtable = File.FileOps{
     .read = ttyRead,
     .write = ttyWrite,
     .ioctl = ttyIoCtl,
+    .ioctlInfo = ttyIoctlInfo,
     .seek = null,
     .close = ttyClose,
 };

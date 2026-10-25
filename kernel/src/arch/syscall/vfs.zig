@@ -209,7 +209,6 @@ pub fn openat(frame: *SyscallFrame) i64 {
     return errno.ENOENT;
 }
 
-/// BUG: accesses user buffers without request-specific checks.
 pub fn ioctl(frame: *SyscallFrame) i64 {
     const fd = frame.rdi;
     const request = frame.rsi;
@@ -225,6 +224,15 @@ pub fn ioctl(frame: *SyscallFrame) i64 {
     const file = process.getFile(@intCast(fd)) orelse {
         return errno.EBADF;
     };
+
+    if (request > std.math.maxInt(u32)) {
+        log.err("request is to big: must be within u32 limit, request: 0x{x}, {0d}", .{request});
+        return errno.EINVAL;
+    }
+
+    const info = file.ioctlInfo(@intCast(request)) orelse return errno.ENOTTY;
+    const access: saftey.UserAccess = @enumFromInt(@intFromEnum(info.access));
+    if (!validateUserRange(arg, info.size, access)) return errno.EFAULT;
 
     return file.ioctl(@intCast(request), arg) catch |err| {
         log.err("Failed to ioctl file {d}: {s}", .{ fd, @errorName(err) });

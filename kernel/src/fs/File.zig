@@ -6,11 +6,18 @@ const IOWriter = std.Io.Writer;
 
 const Self = @This();
 
+pub const IoctlInfo = struct {
+    size: usize,
+    // Access to the user's buffer, from the kernel's perspective.
+    access: enum { read, write },
+};
+
 pub const FileOps = struct {
     read: *const fn (f: *File, buf: []u8) Error!usize,
     write: *const fn (f: *File, buf: []const u8) Error!usize,
     seek: ?*const fn (f: *File, offset: u32) Error!void,
     ioctl: ?*const fn (f: *File, req: u32, arg: usize) Error!i64,
+    ioctlInfo: ?*const fn (f: *File, req: u32) ?IoctlInfo = null,
     close: *const fn (f: *File) void,
 };
 
@@ -34,6 +41,12 @@ pub fn read(self: *Self, buf: []u8) Error!usize {
 pub fn ioctl(self: *Self, req: u32, arg: usize) Error!i64 {
     if (self.f_ops.ioctl) |f| return f(self, req, arg);
     return error.NotImplemented;
+}
+
+pub fn ioctlInfo(self: *Self, req: u32) ?IoctlInfo {
+    if (self.f_ops.ioctl == null) return null;
+    if (self.f_ops.ioctlInfo) |f| return f(self, req);
+    return null;
 }
 
 pub fn readAlloc(self: *Self, allocator: std.mem.Allocator) AllocReadError![]u8 {
