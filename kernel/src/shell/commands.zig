@@ -156,6 +156,7 @@ fn gfx(_: *Shell, _: []const []const u8) anyerror!void {
 
 fn run(s: *Shell, args: []const []const u8) anyerror!void {
     if (s.fs == null) return error.UnableToFetchFileSystem;
+    if (args.len == 0) return error.MissingCommands;
     const fs = s.fs.?;
     const name = args[0];
 
@@ -199,6 +200,7 @@ pub fn diskCmd(s: *Shell, args: []const []const u8) anyerror!void {
 
     var model: [40]u8 = undefined;
     var serial: [20]u8 = undefined;
+    if (args.len == 0) return error.MissingCommands;
     const disk_cmd = args[0];
     if (std.mem.eql(u8, "list", disk_cmd)) {
         for (0..Disk.disks.len) |i| {
