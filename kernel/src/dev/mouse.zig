@@ -179,7 +179,7 @@ pub fn init() void {
     log.debug("Mouse initialized", .{});
 }
 
-pub fn handler(_: *arch.registers.InterruptFrame) void {
+pub fn handler(_: *arch.registers.InterruptFrame, _: irq.SIMD_PTR) void {
     const status = StatusRegister.read();
 
     if (status.time_out_error) {

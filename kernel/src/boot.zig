@@ -66,16 +66,20 @@ export fn boot_init() callconv(.naked) noreturn {
             // enable SSE
         ++ "mov %cr0, %rax\n" ++ "and $0xFFFFFFFFFFFFFFFB, %rax\n" ++ "or  $0x2, %rax\n" ++ "mov %rax, %cr0\n"
 
-            // enable SSE + AVX in CR4
-        ++ "mov %cr4, %rax\n" ++ "or  $0x40600, %rax\n" // OSFXSR(bit9) | OSXMMEXCPT(bit10) | OSXSAVE(bit18)
+            // Enable SSE only. Clear OSXSAVE even if the bootloader enabled it.
+        ++ "mov %cr4, %rax\n" ++ "btr $18, %rax\n" ++ "or  $0x600, %rax\n" // OSFXSR(bit9) | OSXMMEXCPT(bit10)
+            // AVX is disabled because FXSAVE64/FXRSTOR64 do not preserve the
+            // upper halves of YMM registers. Reenable only with XSAVE and XRSTOR
+            // support and CPU feature checks in place.
+            // ++ "or $0x40600, %rax\n" // Also enables OSXSAVE
         ++ "mov %rax, %cr4\n"
 
             // enable AVX in XCR0 via xsetbv
             // XCR0 bit 0 = x87, bit 1 = SSE, bit 2 = AVX
-        ++ "xor %ecx, %ecx\n" // XCR0 index = 0
-        ++ "xgetbv\n" // read current XCR0 into edx:eax
-        ++ "or  $0x7, %eax\n" // enable x87 + SSE + AVX
-        ++ "xsetbv\n" // write back
+            // ++ "xor %ecx, %ecx\n" // XCR0 index = 0
+            // ++ "xgetbv\n" // read current XCR0 into edx:eax
+            // ++ "or  $0x7, %eax\n" // enable x87 + SSE + AVX
+            // ++ "xsetbv\n" // write back
 
         ++ "call boot_init_stage2\n" ::: .{ .memory = true });
 }

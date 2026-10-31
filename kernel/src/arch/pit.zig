@@ -38,9 +38,9 @@ pub fn init(freq: u32) void {
     arch.irq.enable(0);
 }
 
-fn handler(frame: *Frame) void {
+fn handler(frame: *Frame, simd: arch.irq.SIMD_PTR) void {
     _ = @atomicRmw(u64, &tick_count, .Add, 1, .monotonic);
-    scheduler.schedule(frame);
+    scheduler.schedule(frame, simd);
 }
 
 fn sendCommandByte(command: CommandByte) void {

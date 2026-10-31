@@ -156,6 +156,10 @@ pub fn _start(mb: *const BootInfo) callconv(.c) void {
     };
     _ = cpu;
 
+    // TODO: after getting check for features likes AVX instead of automaticly enabling them, then enable them if supported
+    // for now it may be simpiler to throw an error if a feature we need not supported but eventually I need to add support
+    // without stuff like that
+
     // enable syscalls
     arch.syscall.init();
 

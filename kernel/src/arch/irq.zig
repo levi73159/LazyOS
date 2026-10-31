@@ -7,7 +7,9 @@ const log = @import("std").log.scoped(.irq);
 
 const InterruptFrame = @import("registers.zig").InterruptFrame;
 
-const Handler = *const fn (frame: *InterruptFrame) void;
+pub const SIMD_STATE = isr.SIMD_STATE;
+pub const SIMD_PTR = isr.SIMD_PTR;
+const Handler = *const fn (frame: *InterruptFrame, simd: *align(16) isr.SIMD_STATE) void;
 
 var handlers: [16]?Handler = [_]?Handler{null} ** 16;
 
@@ -21,7 +23,7 @@ pub fn init() void {
     }
 }
 
-fn irqHandler(frame: *InterruptFrame) void {
+fn irqHandler(frame: *InterruptFrame, simd: *align(16) isr.SIMD_STATE) void {
     const irq: u8 = @intCast(frame.interrupt_number - pic.REMAP_OFFSET);
     // just to be safe we make sure the irq is in range
     if (irq >= handlers.len) {
@@ -37,7 +39,7 @@ fn irqHandler(frame: *InterruptFrame) void {
     }
 
     if (handlers[irq]) |func| {
-        func(frame);
+        func(frame, simd);
     } else {
         log.debug("IRQ {d} unhandled", .{irq});
     }

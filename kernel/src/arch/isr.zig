@@ -11,7 +11,13 @@ const scheduler = @import("root").proc.scheduler;
 const root = @import("root");
 
 const InterruptFn = *const fn () callconv(.naked) noreturn;
-pub const Handler = *const fn (frame: *InterruptFrame) void;
+pub const SIMD_STATE = [512]u8;
+
+pub const SIMD_PTR = *align(16) SIMD_STATE;
+pub const Handler = *const fn (
+    frame: *InterruptFrame,
+    simd_state: *align(16) SIMD_STATE,
+) void;
 
 const InterruptFrame = @import("registers.zig").InterruptFrame;
 
@@ -94,9 +100,9 @@ pub fn init() void {
     idt.disableGate(0x80);
 }
 
-export fn interruptHandler(frame: *InterruptFrame) callconv(.c) void {
+export fn interruptHandler(frame: *InterruptFrame, simd_state: *align(16) SIMD_STATE) callconv(.c) void {
     if (handlers[frame.interrupt_number]) |handler| {
-        handler(frame);
+        handler(frame, simd_state);
     } else if (frame.interrupt_number >= 32) {
         host.warn("Unhandled interrupt {d}", .{frame.interrupt_number});
     } else {
@@ -104,7 +110,7 @@ export fn interruptHandler(frame: *InterruptFrame) callconv(.c) void {
     }
 
     if ((frame.cs & 3) == 3) {
-        root.proc.signals.handleInterruptReturn(frame);
+        root.proc.signals.handleInterruptReturn(frame, simd_state);
     }
 }
 

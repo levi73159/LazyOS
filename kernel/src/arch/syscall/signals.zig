@@ -8,6 +8,8 @@ const saftey = @import("safety.zig");
 
 const signals = root.proc.signals;
 
+const log = std.log.scoped(._syssig);
+
 pub fn rt_sigaction(frame: *Frame) i64 {
     const sig = frame.rdi;
     const act_addr = frame.rsi;
@@ -15,10 +17,14 @@ pub fn rt_sigaction(frame: *Frame) i64 {
     const sig_set_size = frame.r10; // must be 8
 
     if (sig_set_size != 8) {
+        log.err("EINVAL: sig_set_size(r10={d}) != 8", .{sig_set_size});
         return errno.EINVAL;
     }
 
-    if (sig == 0 or sig > 64) return errno.EINVAL;
+    if (sig == 0 or sig > 64) {
+        log.err("EINVAL: sig(rdi={d}) > 64 or == 0", .{sig});
+        return errno.EINVAL;
+    }
 
     // SIGKILL and SIGSTOP cannot have their actions changed.
     if (act_addr != 0 and (sig == 9 or sig == 19))

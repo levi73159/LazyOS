@@ -46,6 +46,7 @@ pub const Task = struct {
     id: u32,
     state: TaskState,
     fs_base: u64 = 0,
+    simd: arch.irq.SIMD_STATE align(16),
 };
 
 // will be stored on the heap
@@ -68,6 +69,7 @@ pub fn init() void {
         .state = .running,
         .registers = undefined, // set in the first schedule
         .stack = &.{}, // not own by us
+        .simd = comptime initialSimdState(),
     };
 
     task_list = task;
@@ -85,7 +87,7 @@ pub fn init() void {
     arch.isr.register(0x81, schedule); // used for needing to rescedule
 }
 
-pub fn schedule(frame: *arch.registers.InterruptFrame) void {
+pub fn schedule(frame: *arch.registers.InterruptFrame, simd: arch.irq.SIMD_PTR) void {
     if (task_list == null) return; // no tasks
 
     paused = false;
@@ -99,14 +101,15 @@ pub fn schedule(frame: *arch.registers.InterruptFrame) void {
         if (task.state == .dead) {
             task_has_died = true;
             log.info("Task {d} is dead", .{task.id});
-        } else if (task.state == .wait_input or task.state == .waiting) {
-            // blocked task — only save registers, don't touch state
-            task.registers = frame.*;
-            task.fs_base = msr.read(0xC0000100);
         } else {
-            task.state = .ready;
+            // blocked task — only save registers, don't touch state, otherwise make state ready
             task.registers = frame.*;
+            task.simd = simd.*;
             task.fs_base = msr.read(0xC0000100);
+            // if not blocked
+            if (!(task.state == .wait_input or task.state == .waiting)) {
+                task.state = .ready;
+            }
         }
     }
 
@@ -120,6 +123,7 @@ pub fn schedule(frame: *arch.registers.InterruptFrame) void {
                     idle_frame.?.rip, idle_frame.?.cs, idle_frame.?.ss, idle_frame.?.rsp, idle_frame.?.rflags,
                 });
                 frame.* = idle_frame.?;
+                simd.* = idle_simd_state;
                 current = null; // no current tasks
                 arch.paging.getKernelVmem().switchTo();
                 return;
@@ -132,6 +136,7 @@ pub fn schedule(frame: *arch.registers.InterruptFrame) void {
     current = next;
     current.?.state = .running;
     frame.* = current.?.registers; // copy saved register state
+    simd.* = current.?.simd;
 
     msr.write(0xC0000100, current.?.fs_base);
     if (current.?.process) |process| {
@@ -313,6 +318,7 @@ pub fn createTask(rip: u64, rsp: u64, stack: []u8, user: bool, args: anytype) u3
         .stack = stack,
         .registers = frame,
         .next = null,
+        .simd = comptime initialSimdState(),
     };
 
     appendTask(task);
@@ -344,6 +350,7 @@ pub fn spawnProcess(process: *Process) !u32 {
         .next = null,
         .process = process,
         .fs_base = process.tcb_base,
+        .simd = comptime initialSimdState(),
     };
 
     root.dev.tty0.fdInit(&process.fd_table);
@@ -525,6 +532,23 @@ pub fn waitInput() void {
 
 // set up once at init
 var idle_frame: ?arch.registers.InterruptFrame = null;
+
+fn initialSimdState() [512]u8 {
+    var state = [_]u8{0} ** 512;
+
+    // x87 control word = 0x037f.
+    state[0] = 0x7f;
+    state[1] = 0x03;
+
+    // MXCSR = 0x00001f80.
+    state[24] = 0x80;
+    state[25] = 0x1f;
+
+    return state;
+}
+
+var idle_simd_state: [512]u8 align(16) = initialSimdState();
+
 fn idleLoop() callconv(.c) noreturn {
     while (true) {
         asm volatile ("sti; hlt");

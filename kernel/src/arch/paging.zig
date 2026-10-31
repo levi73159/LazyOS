@@ -186,7 +186,8 @@ pub const ErrorCode = packed struct(u32) {
     _reserved1: u16, // bits 16–31
 };
 
-pub fn pageFaultHandler(frame: *arch.registers.InterruptFrame) void {
+// FIRST real fault hanlder made in this os... :)
+pub fn pageFaultHandler(frame: *arch.registers.InterruptFrame, _: @import("irq.zig").SIMD_PTR) void {
     const console = root.console;
 
     const error_code: ErrorCode = @bitCast(@as(u32, @truncate(frame.error_code))); // ignore upper bits

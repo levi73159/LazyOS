@@ -39,10 +39,18 @@ interruptCommon:
     mov %ax, %ds
     mov %ax, %es
 
-    mov %rsp, %rdi    # frame pointer into rdi (first arg)
-    sub $8, %rsp      # align to 16 bytes before call
+    mov %rsp, %rbx
+    mov %rbx, %rdi              # syscallHandler(frame)
+
+    sub $512, %rsp
+    and $-16, %rsp
+    fxsave64 (%rsp)
+
+    mov %rsp, %rsi
     call interruptHandler
-    add $8, %rsp      # undo alignment pad
+
+    fxrstor64 (%rsp)
+    mov %rbx, %rsp             
 
     pop %rax
     mov %ax, %ds
@@ -100,10 +108,21 @@ syscallEntry:
     push %rsi
     push %rbp
 
-    mov %rsp, %rdi
-    sub $8, %rsp
+    # RBX's original value has already been pushed.
+    # Keep the general-register frame address in RBX.
+    mov %rsp, %rbx              # RBX is call safe under the x86-64 c calling conventions
+    mov %rbx, %rdi              # syscallHandler(frame), 
+
+    # Allocate 512 bytes and align downward to 16 bytes.
+    sub $512, %rsp
+    and $-16, %rsp
+    fxsave64 (%rsp)
+
+    # Syscall handler doesn't need access so we ignore it
     call syscallHandler
-    add $8, %rsp
+
+    fxrstor64 (%rsp)
+    mov %rbx, %rsp             # Restore general-register frame position
 
     # AMD SYSRET can preserve cached SS attributes. Reload a valid
     # kernel data descriptor before restoring the user registers.

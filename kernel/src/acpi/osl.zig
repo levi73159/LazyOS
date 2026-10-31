@@ -330,7 +330,7 @@ const IrqHandler = struct {
 
 var uacpi_irq_handlers: [16]?IrqHandler = [_]?IrqHandler{null} ** 16;
 
-fn wrapper(frame: *arch.registers.InterruptFrame) void {
+fn wrapper(frame: *arch.registers.InterruptFrame, _: arch.irq.SIMD_PTR) void {
     const number: u8 = @truncate(frame.interrupt_number - arch.pic.REMAP_OFFSET);
     log.debug("IRQ {d}", .{number});
     if (number >= 16) {

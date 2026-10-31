@@ -271,7 +271,7 @@ pub fn init() void {
     arch.irq.enable(1);
 }
 
-pub fn handler(_: *InterruptFrame) void {
+pub fn handler(_: *InterruptFrame, _: arch.irq.SIMD_PTR) void {
     const scancode = io.inb(PORT_DATA);
 
     const key_presses = scancode & 0x80 == 0;

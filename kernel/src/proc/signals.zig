@@ -73,6 +73,7 @@ pub fn checkPendingSignals(old_rip: u64) u64 {
 
 pub fn handleInterruptReturn(
     frame: *@import("../arch/registers.zig").InterruptFrame,
+    simd: @import("root").arch.isr.SIMD_PTR,
 ) void {
     while ((frame.cs & 3) == 3) {
         const process = scheduler.getCurrentProcess() orelse return;
@@ -99,7 +100,7 @@ pub fn handleInterruptReturn(
                 };
 
                 // Replace frame with another task's saved context.
-                scheduler.schedule(frame);
+                scheduler.schedule(frame, simd);
             },
             else => return, // Other default actions aren't implemented yet.
         }
