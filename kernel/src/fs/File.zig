@@ -27,7 +27,7 @@ private: *anyopaque, // AnyFS for a file/dir, TTY for stdin/stdout/stderr
 
 pub const Error = FS.Error;
 const UnxpectedEOF = error{UnexpectedEOF} || Error;
-const AllocReadError = std.mem.Allocator.Error || Error;
+const AllocReadError = std.mem.Allocator.Error || UnxpectedEOF;
 
 pub fn close(self: *Self) void {
     return self.f_ops.close(self);
@@ -51,15 +51,25 @@ pub fn ioctlInfo(self: *Self, req: u32) ?IoctlInfo {
 
 pub fn readAlloc(self: *Self, allocator: std.mem.Allocator) AllocReadError![]u8 {
     const handle = self.handle;
-    // calculate how much is left to read
-    const left = handle.size - handle.pos;
+
+    // calculate how much is left to read, also adds a check for overflow
+    const left = if (handle.pos >= handle.size)
+        0
+    else
+        handle.size - handle.pos;
 
     const buf = try allocator.alloc(u8, left);
     errdefer allocator.free(buf);
 
-    const size = try self.read(buf);
-    if (size != left) @panic("SIZE MISMATCH: UnexpectedEOF");
-    return buf[0..size];
+    const result = try self.readAll(buf);
+    if (result.len != left) {
+        @branchHint(.unlikely);
+        std.log.err("Size mismatch: expected {d}, got {d}", .{
+            left, result.len,
+        });
+        return error.UnexpectedEOF;
+    }
+    return result;
 }
 
 pub fn readAll(self: *Self, buf: []u8) Error![]u8 {

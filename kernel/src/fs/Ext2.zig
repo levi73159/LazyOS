@@ -733,6 +733,7 @@ fn getBlockPtrCached(self: *Self, inode: *const Inode, index: u32, cache: *Indir
     if (index < di_base) {
         const si_index = index - si_base;
         const si_block = inode.singly_indirect_ptr;
+        if (si_block == 0) return 0;
 
         if (!cache.si_valid or cache.si_block != si_block) {
             const bytes = std.mem.sliceAsBytes(cache.si_data[0..ptrs_per_block]);
@@ -746,6 +747,7 @@ fn getBlockPtrCached(self: *Self, inode: *const Inode, index: u32, cache: *Indir
     // doubly indirect
     const di_index = index - di_base;
     const di_table_block = inode.doubly_indirect_ptr;
+    if (di_table_block == 0) return 0;
 
     // cache the top-level DI table
     if (!cache.di_valid or cache.di_block != di_table_block) {
@@ -757,6 +759,7 @@ fn getBlockPtrCached(self: *Self, inode: *const Inode, index: u32, cache: *Indir
 
     // the SI sub-block for this DI entry
     const si_sub_block = cache.di_data[di_index / ptrs_per_block];
+    if (si_sub_block == 0) return 0;
     const si_offset = di_index % ptrs_per_block;
 
     // reuse si cache for the sub-block
@@ -792,7 +795,16 @@ fn vfsReadFile(fs: *FS.AnyFs, handle: *FS.Handle, buf: []u8) !usize {
         const byte_off: u32 = @intCast(abs_pos % self.block_size);
 
         const first_ptr = try self.getBlockPtrCached(&inode, block_index, indirect_cache);
-        if (first_ptr == 0) break; // sparse block
+        if (first_ptr == 0) {
+            const chunk = @min(
+                self.block_size - byte_off,
+                to_read - done,
+            );
+
+            @memset(buf[done..][0..chunk], 0);
+            done += chunk;
+            continue;
+        }
 
         // unaligned start: read one block into scratch, copy what we need
         if (byte_off != 0) {
