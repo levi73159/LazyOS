@@ -143,6 +143,10 @@ pub fn loadElf(data: []const u8, allocator: std.mem.Allocator, args: []const []c
 
     var ph_iter = header.iterateProgramHeadersBuffer(data);
     while (try ph_iter.next()) |ph| {
+        if (ph.p_memsz < ph.p_filesz) {
+            log.err("ph.p_memsz < ph.p_filez, {d} < {d}", .{ ph.p_memsz, ph.p_filesz });
+            return error.InvalidElf;
+        }
         switch (ph.p_type) {
             elf.PT_LOAD => {
                 if (!first_load_seen) {
