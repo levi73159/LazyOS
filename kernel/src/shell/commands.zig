@@ -180,6 +180,7 @@ fn run(s: *Shell, args: []const []const u8) anyerror!void {
     std.log.debug("process created", .{});
     process.* = Process.loadElf(data, s.allocator, args) catch |err| {
         std.log.err("Failed to load elf: {s} due to {s}", .{ path, @errorName(err) });
+        return err;
     };
     errdefer process.deinit(s.allocator);
 
