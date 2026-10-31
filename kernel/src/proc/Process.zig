@@ -147,6 +147,16 @@ pub fn loadElf(data: []const u8, allocator: std.mem.Allocator, args: []const []c
             log.err("ph.p_memsz < ph.p_filez, {d} < {d}", .{ ph.p_memsz, ph.p_filesz });
             return error.InvalidElf;
         }
+        if (ph.p_type == elf.PT_LOAD or ph.p_type == elf.PT_TLS) {
+            if (ph.p_offset > data.len) {
+                log.err("ELF segment offset {d} exceeds file size {d}", .{ ph.p_offset, data.len });
+                return error.InvalidElf;
+            }
+            if (ph.p_filesz > data.len - ph.p_offset) {
+                log.err("ELF segment size {d} at offset {d} exceeds file size {d}", .{ ph.p_filesz, ph.p_offset, data.len });
+                return error.InvalidElf;
+            }
+        }
         switch (ph.p_type) {
             elf.PT_LOAD => {
                 if (!first_load_seen) {
