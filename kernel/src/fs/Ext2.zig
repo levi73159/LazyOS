@@ -704,6 +704,7 @@ pub fn mount(disk: *Disk) !FS.AnyFs {
         .close_file = &vfsCloseFile,
         .stat = &vfsStat,
         .iter_dir = &vfsIterDir,
+        .iter_dir_handle = &vfsIterDirHandle,
     }, .fs_type = .ext2 };
     const bytes = std.mem.asBytes(&ext2);
     @memcpy(anyfs.state[0..bytes.len], bytes);
@@ -906,9 +907,26 @@ fn vfsStat(fs: *FS.AnyFs, path: []const u8) !FS.Metadata {
 fn vfsIterDir(fs: *FS.AnyFs, path: []const u8) !FS.DirIterator {
     const self: *Self = @ptrCast(@alignCast(&fs.state));
     const inode = try self.find(path) orelse return error.FileNotFound;
+    return createDirIterator(fs, &inode.inode);
+}
+
+fn vfsIterDirHandle(fs: *FS.AnyFs, handle: *const FS.Handle) !FS.DirIterator {
+    const self: *Self = @ptrCast(@alignCast(&fs.state));
+    if (!handle.opened or handle.metadata.device_id != self.device_id or handle.ctx > std.math.maxInt(u32))
+        return error.BadFileHandle;
+    if (handle.metadata.kind != .directory) return error.NotDirectory;
+
+    const inode = try self.getInodeNoRef(@intCast(handle.ctx));
+    return createDirIterator(fs, &inode);
+}
+
+fn createDirIterator(fs: *FS.AnyFs, inode: *const Inode) !FS.DirIterator {
+    const self: *Self = @ptrCast(@alignCast(&fs.state));
+    if (!inode.isDir()) return error.NotDirectory;
 
     const iter_ctx = self.allocator.create(VfsDirIterCtx) catch return error.OutOfMemory;
-    iter_ctx.* = try .init(self, self.allocator, &inode.inode);
+    errdefer self.allocator.destroy(iter_ctx);
+    iter_ctx.* = try .init(self, self.allocator, inode);
     const iter = FS.DirIterator{
         .fs = fs,
         .vtable = &VfsDirIterCtx.vtable,

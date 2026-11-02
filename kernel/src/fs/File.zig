@@ -18,6 +18,7 @@ pub const FileOps = struct {
     seek: ?*const fn (f: *File, offset: u32) Error!void,
     ioctl: ?*const fn (f: *File, req: u32, arg: usize) Error!i64,
     ioctlInfo: ?*const fn (f: *File, req: u32) ?IoctlInfo = null,
+    it: ?*const fn (f: *File) Error!FS.DirIterator = null,
     close: *const fn (f: *File) void,
 };
 
@@ -25,11 +26,19 @@ f_ops: *const FileOps,
 handle: FS.Handle,
 private: *anyopaque, // AnyFS for a file/dir, TTY for stdin/stdout/stderr
 
+dir_iterator: ?FS.DirIterator = null,
+dir_pending: ?FS.DirIterator.Entry = null,
+dir_offset: u64 = 0,
+
 pub const Error = FS.Error;
 const UnxpectedEOF = error{UnexpectedEOF} || Error;
 const AllocReadError = std.mem.Allocator.Error || UnxpectedEOF;
 
 pub fn close(self: *Self) void {
+    if (self.dir_iterator) |*iter| iter.deinit();
+    self.dir_iterator = null;
+    self.dir_pending = null;
+    self.dir_offset = 0;
     return self.f_ops.close(self);
 }
 
@@ -124,4 +133,12 @@ pub fn readv(self: *Self, iovecs: []const iovec) Error!usize {
         if (n < slice.len) break;
     }
     return total;
+}
+
+/// Creates an iterator at the start of this directory. Caller must deinit it.
+pub fn it(self: *Self) Error!FS.DirIterator {
+    if (!self.handle.opened) return error.BadFileHandle;
+    if (self.handle.metadata.kind != .directory) return error.NotDirectory;
+    if (self.f_ops.it) |func| return func(self);
+    return error.NotImplemented;
 }

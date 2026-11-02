@@ -699,7 +699,27 @@ fn vfsIterDir(fs: *FS.AnyFs, path: []const u8) anyerror!FS.DirIterator {
     const self: *const Self = @ptrCast(@alignCast(&fs.state));
 
     const entry = try self.find(path) orelse return error.FileNotFound;
-    if (!entry.entry.isDirectory()) return error.NotDirectory;
+    return createDirIterator(fs, &entry.entry);
+}
+
+// I HATE ISO9660 :( but i still wanna support it, so here we are
+fn vfsIterDirHandle(fs: *FS.AnyFs, handle: *const FS.Handle) !FS.DirIterator {
+    const self: *const Self = @ptrCast(@alignCast(&fs.state));
+    if (!handle.opened or handle.metadata.device_id != self.device_id or handle.ctx > std.math.maxInt(u32) or handle.size > std.math.maxInt(u32))
+        return error.BadFileHandle;
+    if (handle.metadata.kind != .directory) return error.NotDirectory;
+
+    // Handles store the data LBA, already past any extended attributes.
+    var entry = self.pvd.dir_entry;
+    entry.extended_attribute_length = 0;
+    entry.location_of_extent.set(@intCast(handle.ctx));
+    entry.data_length.set(@intCast(handle.size));
+    return createDirIterator(fs, &entry);
+}
+
+fn createDirIterator(fs: *FS.AnyFs, entry: *const DirEntry) !FS.DirIterator {
+    const self: *const Self = @ptrCast(@alignCast(&fs.state));
+    if (!entry.isDirectory()) return error.NotDirectory;
 
     var iter = FS.DirIterator{
         .fs = fs,
@@ -710,7 +730,7 @@ fn vfsIterDir(fs: *FS.AnyFs, path: []const u8) anyerror!FS.DirIterator {
     // init the context into the iterator's inline storage
     const ctx: *VfsDirIterCtx = try root.heap.allocator().create(VfsDirIterCtx);
     errdefer root.heap.allocator().destroy(ctx);
-    ctx.* = try VfsDirIterCtx.init(self, &entry.entry);
+    ctx.* = try VfsDirIterCtx.init(self, entry);
     iter.ctx = ctx;
     return iter;
 }
@@ -723,6 +743,7 @@ pub fn mount(disk: *Disk) !FS.AnyFs {
         .stat = &vfsStat,
         .stat_file = &vfsStatFile,
         .iter_dir = &vfsIterDir,
+        .iter_dir_handle = &vfsIterDirHandle,
     }, .fs_type = .iso9660 };
     const bytes = std.mem.asBytes(&iso9660);
     @memcpy(anyfs.state[0..bytes.len], bytes);

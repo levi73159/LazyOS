@@ -153,6 +153,7 @@ pub const FsVtable = struct {
     stat: *const fn (fs: *AnyFs, path: []const u8) anyerror!Metadata,
     stat_file: ?*const fn (fs: *AnyFs, handle: *Handle) anyerror!Metadata = null,
     iter_dir: *const fn (fs: *AnyFs, path: []const u8) anyerror!DirIterator,
+    iter_dir_handle: *const fn (fs: *AnyFs, handle: *const Handle) anyerror!DirIterator,
 };
 
 pub const DirIterator = struct {
@@ -272,12 +273,18 @@ pub fn openFrom(self: *Self, wd: *WorkingDirectory, path: []const u8) Error!File
 }
 
 const file_ops = File.FileOps{
+    .it = fileIterator,
     .read = read,
     .write = write,
     .close = close,
     .seek = seek,
     .ioctl = null,
 };
+
+fn fileIterator(file: *File) Error!DirIterator {
+    const fs: *AnyFs = @ptrCast(@alignCast(file.private));
+    return fs.vtable.iter_dir_handle(fs, &file.handle) catch |err| return convertToError(err);
+}
 
 pub fn read(self: *File, buf: []u8) Error!usize {
     const h: *Handle = &self.handle;

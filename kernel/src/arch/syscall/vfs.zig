@@ -470,3 +470,96 @@ pub fn getcwd(frame: *SyscallFrame) i64 {
 
     return @intCast(needed);
 }
+
+pub fn getdents64(frame: *SyscallFrame) i64 {
+    const dirent64 = std.os.linux.dirent64;
+
+    const fd = frame.rdi;
+    const buf_addr = frame.rsi;
+    const count = frame.rdx;
+
+    const proc = scheduler.getCurrentProcess() orelse {
+        @branchHint(.cold);
+        log.err("No current process", .{});
+        return errno.EAGAIN;
+    };
+
+    if (fd > std.math.maxInt(u8)) return errno.EBADF;
+    const file = proc.getFile(@intCast(fd)) orelse {
+        return errno.EBADF;
+    };
+
+    if (!file.handle.flags.readable) return errno.EACCES;
+    if (file.handle.metadata.kind != .directory) return errno.ENOTDIR;
+
+    if (count == 0) return errno.EINVAL;
+    if (count > std.math.maxInt(isize)) return errno.EINVAL;
+    if (!validateUserRange(buf_addr, count, .write)) return errno.EFAULT;
+
+    const buf: [*]u8 = @ptrFromInt(buf_addr);
+    const slice = buf[0..count];
+
+    if (file.dir_iterator == null) {
+        file.dir_iterator = file.it() catch |err| {
+            log.err("Failed to get directory iterator for fd {d}: {s}", .{ fd, @errorName(err) });
+            return errno.EIO;
+        };
+    }
+    const it = &file.dir_iterator.?;
+
+    var total_written: usize = 0;
+    while (true) {
+        if (file.dir_pending == null) {
+            file.dir_pending = it.next() catch |err| {
+                log.err("Failed to read directory entry for fd {d}: {s}", .{ fd, @errorName(err) });
+                return if (total_written > 0) @intCast(total_written) else errno.EIO;
+            };
+        }
+        // Keep the entry (and its borrowed name) until it has been copied.
+        // Do not advance the iterator while an entry is pending.
+        const entry = file.dir_pending orelse break;
+        const name = entry.name;
+        const name_offset = @offsetOf(dirent64, "name");
+        const needed_unaligned = name_offset + name.len + 1;
+        const needed = std.mem.alignForward(usize, needed_unaligned, 8);
+
+        if (needed > std.math.maxInt(u16)) {
+            log.err("Directory entry too large for fd {d}: needed {d} bytes", .{ fd, needed });
+            return if (total_written > 0) @intCast(total_written) else errno.E2BIG;
+        }
+
+        if (needed > slice.len - total_written) {
+            // Leave pending_entry untouched for the next syscall.
+            if (total_written == 0) return errno.EINVAL;
+            break;
+        }
+
+        const dest = slice[total_written .. total_written + needed];
+
+        const dirent = dirent64{
+            .ino = entry.info.inode,
+            .off = file.dir_offset + 1,
+            .reclen = @intCast(needed),
+            .type = switch (entry.info.kind) {
+                .regular => std.os.linux.DT.REG,
+                .directory => std.os.linux.DT.DIR,
+                .character_device => std.os.linux.DT.CHR,
+                .block_device => std.os.linux.DT.BLK,
+                .symlink => std.os.linux.DT.LNK,
+                .pipe => std.os.linux.DT.FIFO,
+                .socket => std.os.linux.DT.SOCK,
+            },
+            .name = undefined,
+        };
+
+        @memset(dest, 0);
+        @memcpy(dest[0..name_offset], std.mem.asBytes(&dirent)[0..name_offset]);
+        @memcpy(dest[name_offset .. name_offset + name.len], name);
+
+        total_written += needed;
+        file.dir_offset += 1;
+        file.dir_pending = null;
+    }
+
+    return @intCast(total_written);
+}
