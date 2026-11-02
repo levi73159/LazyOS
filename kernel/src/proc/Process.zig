@@ -7,6 +7,7 @@ const bootinfo = root.arch.bootinfo;
 const VirtualSpace = root.arch.VirtualSpace;
 const File = root.fs.File;
 const signals = @import("signals.zig");
+const FS = root.fs.FileSystem;
 
 const log = std.log.scoped(._process);
 
@@ -108,11 +109,17 @@ signal_actions: [64]signals.SignalAction = @splat(.{}),
 pending_signals: u64 = 0,
 blocked_signals: u64 = 0,
 
+cwd: FS.WorkingDirectory,
+
 pub fn getFile(self: *Self, fd: u8) ?*File {
     return self.fd_table.getFile(fd);
 }
 
-pub fn loadElf(data: []const u8, allocator: std.mem.Allocator, args: []const []const u8) !Self {
+pub fn updateCWD(self: *Self, allocator: std.mem.Allocator, new: []const u8) !void {
+    return self.cwd.updateCWD(allocator, new);
+}
+
+pub fn loadElf(data: []const u8, allocator: std.mem.Allocator, args: []const []const u8, cwd: struct { fs: *FS.AnyFs, path: []const u8 }) !Self {
     log.debug("Loading, elf", .{});
     var reader: std.Io.Reader = std.Io.Reader.fixed(data);
     const header = try elf.Header.read(&reader);
@@ -261,6 +268,7 @@ pub fn loadElf(data: []const u8, allocator: std.mem.Allocator, args: []const []c
         .tls_base = USER_TLS_BASE,
         .tls_size = tls_total_size,
         .tcb_base = tcb_addr,
+        .cwd = try .open(allocator, cwd.fs, cwd.path),
     };
 }
 
@@ -304,6 +312,8 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
     self.anonymous_pages.deinit(allocator);
 
     self.vmem.safeDeinit();
+
+    self.cwd.close(allocator);
 }
 
 fn ptLoad(allocator: std.mem.Allocator, ph: elf.Elf64_Phdr, data: []const u8, regions: *std.ArrayList(MemoryRegion), vmem: *VirtualSpace) !void {

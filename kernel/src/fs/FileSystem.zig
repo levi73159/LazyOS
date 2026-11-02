@@ -7,6 +7,75 @@ const Ext2 = @import("Ext2.zig");
 
 pub const File = @import("File.zig");
 
+/// Returns an allocated absolute path. The caller owns the result.
+/// Normalizes separators, '.' and '..'; does not check existence or follow symlinks.
+pub fn resolvePath(allocator: std.mem.Allocator, cwd: []const u8, path: []const u8) ![]u8 {
+    if (!std.fs.path.isAbsolutePosix(cwd)) return error.InvalidWorkingDirectory;
+    return std.fs.path.resolvePosix(allocator, &.{ cwd, path });
+}
+
+pub const WorkingDirectory = struct {
+    fs: *AnyFs,
+    handle: Handle,
+    path: []const u8, // is owned by this struct
+
+    pub fn open(allocator: std.mem.Allocator, fs: *AnyFs, cwd: []const u8) !WorkingDirectory {
+        if (cwd.len == 0 or cwd[0] != '/') {
+            std.log.err("Must be a abs path", .{});
+            return error.InvalidWorkingDirectory;
+        }
+
+        const resolved = try std.fs.path.resolvePosix(allocator, &.{cwd});
+        errdefer allocator.free(resolved);
+
+        const handle = try fs.vtable.open_file(fs, null, resolved);
+        errdefer if (fs.vtable.close_file) |func| {
+            func(fs, &handle);
+        };
+
+        if (handle.metadata.kind != .directory) return error.NotADirectory;
+
+        return WorkingDirectory{
+            .fs = fs,
+            .handle = handle,
+            .path = resolved,
+        };
+    }
+
+    pub fn close(self: *WorkingDirectory, allocator: std.mem.Allocator) void {
+        if (self.fs.vtable.close_file) |func| {
+            func(self.fs, &self.handle);
+        }
+        allocator.free(self.path);
+    }
+
+    pub fn updateCWD(self: *WorkingDirectory, allocator: std.mem.Allocator, new: []const u8) !void {
+        if (new.len == 0 or new[0] != '/') {
+            std.log.err("Must be a abs path", .{});
+            return error.InvalidWorkingDirectory;
+        }
+
+        const resolved = try std.fs.path.resolvePosix(allocator, &.{new});
+        errdefer allocator.free(resolved);
+
+        const handle = try self.fs.vtable.open_file(self.fs, null, resolved);
+        errdefer if (self.fs.vtable.close_file) |func| {
+            func(self.fs, &handle);
+        };
+
+        if (handle.metadata.kind != .directory) return error.NotADirectory;
+
+        if (self.fs.vtable.close_file) |func| {
+            func(self.fs, &self.handle);
+        }
+
+        self.handle = handle;
+
+        allocator.free(self.path);
+        self.path = resolved;
+    }
+};
+
 pub const FileType = enum { file, directory };
 
 pub const FileKind = enum(u8) {
@@ -79,8 +148,8 @@ pub const Handle = struct {
 pub const FileSysetmType = enum { iso9660, ext2 };
 pub const FsVtable = struct {
     read_file: *const fn (fs: *AnyFs, handle: *Handle, buf: []u8) anyerror!usize,
-    open_file: *const fn (fs: *AnyFs, path: []const u8) anyerror!Handle,
-    close_file: ?*const fn (fs: *AnyFs, handle: *Handle) void = null,
+    open_file: *const fn (fs: *AnyFs, cwd: ?*const Handle, path: []const u8) anyerror!Handle,
+    close_file: ?*const fn (fs: *AnyFs, handle: *const Handle) void = null,
     stat: *const fn (fs: *AnyFs, path: []const u8) anyerror!Metadata,
     stat_file: ?*const fn (fs: *AnyFs, handle: *Handle) anyerror!Metadata = null,
     iter_dir: *const fn (fs: *AnyFs, path: []const u8) anyerror!DirIterator,
@@ -183,7 +252,17 @@ fn convertToError(err: anyerror) Error {
 }
 
 pub fn open(self: *Self, path: []const u8) Error!File {
-    const handle = self.inner.vtable.open_file(&self.inner, path) catch |err| return convertToError(err);
+    const handle = self.inner.vtable.open_file(&self.inner, null, path) catch |err| return convertToError(err);
+
+    return File{
+        .handle = handle,
+        .private = &self.inner,
+        .f_ops = &file_ops,
+    };
+}
+
+pub fn openFrom(self: *Self, wd: *WorkingDirectory, path: []const u8) Error!File {
+    const handle = self.inner.vtable.open_file(&self.inner, &wd.handle, path) catch |err| return convertToError(err);
 
     return File{
         .handle = handle,

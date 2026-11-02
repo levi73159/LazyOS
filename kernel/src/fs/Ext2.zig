@@ -569,12 +569,27 @@ fn findInDir(self: *Self, dir_inode: *const Inode, name: []const u8) !?u32 {
 }
 
 fn find(self: *Self, path: []const u8) !?InodeWNumber {
-    var current_inode = self.root_inode.*;
-    var inode_num: u32 = 2;
+    return self.findFrom(null, path);
+}
+
+fn findFrom(self: *Self, cwd: ?*const FileHandle, path: []const u8) !?InodeWNumber {
+    if (path.len == 0) return error.FileNotFound;
+
+    var inode_num: u32 = ROOT_INODE;
+    if (!std.fs.path.isAbsolutePosix(path)) {
+        if (cwd) |dir| {
+            if (!dir.opened or dir.metadata.device_id != self.device_id or dir.ctx > std.math.maxInt(u32))
+                return error.BadFileHandle;
+            if (dir.metadata.kind != .directory) return error.NotDirectory;
+            inode_num = @intCast(dir.ctx);
+        }
+    }
+    var current_inode = try self.getInodeNoRef(inode_num);
+    if (!current_inode.isDir()) return error.NotDirectory;
     var it = std.mem.splitScalar(u8, path, '/');
 
-    log.debug("find('{s}') start: root inode={d} type=0x{x} isDir={}", .{
-        path, ROOT_INODE, current_inode.type_and_perms, current_inode.isDir(),
+    log.debug("find('{s}') start: inode={d} type=0x{x} isDir={}", .{
+        path, inode_num, current_inode.type_and_perms, current_inode.isDir(),
     });
 
     while (it.next()) |component| {
@@ -601,8 +616,8 @@ fn find(self: *Self, path: []const u8) !?InodeWNumber {
     };
 }
 
-pub fn openFile(self: *Self, path: []const u8) !FileHandle {
-    if (try self.find(path)) |inode| {
+pub fn openFile(self: *Self, cwd: ?*const FileHandle, path: []const u8) !FileHandle {
+    if (try self.findFrom(cwd, path)) |inode| {
         if (inode.number != ROOT_INODE) self.cacheInode(inode.number, inode.inode);
         return FileHandle{
             .size = inode.inode.size(),
@@ -617,7 +632,7 @@ pub fn openFile(self: *Self, path: []const u8) !FileHandle {
     return error.FileNotFound;
 }
 
-pub fn closeFile(self: *Self, handle: *FileHandle) void {
+pub fn closeFile(self: *Self, handle: *const FileHandle) void {
     self.freeInode(@intCast(handle.ctx));
 }
 
@@ -837,12 +852,12 @@ fn vfsReadFile(fs: *FS.AnyFs, handle: *FS.Handle, buf: []u8) !usize {
     return done;
 }
 
-fn vfsOpenFile(fs: *FS.AnyFs, path: []const u8) !FS.Handle {
+fn vfsOpenFile(fs: *FS.AnyFs, cwd: ?*const FS.Handle, path: []const u8) !FS.Handle {
     const self: *Self = @ptrCast(@alignCast(&fs.state));
-    return self.openFile(path);
+    return self.openFile(cwd, path);
 }
 
-fn vfsCloseFile(fs: *FS.AnyFs, handle: *FS.Handle) void {
+fn vfsCloseFile(fs: *FS.AnyFs, handle: *const FS.Handle) void {
     const self: *Self = @ptrCast(@alignCast(&fs.state));
     self.closeFile(handle);
 }

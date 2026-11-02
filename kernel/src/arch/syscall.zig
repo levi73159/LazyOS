@@ -57,6 +57,7 @@ export fn syscallHandler(frame: *SyscallFrame) callconv(.c) void {
         13 => syssig.rt_sigaction(frame),
         16 => sysvfs.ioctl(frame),
         20 => sysvfs.writev(frame),
+        79 => sysvfs.getcwd(frame),
         231 => sys_exit_group(frame),
         60 => sys_exit(frame),
         158 => sys_arch_prctl(frame),

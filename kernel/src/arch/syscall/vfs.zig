@@ -200,6 +200,7 @@ pub fn preadv(frame: *SyscallFrame) i64 {
     return @intCast(total);
 }
 
+// TODO: impl this
 pub fn openat(frame: *SyscallFrame) i64 {
     var path_buffer: [MAX_PATH]u8 = undefined;
     const path = copyUserPath(frame.rsi, &path_buffer) catch |err| {
@@ -316,10 +317,16 @@ pub fn open(frame: *SyscallFrame) i64 {
         return if (err == error.NameTooLong) errno.ENAMETOOLONG else errno.EFAULT;
     };
 
+    const process = scheduler.getCurrentProcess() orelse {
+        @branchHint(.cold);
+        log.err("No current process", .{});
+        return errno.EAGAIN;
+    };
+
     log.info("Opening file: {s}", .{path});
 
     const flags: std.os.linux.O = @bitCast(@as(u32, @intCast(frame.rsi)));
-    var file = root.fs.FileSystem.getGlobal().open(path) catch |err| {
+    var file = root.fs.FileSystem.getGlobal().openFrom(&process.cwd, path) catch |err| {
         if (err == error.FileNotFound) {
             return errno.ENOENT;
         }
@@ -353,12 +360,6 @@ pub fn open(frame: *SyscallFrame) i64 {
             };
         },
     }
-
-    const process = scheduler.getCurrentProcess() orelse {
-        @branchHint(.cold);
-        log.err("No current process", .{});
-        return errno.EAGAIN;
-    };
 
     if (process.fd_table.allocAndSet(file)) |fd| {
         return fd;
@@ -444,4 +445,28 @@ pub fn lstat(frame: *SyscallFrame) i64 {
     @memcpy(dest[0..@sizeOf(LinuxStat)], std.mem.asBytes(&result));
 
     return 0;
+}
+
+pub fn getcwd(frame: *SyscallFrame) i64 {
+    const buf_addr = frame.rdi;
+    const size = frame.rsi;
+
+    const proc = scheduler.getCurrentProcess() orelse {
+        @branchHint(.cold);
+        log.err("No current process", .{});
+        return errno.EAGAIN;
+    };
+
+    const needed = proc.cwd.path.len + 1;
+    if (size < needed) return errno.ERANGE;
+
+    if (!validateUserRange(buf_addr, needed, .write)) {
+        return errno.EFAULT;
+    }
+
+    const dest: [*]u8 = @ptrFromInt(buf_addr);
+    @memcpy(dest[0 .. needed - 1], proc.cwd.path);
+    dest[needed - 1] = 0;
+
+    return @intCast(needed);
 }
