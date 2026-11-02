@@ -57,6 +57,7 @@ export fn syscallHandler(frame: *SyscallFrame) callconv(.c) void {
         20 => sysvfs.writev(frame),
         79 => sysvfs.getcwd(frame),
         217 => sysvfs.getdents64(frame),
+        72 => sysvfs.fcntl(frame),
 
         11 => sysmem.munmap(frame),
         12 => sysmem.brk(frame),

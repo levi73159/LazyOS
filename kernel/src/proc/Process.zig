@@ -37,6 +37,7 @@ const Tcb = extern struct {
 pub const FD_TABLE_SIZE = 256;
 pub const FdTable = struct {
     table: [FD_TABLE_SIZE]?File,
+    desc_flags: [FD_TABLE_SIZE]u32 = @splat(0),
     idx: u8,
 
     pub fn empty() FdTable {
@@ -80,10 +81,19 @@ pub const FdTable = struct {
         self.table[fd] = file;
     }
 
+    pub fn getFlags(self: *FdTable, fd: u8) u32 {
+        return self.desc_flags[fd];
+    }
+
+    pub fn setFlags(self: *FdTable, fd: u8, flags: u32) void {
+        self.desc_flags[fd] = flags;
+    }
+
     // note if pointer is allocated it will
     pub fn freeHandle(self: *FdTable, fd: u8) void {
         self.idx = fd;
         self.table[fd] = null;
+        self.desc_flags[fd] = 0;
     }
 };
 
@@ -314,6 +324,10 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
     self.vmem.safeDeinit();
 
     self.cwd.close(allocator);
+
+    for (&self.fd_table.table) |*file| {
+        if (file.*) |*f| f.close();
+    }
 }
 
 fn ptLoad(allocator: std.mem.Allocator, ph: elf.Elf64_Phdr, data: []const u8, regions: *std.ArrayList(MemoryRegion), vmem: *VirtualSpace) !void {

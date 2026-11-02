@@ -563,3 +563,54 @@ pub fn getdents64(frame: *SyscallFrame) i64 {
 
     return @intCast(total_written);
 }
+
+pub fn fcntl(frame: *SyscallFrame) i64 {
+    const fd = frame.rdi;
+    const cmd = frame.rsi;
+    const arg = frame.rdx;
+
+    log.debug("fcntl: fd={d}, cmd={d}, arg={x}", .{ fd, cmd, arg });
+
+    if (fd > std.math.maxInt(u8)) return errno.EBADF;
+    const process = scheduler.getCurrentProcess() orelse {
+        @branchHint(.cold);
+        log.err("No current process", .{});
+        return errno.EAGAIN;
+    };
+
+    const file = process.getFile(@intCast(fd)) orelse {
+        return errno.EBADF;
+    };
+
+    switch (cmd) {
+        std.os.linux.F.GETFD => {
+            return @intCast(process.fd_table.getFlags(@intCast(fd)));
+        },
+        std.os.linux.F.SETFD => {
+            if (arg > std.math.maxInt(u32)) {
+                log.err("fcntl: arg is too large for SETFD: {x}", .{arg});
+                return errno.EINVAL;
+            }
+            // TODO: support other flags
+            if (arg & ~@as(u64, std.os.linux.FD_CLOEXEC) != 0) {
+                log.warn("fcntl: arg has unsupported flags for SETFD: {x}", .{arg});
+            }
+            process.fd_table.setFlags(@intCast(fd), @intCast(arg));
+            return 0;
+        },
+        std.os.linux.F.GETFL => {
+            return if (file.handle.flags.readable and file.handle.flags.writable)
+                O_RDWR
+            else if (file.handle.flags.readable)
+                O_RDONLY
+            else if (file.handle.flags.writable)
+                O_WRONLY
+            else
+                0;
+        },
+        else => {
+            log.err("Unsupported fcntl command: {d}", .{cmd});
+            return errno.EINVAL;
+        },
+    }
+}
