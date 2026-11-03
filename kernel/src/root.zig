@@ -35,7 +35,7 @@ pub const kernel_stack = &boot.kernel_stack;
 
 const std = @import("std");
 pub const std_options: std.Options = .{
-    .log_level = .debug,
+    .log_level = if (@import("builtin").strip_debug_info) .err else .debug,
     .logFn = console.logFn,
     .page_size_min = 4096,
     .page_size_max = 4096,

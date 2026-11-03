@@ -896,10 +896,10 @@ fn extractMetadata(inode: InodeWNumber, blk_size: u32, device_id: u64) FS.Metada
     };
 }
 
-fn vfsStat(fs: *FS.AnyFs, path: []const u8) !FS.Metadata {
+fn vfsStat(fs: *FS.AnyFs, cwd: ?*const FS.Handle, path: []const u8) !FS.Metadata {
     const self: *Self = @ptrCast(@alignCast(&fs.state));
 
-    const inode = try self.find(path) orelse return error.FileNotFound;
+    const inode = try self.findFrom(cwd, path) orelse return error.FileNotFound;
 
     return extractMetadata(inode, self.block_size, self.device_id);
 }

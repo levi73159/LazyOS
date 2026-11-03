@@ -150,7 +150,7 @@ pub const FsVtable = struct {
     read_file: *const fn (fs: *AnyFs, handle: *Handle, buf: []u8) anyerror!usize,
     open_file: *const fn (fs: *AnyFs, cwd: ?*const Handle, path: []const u8) anyerror!Handle,
     close_file: ?*const fn (fs: *AnyFs, handle: *const Handle) void = null,
-    stat: *const fn (fs: *AnyFs, path: []const u8) anyerror!Metadata,
+    stat: *const fn (fs: *AnyFs, cwd: ?*const Handle, path: []const u8) anyerror!Metadata,
     stat_file: ?*const fn (fs: *AnyFs, handle: *Handle) anyerror!Metadata = null,
     iter_dir: *const fn (fs: *AnyFs, path: []const u8) anyerror!DirIterator,
     iter_dir_handle: *const fn (fs: *AnyFs, handle: *const Handle) anyerror!DirIterator,
@@ -262,8 +262,8 @@ pub fn open(self: *Self, path: []const u8) Error!File {
     };
 }
 
-pub fn openFrom(self: *Self, wd: *WorkingDirectory, path: []const u8) Error!File {
-    const handle = self.inner.vtable.open_file(&self.inner, &wd.handle, path) catch |err| return convertToError(err);
+pub fn openFrom(self: *Self, dir: *const Handle, path: []const u8) Error!File {
+    const handle = self.inner.vtable.open_file(&self.inner, dir, path) catch |err| return convertToError(err);
 
     return File{
         .handle = handle,
@@ -298,7 +298,11 @@ pub fn write(_: *File, _: []const u8) Error!usize {
 }
 
 pub fn stat(self: *Self, path: []const u8) Error!Metadata {
-    return self.inner.vtable.stat(&self.inner, path) catch |err| return convertToError(err);
+    return self.inner.vtable.stat(&self.inner, null, path) catch |err| return convertToError(err);
+}
+
+pub fn statFrom(self: *Self, dir: *const Handle, path: []const u8) Error!Metadata {
+    return self.inner.vtable.stat(&self.inner, dir, path) catch |err| return convertToError(err);
 }
 
 pub fn statFile(self: *File) Error!Metadata {

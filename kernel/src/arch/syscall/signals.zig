@@ -27,8 +27,10 @@ pub fn rt_sigaction(frame: *Frame) i64 {
     }
 
     // SIGKILL and SIGSTOP cannot have their actions changed.
-    if (act_addr != 0 and (sig == 9 or sig == 19))
+    if (act_addr != 0 and (sig == 9 or sig == 19)) {
+        log.err("EINVAL: sig(rdi={d}) == SIGKILL or SIGSTOP", .{sig});
         return errno.EINVAL;
+    }
 
     const process = scheduler.getCurrentProcess().?;
     const index = sig - 1;
@@ -45,6 +47,7 @@ pub fn rt_sigaction(frame: *Frame) i64 {
         var action = ptr.*;
 
         if (action.handler > 1 or action.flags != 0) {
+            log.err("EINVAL: sigaction.handler(rsi={x}) > 1 or sigaction.flags(rsi+8={x}) != 0", .{ action.handler, action.flags });
             return errno.EINVAL; // TODO: add process handler support
         }
 

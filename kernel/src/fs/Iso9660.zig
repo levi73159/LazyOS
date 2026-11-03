@@ -560,10 +560,27 @@ fn vfsReadFile(fs: *FS.AnyFs, handle: *FS.Handle, buf: []u8) anyerror!usize {
     return done;
 }
 
-fn vfsStat(fs: *FS.AnyFs, path: []const u8) anyerror!FS.Metadata {
+fn vfsStat(fs: *FS.AnyFs, cwd: ?*const FS.Handle, path: []const u8) anyerror!FS.Metadata {
     const self: *const Self = @ptrCast(&fs.state);
 
-    const found = try self.find(path) orelse return error.FileNotFound;
+    var base: ?FoundEntry = null;
+    if (!std.fs.path.isAbsolutePosix(path)) {
+        if (cwd) |dir| {
+            if (!dir.opened or dir.metadata.device_id != self.device_id or dir.ctx > std.math.maxInt(u32))
+                return error.BadFileHandle;
+            if (dir.metadata.kind != .directory) return error.NotDirectory;
+
+            // A directory's first record is its own '.' entry.
+            var buf: [2048]u8 align(@alignOf(DirEntry)) = undefined;
+            try self.disk.readAll(@intCast(dir.ctx), &buf);
+            const entry: *const DirEntry = @ptrCast(@alignCast(&buf));
+            if (entry.length < @sizeOf(DirEntry) or !entry.isCurrentDir() or !entry.isDirectory())
+                return error.BadFileHandle;
+            base = .{ .entry = entry.*, .record_block = @intCast(dir.ctx), .record_offset = 0 };
+        }
+    }
+
+    const found = try vfsFindFrom(self.disk, &self.pvd, if (base) |*dir| dir else null, path) orelse return error.FileNotFound;
 
     return self.extractMetadata(&found);
 }

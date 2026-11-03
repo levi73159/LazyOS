@@ -326,7 +326,7 @@ pub fn open(frame: *SyscallFrame) i64 {
     log.info("Opening file: {s}", .{path});
 
     const flags: std.os.linux.O = @bitCast(@as(u32, @intCast(frame.rsi)));
-    var file = root.fs.FileSystem.getGlobal().openFrom(&process.cwd, path) catch |err| {
+    var file = root.fs.FileSystem.getGlobal().openFrom(&process.cwd.handle, path) catch |err| {
         if (err == error.FileNotFound) {
             return errno.ENOENT;
         }
@@ -426,15 +426,7 @@ pub fn lstat(frame: *SyscallFrame) i64 {
 
     const addr = frame.rsi;
 
-    const meta = root.fs.FileSystem.getGlobal().stat(path) catch |err| {
-        return switch (err) {
-            error.FileNotFound => errno.ENOENT,
-            error.PermissionDenied => errno.EACCES,
-            error.NotDirectory => errno.ENOTDIR,
-            error.NotImplemented => errno.ENOSYS,
-            else => errno.EIO,
-        };
-    };
+    const meta = root.fs.FileSystem.getGlobal().stat(path) catch |err| return convertErrorToErrno(err);
 
     if (!validateUserRange(addr, @sizeOf(LinuxStat), .write)) {
         return errno.EFAULT;
@@ -613,4 +605,112 @@ pub fn fcntl(frame: *SyscallFrame) i64 {
             return errno.EINVAL;
         },
     }
+}
+
+fn getDirHandle(process: *root.proc.Process, dirfd: i32) !*root.fs.FileSystem.Handle {
+    if (dirfd == std.os.linux.AT.FDCWD) {
+        return &process.cwd.handle;
+    }
+
+    if (dirfd < 0 or dirfd > std.math.maxInt(u8)) {
+        return error.InvalidFileDescriptor;
+    }
+
+    const file = process.getFile(@intCast(dirfd)) orelse {
+        return error.InvalidFileDescriptor;
+    };
+
+    if (file.handle.metadata.kind != .directory) {
+        return error.NotADirectory;
+    }
+
+    return &file.handle;
+}
+
+pub fn newfstatat(frame: *SyscallFrame) i64 {
+    const dirfd: i32 = @bitCast(@as(u32, @truncate(frame.rdi)));
+    const user_path = frame.rsi;
+    const statbuf = frame.rdx;
+    const flags = frame.r10;
+
+    const process = scheduler.getCurrentProcess() orelse {
+        @branchHint(.cold);
+        log.err("No current process", .{});
+        return errno.EAGAIN;
+    };
+
+    var path_buffer: [MAX_PATH]u8 = undefined;
+    const path = copyUserPath(user_path, &path_buffer) catch |err| {
+        return if (err == error.NameTooLong) errno.ENAMETOOLONG else errno.EFAULT;
+    };
+
+    if (!validateUserRange(statbuf, @sizeOf(LinuxStat), .write)) {
+        return errno.EFAULT;
+    }
+
+    if (dirfd > std.math.maxInt(u8)) return errno.EBADF;
+
+    const allowed_flags: u64 = std.os.linux.AT.SYMLINK_NOFOLLOW | std.os.linux.AT.EMPTY_PATH | std.os.linux.AT.NO_AUTOMOUNT;
+    if (flags & ~allowed_flags != 0) {
+        log.err("newfstatat: unsupported flags: {x}", .{flags});
+        return errno.EINVAL;
+    }
+
+    if (flags & std.os.linux.AT.SYMLINK_NOFOLLOW != 0) {
+        log.warn("newfstatat: AT_SYMLINK_NOFOLLOW is not supported, ignoring...", .{});
+    }
+
+    const meta = blk: {
+        if (flags & std.os.linux.AT.EMPTY_PATH != 0 and path.len == 0) {
+            const dir_handle = getDirHandle(process, dirfd) catch |err| {
+                return convertErrorToErrno(err);
+            };
+            break :blk dir_handle.metadata;
+        }
+
+        if (path[0] == '/') {
+            // abs path ignore dirfd
+            break :blk root.fs.FileSystem.getGlobal().stat(path) catch |err| return convertErrorToErrno(err);
+        } else {
+            // relative path, use dirfd
+            if (dirfd == std.os.linux.AT.FDCWD) {
+                break :blk root.fs.FileSystem.getGlobal().statFrom(&process.cwd.handle, path) catch |err| return convertErrorToErrno(err);
+            }
+
+            if (dirfd < 0) return errno.EBADF;
+
+            const dir = process.getFile(@intCast(dirfd)) orelse {
+                return errno.EBADF;
+            };
+
+            if (dir.handle.metadata.kind != .directory) return errno.ENOTDIR;
+
+            break :blk root.fs.FileSystem.getGlobal().statFrom(&dir.handle, path) catch |err| return convertErrorToErrno(err);
+        }
+    };
+
+    const result = LinuxStat.fromMetadata(&meta) catch return errno.EOVERFLOW;
+
+    const dest: [*]u8 = @ptrFromInt(statbuf);
+    @memcpy(dest[0..@sizeOf(LinuxStat)], std.mem.asBytes(&result));
+
+    return 0;
+}
+
+pub fn convertErrorToErrno(err: anyerror) i64 {
+    return switch (err) {
+        error.FileNotFound => errno.ENOENT,
+        error.PermissionDenied => errno.EACCES,
+        error.NotDirectory => errno.ENOTDIR,
+        error.NotImplemented => errno.ENOSYS,
+        error.InvalidFileDescriptor => errno.EBADF,
+        error.InvalidWorkingDirectory => errno.EINVAL,
+        error.Overflow => errno.EOVERFLOW,
+        error.Interrupted => errno.EINTR,
+        error.NotADirectory => errno.ENOTDIR,
+        error.InvalidPath => errno.EINVAL,
+        error.InvalidArgument => errno.EINVAL,
+        error.InvalidHandle => errno.EBADF,
+        else => errno.EIO,
+    };
 }
